@@ -1,0 +1,1 @@
+Use bun as package manager.

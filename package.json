@@ -19,6 +19,7 @@
 	},
 	"dependencies": {
 		"@auth/drizzle-adapter": "^1.11.2",
+		"@google/genai": "^1.50.1",
 		"@t3-oss/env-nextjs": "^0.13.11",
 		"@tanstack/react-query": "^5.99.0",
 		"@trpc/client": "^11.16.0",
@@ -30,6 +31,7 @@
 		"postgres": "^3.4.9",
 		"react": "^19.2.5",
 		"react-dom": "^19.2.5",
+		"reactflow": "^11.11.4",
 		"server-only": "^0.0.1",
 		"superjson": "^2.2.6",
 		"zod": "^4.3.6"

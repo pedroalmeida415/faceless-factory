@@ -1,29 +1,62 @@
-# Create T3 App
+# Faceless Factory MVP
 
-This is a [T3 Stack](https://create.t3.gg/) project bootstrapped with `create-t3-app`.
+Minimal Weavy-style workflow builder on Next.js. Current scope:
 
-## What's next? How do I make an app with this?
+- `Prompt` node
+- `Image` upload node
+- `Video` upload node
+- `Image Iterator` node
+- `Image Generator` node wired to Vertex AI `gemini-3-pro-image-preview`
+- `Video Generator` node wired to Vertex AI `veo-3.1-generate-001`
+- local upload persistence and generated asset serving
+- browser-local graph autosave
 
-We try to keep this project as simple as possible, so you can start with just the scaffolding we set up for you, and add additional things later when they become necessary.
+## Run
 
-If you are not familiar with the different technologies used in this project, please refer to the respective docs. If you still are in the wind, please join our [Discord](https://t3.gg/discord) and ask for help.
+```bash
+bun install
+bun run dev
+```
 
-- [Next.js](https://nextjs.org)
-- [NextAuth.js](https://next-auth.js.org)
-- [Prisma](https://prisma.io)
-- [Drizzle](https://orm.drizzle.team)
-- [Tailwind CSS](https://tailwindcss.com)
-- [tRPC](https://trpc.io)
+Open `http://localhost:3000`.
 
-## Learn More
+## Vertex AI setup
 
-To learn more about the [T3 Stack](https://create.t3.gg/), take a look at the following resources:
+Required:
 
-- [Documentation](https://create.t3.gg/)
-- [Learn the T3 Stack](https://create.t3.gg/en/faq#what-learning-resources-are-currently-available) — Check out these awesome tutorials
+- `GOOGLE_CLOUD_PROJECT`
+- authentication via one of:
+  - `gcloud auth application-default login`
+  - `GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json`
+  - `GOOGLE_SERVICE_ACCOUNT_JSON`
+  - `GOOGLE_CLIENT_EMAIL` + `GOOGLE_PRIVATE_KEY`
 
-You can check out the [create-t3-app GitHub repository](https://github.com/t3-oss/create-t3-app) — your feedback and contributions are welcome!
+Optional:
 
-## How do I deploy this?
+- `GOOGLE_CLOUD_LOCATION_IMAGE` defaults to `global`
+- `GOOGLE_CLOUD_LOCATION_VIDEO` defaults to `us-central1`
+- `GOOGLE_CLOUD_LOCATION` shared fallback for non-global models
 
-Follow our deployment guides for [Vercel](https://create.t3.gg/en/deployment/vercel), [Netlify](https://create.t3.gg/en/deployment/netlify) and [Docker](https://create.t3.gg/en/deployment/docker) for more information.
+Example:
+
+```env
+GOOGLE_CLOUD_PROJECT=your-project-id
+GOOGLE_CLOUD_LOCATION_IMAGE=global
+GOOGLE_CLOUD_LOCATION_VIDEO=us-central1
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+```
+
+## How the MVP works
+
+1. Upload source media into image/video/image-iterator nodes.
+2. Connect a prompt node into one or both generator nodes.
+3. Connect optional image or iterator outputs into the generators.
+4. Run a single generator from the node, or use the left sidebar to run all generators.
+5. Outputs are written to `.data/workflow-assets/` and served back through `/api/assets/...`.
+
+## Notes
+
+- `Image Iterator -> Image Generator` fans out one image generation request per input image.
+- `Image Iterator -> Video Generator` fans out one Veo request per input image.
+- This is a local/stateful MVP. Uploaded and generated assets are stored on disk, not object storage.
+- Existing auth/db scaffolding remains in the repo, but the workflow UI does not depend on it.

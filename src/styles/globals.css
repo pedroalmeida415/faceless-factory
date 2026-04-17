@@ -1,7 +1,67 @@
 @import "tailwindcss";
+@import "reactflow/dist/style.css";
 
 @theme {
-	--font-sans:
-		var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif,
-		"Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+	--font-sans: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+	--color-ink: #050816;
+	--color-panel: #0f172a;
+	--color-line: rgba(255, 255, 255, 0.1);
+}
+
+:root {
+	color-scheme: dark;
+	font-family: var(--font-sans);
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	min-height: 100%;
+}
+
+body {
+	margin: 0;
+	font-family: var(--font-sans);
+	background: linear-gradient(180deg, #050816 0%, #0b1022 100%);
+	color: white;
+}
+
+a {
+	color: inherit;
+	text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+	font: inherit;
+}
+
+::selection {
+	background: rgba(56, 189, 248, 0.28);
+}
+
+.react-flow__controls-button {
+	background: transparent;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+	color: white;
+}
+
+.react-flow__controls-button:hover {
+	background: rgba(255, 255, 255, 0.08);
+}
+
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge.selected path {
+	stroke: #67e8f9;
+	stroke-width: 3;
+	filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.75));
+}
+
+.react-flow__edge.selected .react-flow__edge-interaction {
+	stroke-width: 24;
 }
