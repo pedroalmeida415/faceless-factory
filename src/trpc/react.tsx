@@ -1,7 +1,13 @@
 "use client";
 
 import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { httpBatchStreamLink, loggerLink } from "@trpc/client";
+import {
+	httpBatchStreamLink,
+	httpLink,
+	isNonJsonSerializable,
+	loggerLink,
+	splitLink,
+} from "@trpc/client";
 import { createTRPCReact } from "@trpc/react-query";
 import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
 import { useState } from "react";
@@ -43,22 +49,40 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
 
 	const [trpcClient] = useState(() =>
 		api.createClient({
-			links: [
-				loggerLink({
-					enabled: (op) =>
-						process.env.NODE_ENV === "development" ||
-						(op.direction === "down" && op.result instanceof Error),
-				}),
-				httpBatchStreamLink({
-					transformer: SuperJSON,
-					url: `${getBaseUrl()}/api/trpc`,
-					headers: () => {
-						const headers = new Headers();
-						headers.set("x-trpc-source", "nextjs-react");
-						return headers;
-					},
-				}),
-			],
+			links: (() => {
+				const url = `${getBaseUrl()}/api/trpc`;
+				const headers = () => {
+					const nextHeaders = new Headers();
+					nextHeaders.set("x-trpc-source", "nextjs-react");
+					return nextHeaders;
+				};
+
+				return [
+					loggerLink({
+						enabled: (op) =>
+							process.env.NODE_ENV === "development" ||
+							(op.direction === "down" && op.result instanceof Error),
+					}),
+					splitLink({
+						condition: (op) => isNonJsonSerializable(op.input),
+						false: httpBatchStreamLink({
+							transformer: SuperJSON,
+							url,
+							headers,
+						}),
+						true: httpLink({
+							transformer: {
+								// request - convert data before sending to the tRPC server
+								serialize: (data) => data,
+								// response - convert the tRPC response before using it in client
+								deserialize: (data) => SuperJSON.deserialize(data), // or your other transformer
+							},
+							url,
+							headers,
+						}),
+					}),
+				];
+			})(),
 		}),
 	);
 
