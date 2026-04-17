@@ -133,6 +133,7 @@ export type GenerateImageResponse = {
 export type GenerateVideoRequest = {
 	prompt: string;
 	referenceImage?: WorkflowAsset | null;
+	referenceImages?: WorkflowAsset[];
 	aspectRatio?: VideoAspectRatio;
 	durationSeconds?: VideoDuration;
 	generateAudio?: boolean;

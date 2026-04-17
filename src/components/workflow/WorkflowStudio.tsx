@@ -14,11 +14,11 @@ import {
 } from "react";
 import {
 	addEdge,
+	applyEdgeChanges,
 	Background,
 	type Connection,
 	ConnectionLineType,
 	Controls,
-	type Edge,
 	Handle,
 	MiniMap,
 	type NodeProps,
@@ -27,6 +27,7 @@ import {
 	type ReactFlowInstance,
 	useEdgesState,
 	useNodesState,
+	useUpdateNodeInternals,
 } from "reactflow";
 
 import {
@@ -61,11 +62,33 @@ import {
 } from "~/lib/workflow/types";
 
 const STORAGE_KEY = "faceless-factory.workflow.v1";
+const PROMPT_INPUT_HANDLE_ID = "prompt";
+const GENERATOR_IMAGE_INPUT_HANDLE_PREFIX = "image-input-";
+const LEGACY_GENERATOR_IMAGE_INPUT_HANDLE_IDS = new Set(["image", "images"]);
+const GENERATOR_IMAGE_INPUT_COLOR = "#38bdf8";
 
 type RuntimeValue =
 	| { type: "text"; text: string }
-	| { type: "image"; assets: WorkflowAsset[] }
+	| {
+			type: "image";
+			assets: WorkflowAsset[];
+			iterationMode: "static" | "iterator";
+	  }
 	| { type: "video"; assets: WorkflowAsset[] };
+
+type ImageRuntimeValue = Extract<RuntimeValue, { type: "image" }>;
+
+type ImageBatchPlan = {
+	batches: WorkflowAsset[][];
+	hasIterator: boolean;
+	iterations: number;
+};
+
+type GeneratorIterationInfo = {
+	hasIterator: boolean;
+	iterations: number;
+	mismatchedIterators: boolean;
+};
 
 type StudioContextValue = {
 	updateNodeData: (
@@ -78,6 +101,8 @@ type StudioContextValue = {
 		options: { kind: "image" | "video"; multiple: boolean },
 	) => Promise<void>;
 	clearNodeAssets: (nodeId: string) => void;
+	getGeneratorIterationInfo: (nodeId: string) => GeneratorIterationInfo;
+	getGeneratorImageInputs: (nodeId: string) => HandleDefinition[];
 	runNode: (nodeId: string) => Promise<void>;
 };
 
@@ -125,6 +150,217 @@ function nextNodePosition(index: number) {
 
 function createNodeId() {
 	return crypto.randomUUID();
+}
+
+function buildIncomingByTarget(edges: WorkflowEdge[]) {
+	const incomingByTarget = new Map<string, WorkflowEdge[]>();
+
+	for (const edge of edges) {
+		const existing = incomingByTarget.get(edge.target) ?? [];
+		existing.push(edge);
+		incomingByTarget.set(edge.target, existing);
+	}
+
+	return incomingByTarget;
+}
+
+function getIncomingEdgesForHandle(
+	incomingByTarget: Map<string, WorkflowEdge[]>,
+	targetId: string,
+	handleId: string,
+) {
+	return (incomingByTarget.get(targetId) ?? []).filter(
+		(edge) => edge.targetHandle === handleId,
+	);
+}
+
+function makeGeneratorImageHandleId(index: number) {
+	return `${GENERATOR_IMAGE_INPUT_HANDLE_PREFIX}${index}`;
+}
+
+function isGeneratorImageHandle(handleId: string | null | undefined) {
+	if (!handleId) {
+		return false;
+	}
+
+	return (
+		LEGACY_GENERATOR_IMAGE_INPUT_HANDLE_IDS.has(handleId) ||
+		handleId.startsWith(GENERATOR_IMAGE_INPUT_HANDLE_PREFIX)
+	);
+}
+
+function getIncomingGeneratorImageEdges(
+	incomingByTarget: Map<string, WorkflowEdge[]>,
+	targetId: string,
+) {
+	return (incomingByTarget.get(targetId) ?? []).filter((edge) =>
+		isGeneratorImageHandle(edge.targetHandle),
+	);
+}
+
+function getGeneratorImageInputHandles(
+	edges: WorkflowEdge[],
+	targetId: string,
+): HandleDefinition[] {
+	const connectedCount = edges.filter(
+		(edge) =>
+			edge.target === targetId && isGeneratorImageHandle(edge.targetHandle),
+	).length;
+
+	return Array.from({ length: connectedCount + 1 }, (_, index) => ({
+		id: makeGeneratorImageHandleId(index),
+		label: "Image",
+		color: GENERATOR_IMAGE_INPUT_COLOR,
+	}));
+}
+
+function normalizeGeneratorImageTargetHandles(
+	nodes: WorkflowNode[],
+	edges: WorkflowEdge[],
+) {
+	const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+	const nextImageHandleByTarget = new Map<string, number>();
+
+	return edges.map((edge) => {
+		const targetNode = nodeMap.get(edge.target);
+		const targetData = targetNode?.data as WorkflowNodeData | undefined;
+		if (!targetData || !isGeneratorNodeKind(targetData.kind)) {
+			return edge;
+		}
+
+		if (!isGeneratorImageHandle(edge.targetHandle)) {
+			return edge;
+		}
+
+		const nextIndex = nextImageHandleByTarget.get(edge.target) ?? 0;
+		nextImageHandleByTarget.set(edge.target, nextIndex + 1);
+
+		const targetHandle = makeGeneratorImageHandleId(nextIndex);
+		return edge.targetHandle === targetHandle
+			? edge
+			: { ...edge, targetHandle };
+	});
+}
+
+function normalizeWorkflowDocument(
+	document: SavedWorkflowDocument,
+): SavedWorkflowDocument {
+	return {
+		...document,
+		edges: normalizeGeneratorImageTargetHandles(document.nodes, document.edges),
+	};
+}
+
+function toImageRuntimeValue(data: WorkflowNodeData): ImageRuntimeValue | null {
+	switch (data.kind) {
+		case "image":
+			return data.asset
+				? {
+						type: "image",
+						assets: [data.asset],
+						iterationMode: "static",
+					}
+				: null;
+		case "imageIterator":
+			return {
+				type: "image",
+				assets: data.assets,
+				iterationMode: "iterator",
+			};
+		case "imageGenerator":
+			return data.outputAssets.length
+				? {
+						type: "image",
+						assets: data.outputAssets,
+						iterationMode: "static",
+					}
+				: null;
+		default:
+			return null;
+	}
+}
+
+function buildImageBatchPlan(values: ImageRuntimeValue[]): ImageBatchPlan {
+	const staticAssets = values.flatMap((value) =>
+		value.iterationMode === "static" ? value.assets : [],
+	);
+	const iteratorValues = values.filter(
+		(value) => value.iterationMode === "iterator",
+	);
+
+	if (!iteratorValues.length) {
+		return {
+			batches: [staticAssets],
+			hasIterator: false,
+			iterations: 1,
+		};
+	}
+
+	const [firstIterator] = iteratorValues;
+	if (!firstIterator?.assets.length) {
+		throw new Error("Image iterator is empty.");
+	}
+
+	for (const iteratorValue of iteratorValues) {
+		if (iteratorValue.assets.length !== firstIterator.assets.length) {
+			throw new Error(
+				"Connected image iterators must contain the same number of images.",
+			);
+		}
+	}
+
+	return {
+		batches: firstIterator.assets.map((_, index) => [
+			...staticAssets,
+			...iteratorValues
+				.map((iteratorValue) => iteratorValue.assets[index])
+				.filter((asset): asset is WorkflowAsset => Boolean(asset)),
+		]),
+		hasIterator: true,
+		iterations: firstIterator.assets.length,
+	};
+}
+
+function getGeneratorIterationPreview(
+	nodes: WorkflowNode[],
+	edges: WorkflowEdge[],
+	targetId: string,
+): GeneratorIterationInfo {
+	const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+	const incomingByTarget = buildIncomingByTarget(edges);
+	const imageValues = getIncomingGeneratorImageEdges(incomingByTarget, targetId)
+		.flatMap((edge) => {
+			const sourceNode = nodeMap.get(edge.source);
+			if (!sourceNode) {
+				return [];
+			}
+
+			const imageValue = toImageRuntimeValue(
+				sourceNode.data as WorkflowNodeData,
+			);
+			return imageValue ? [imageValue] : [];
+		})
+		.filter((value) => value.iterationMode === "iterator");
+
+	if (!imageValues.length) {
+		return {
+			hasIterator: false,
+			iterations: 1,
+			mismatchedIterators: false,
+		};
+	}
+
+	const iterationCounts = imageValues.map((value) => value.assets.length);
+	const [firstCount = 0] = iterationCounts;
+	const mismatchedIterators = iterationCounts.some(
+		(count) => count !== firstCount,
+	);
+
+	return {
+		hasIterator: true,
+		iterations: mismatchedIterators ? Math.max(...iterationCounts) : firstCount,
+		mismatchedIterators,
+	};
 }
 
 function makeBaseNode(
@@ -258,22 +494,22 @@ function createDefaultDocument(): SavedWorkflowDocument {
 
 function loadDocument(): SavedWorkflowDocument {
 	if (typeof window === "undefined") {
-		return createDefaultDocument();
+		return normalizeWorkflowDocument(createDefaultDocument());
 	}
 
 	const stored = window.localStorage.getItem(STORAGE_KEY);
 	if (!stored) {
-		return createDefaultDocument();
+		return normalizeWorkflowDocument(createDefaultDocument());
 	}
 
 	try {
 		const parsed = JSON.parse(stored) as SavedWorkflowDocument;
 		if (parsed.version !== 1) {
-			return createDefaultDocument();
+			return normalizeWorkflowDocument(createDefaultDocument());
 		}
-		return parsed;
+		return normalizeWorkflowDocument(parsed);
 	} catch {
-		return createDefaultDocument();
+		return normalizeWorkflowDocument(createDefaultDocument());
 	}
 }
 
@@ -433,6 +669,14 @@ function NodeShell({
 	model?: string | null;
 	selected?: boolean;
 }>) {
+	const inputLegend = inputs.filter(
+		(input, index, list) =>
+			list.findIndex(
+				(candidate) =>
+					candidate.label === input.label && candidate.color === input.color,
+			) === index,
+	);
+
 	return (
 		<div
 			className={`relative rounded-[28px] border bg-[linear-gradient(180deg,rgba(15,23,42,0.94),rgba(3,7,18,0.9))] p-4 text-white backdrop-blur transition-[border-color,box-shadow,transform] duration-150 ${
@@ -499,9 +743,9 @@ function NodeShell({
 				</div>
 			</div>
 
-			{inputs.length ? (
+			{inputLegend.length ? (
 				<div className="mb-4 space-y-2">
-					{inputs.map((input) => (
+					{inputLegend.map((input) => (
 						<div
 							className="flex items-center gap-2 text-[11px] text-slate-400 uppercase tracking-[0.22em]"
 							key={input.id}
@@ -690,16 +934,32 @@ function ImageGeneratorNode({
 	data,
 	selected,
 }: NodeProps<ImageGeneratorNodeData>) {
-	const { updateNodeData, runNode } = useStudioContext();
+	const updateNodeInternals = useUpdateNodeInternals();
+	const {
+		getGeneratorImageInputs,
+		getGeneratorIterationInfo,
+		updateNodeData,
+		runNode,
+	} = useStudioContext();
+	const imageInputs = getGeneratorImageInputs(id);
+	const imageInputCount = imageInputs.length;
+	const iterationInfo = getGeneratorIterationInfo(id);
+
+	useEffect(() => {
+		if (imageInputCount < 1) {
+			return;
+		}
+
+		updateNodeInternals(id);
+	}, [id, imageInputCount, updateNodeInternals]);
 
 	return (
 		<NodeShell
 			data={data}
 			icon="GEN"
 			inputs={[
-				{ id: "prompt", label: "Prompt", color: "#f59e0b" },
-				{ id: "image", label: "Single image", color: "#38bdf8" },
-				{ id: "images", label: "Image batch", color: "#06b6d4" },
+				{ id: PROMPT_INPUT_HANDLE_ID, label: "Prompt", color: "#f59e0b" },
+				...imageInputs,
 			]}
 			model="Gemini 3 Pro Image (Nano Banana)"
 			output={{ id: "images", label: "Images", color: "#22c55e" }}
@@ -734,6 +994,14 @@ function ImageGeneratorNode({
 					<div>{data.model}</div>
 				</div>
 			</div>
+
+			{iterationInfo.hasIterator ? (
+				<div className="rounded-2xl border border-sky-300/18 bg-sky-400/8 px-3 py-3 text-sky-100 text-sm">
+					{iterationInfo.mismatchedIterators
+						? "Connected iterators disagree on batch size."
+						: `Will run ${iterationInfo.iterations} iteration${iterationInfo.iterations === 1 ? "" : "s"}. Other connected images are reused in every pass.`}
+				</div>
+			) : null}
 
 			<ShellButton
 				className="w-full justify-center"
@@ -770,16 +1038,32 @@ function VideoGeneratorNode({
 	data,
 	selected,
 }: NodeProps<VideoGeneratorNodeData>) {
-	const { updateNodeData, runNode } = useStudioContext();
+	const updateNodeInternals = useUpdateNodeInternals();
+	const {
+		getGeneratorImageInputs,
+		getGeneratorIterationInfo,
+		updateNodeData,
+		runNode,
+	} = useStudioContext();
+	const imageInputs = getGeneratorImageInputs(id);
+	const imageInputCount = imageInputs.length;
+	const iterationInfo = getGeneratorIterationInfo(id);
+
+	useEffect(() => {
+		if (imageInputCount < 1) {
+			return;
+		}
+
+		updateNodeInternals(id);
+	}, [id, imageInputCount, updateNodeInternals]);
 
 	return (
 		<NodeShell
 			data={data}
 			icon="MOT"
 			inputs={[
-				{ id: "prompt", label: "Prompt", color: "#f59e0b" },
-				{ id: "image", label: "Single image", color: "#38bdf8" },
-				{ id: "images", label: "Image batch", color: "#06b6d4" },
+				{ id: PROMPT_INPUT_HANDLE_ID, label: "Prompt", color: "#f59e0b" },
+				...imageInputs,
 			]}
 			model="Veo 3.1"
 			output={{ id: "videos", label: "Videos", color: "#a78bfa" }}
@@ -868,6 +1152,14 @@ function VideoGeneratorNode({
 					/>
 				</label>
 			</div>
+
+			{iterationInfo.hasIterator ? (
+				<div className="rounded-2xl border border-sky-300/18 bg-sky-400/8 px-3 py-3 text-sky-100 text-sm">
+					{iterationInfo.mismatchedIterators
+						? "Connected iterators disagree on batch size."
+						: `Will run ${iterationInfo.iterations} iteration${iterationInfo.iterations === 1 ? "" : "s"}. Other connected images are reused in every pass.`}
+				</div>
+			) : null}
 
 			<ShellButton
 				className="w-full justify-center"
@@ -960,7 +1252,7 @@ function formatDeletionActivity(nodeCount: number, edgeCount: number) {
 export function WorkflowStudio() {
 	const initialDocument = useMemo(() => loadDocument(), []);
 	const [nodes, setNodes, onNodesChange] = useNodesState(initialDocument.nodes);
-	const [edges, setEdges, onEdgesChange] = useEdgesState(initialDocument.edges);
+	const [edges, setEdges] = useEdgesState(initialDocument.edges);
 	const [isReady, setIsReady] = useState(false);
 	const [activity, setActivity] = useState(
 		"Connect prompt and media nodes into the generators. Local graph state auto-saves in your browser.",
@@ -1117,19 +1409,15 @@ export function WorkflowStudio() {
 			const snapshotNodes = nodesRef.current as WorkflowNode[];
 			const snapshotEdges = edgesRef.current as WorkflowEdge[];
 			const nodeMap = new Map(snapshotNodes.map((node) => [node.id, node]));
-			const incomingByTarget = new Map<string, Edge[]>();
+			const incomingByTarget = buildIncomingByTarget(snapshotEdges);
 			const pending = new Map<string, Promise<RuntimeValue>>();
 			const activeStack = new Set<string>();
 
-			for (const edge of snapshotEdges) {
-				const existing = incomingByTarget.get(edge.target) ?? [];
-				existing.push(edge);
-				incomingByTarget.set(edge.target, existing);
-			}
-
 			const getInputValues = async (targetId: string, handleId: string) => {
-				const incomingEdges = (incomingByTarget.get(targetId) ?? []).filter(
-					(edge) => edge.targetHandle === handleId,
+				const incomingEdges = getIncomingEdgesForHandle(
+					incomingByTarget,
+					targetId,
+					handleId,
 				);
 				return Promise.all(
 					incomingEdges.map((edge) => evaluateNode(edge.source)),
@@ -1137,7 +1425,7 @@ export function WorkflowStudio() {
 			};
 
 			const coerceText = async (targetId: string) => {
-				const values = await getInputValues(targetId, "prompt");
+				const values = await getInputValues(targetId, PROMPT_INPUT_HANDLE_ID);
 				const prompt = values.find((value) => value.type === "text");
 				if (!prompt?.text.trim()) {
 					throw new Error("Connect a prompt node with text.");
@@ -1145,15 +1433,19 @@ export function WorkflowStudio() {
 				return prompt.text.trim();
 			};
 
-			const coerceImages = async (targetId: string) => {
-				const [singleValues, batchValues] = await Promise.all([
-					getInputValues(targetId, "image"),
-					getInputValues(targetId, "images"),
-				]);
-
-				return [...singleValues, ...batchValues].flatMap((value) =>
-					value.type === "image" ? value.assets : [],
+			const coerceImageBatches = async (targetId: string) => {
+				const incomingEdges = getIncomingGeneratorImageEdges(
+					incomingByTarget,
+					targetId,
 				);
+				const values = await Promise.all(
+					incomingEdges.map((edge) => evaluateNode(edge.source)),
+				);
+				const imageValues = values.flatMap((value) =>
+					value.type === "image" ? [value] : [],
+				);
+
+				return buildImageBatchPlan(imageValues);
 			};
 
 			const evaluateNode = async (currentId: string): Promise<RuntimeValue> => {
@@ -1189,7 +1481,11 @@ export function WorkflowStudio() {
 									if (!data.asset) {
 										throw new Error("Image node has no uploaded asset.");
 									}
-									return { type: "image", assets: [data.asset] };
+									return {
+										type: "image",
+										assets: [data.asset],
+										iterationMode: "static",
+									};
 								}
 								case "video": {
 									if (!data.asset) {
@@ -1201,7 +1497,11 @@ export function WorkflowStudio() {
 									if (!data.assets.length) {
 										throw new Error("Image iterator is empty.");
 									}
-									return { type: "image", assets: data.assets };
+									return {
+										type: "image",
+										assets: data.assets,
+										iterationMode: "iterator",
+									};
 								}
 								case "imageGenerator": {
 									updateNodeData(currentId, (current) => ({
@@ -1209,35 +1509,42 @@ export function WorkflowStudio() {
 										status: "running",
 										error: null,
 									}));
-									setActivity(`Running ${data.label}...`);
 
 									const prompt = await coerceText(currentId);
-									const referenceImages = await coerceImages(currentId);
-									const batches = referenceImages.length
-										? referenceImages
-										: [null];
-									const generatedAssets: WorkflowAsset[] = [];
-									let responseText: string | null = null;
+									const batchPlan = await coerceImageBatches(currentId);
+									setActivity(
+										batchPlan.hasIterator
+											? `Running ${data.label} (${batchPlan.iterations} iterations)...`
+											: `Running ${data.label}...`,
+									);
 
-									for (const referenceImage of batches) {
-										const request: GenerateImageRequest = {
-											prompt,
-											referenceImages: referenceImage ? [referenceImage] : [],
-											aspectRatio: data.aspectRatio,
-										};
-										const response = await fetch(
-											"/api/workflow/generate-image",
-											{
-												method: "POST",
-												headers: { "Content-Type": "application/json" },
-												body: JSON.stringify(request),
-											},
-										);
-										const payload =
-											await parseApiResponse<GenerateImageResponse>(response);
-										generatedAssets.push(...payload.assets);
-										responseText = payload.responseText;
-									}
+									const responses = await Promise.all(
+										batchPlan.batches.map(async (referenceImages) => {
+											const request: GenerateImageRequest = {
+												prompt,
+												referenceImages,
+												aspectRatio: data.aspectRatio,
+											};
+											const response = await fetch(
+												"/api/workflow/generate-image",
+												{
+													method: "POST",
+													headers: { "Content-Type": "application/json" },
+													body: JSON.stringify(request),
+												},
+											);
+											return parseApiResponse<GenerateImageResponse>(response);
+										}),
+									);
+									const generatedAssets = responses.flatMap(
+										(payload) => payload.assets,
+									);
+									const responseTextParts = responses
+										.map((payload) => payload.responseText?.trim())
+										.filter((value): value is string => Boolean(value));
+									const responseText = responseTextParts.length
+										? Array.from(new Set(responseTextParts)).join("\n\n")
+										: null;
 
 									updateNodeData(currentId, (current) => ({
 										...(current as ImageGeneratorNodeData),
@@ -1248,7 +1555,11 @@ export function WorkflowStudio() {
 										outputAssets: generatedAssets,
 									}));
 
-									return { type: "image", assets: generatedAssets };
+									return {
+										type: "image",
+										assets: generatedAssets,
+										iterationMode: "static",
+									};
 								}
 								case "videoGenerator": {
 									updateNodeData(currentId, (current) => ({
@@ -1256,34 +1567,39 @@ export function WorkflowStudio() {
 										status: "running",
 										error: null,
 									}));
-									setActivity(`Running ${data.label}...`);
 
 									const prompt = await coerceText(currentId);
-									const sourceImages = await coerceImages(currentId);
-									const batches = sourceImages.length ? sourceImages : [null];
-									const generatedAssets: WorkflowAsset[] = [];
+									const batchPlan = await coerceImageBatches(currentId);
+									setActivity(
+										batchPlan.hasIterator
+											? `Running ${data.label} (${batchPlan.iterations} iterations)...`
+											: `Running ${data.label}...`,
+									);
 
-									for (const referenceImage of batches) {
-										const request: GenerateVideoRequest = {
-											prompt,
-											referenceImage,
-											aspectRatio: data.aspectRatio,
-											durationSeconds: data.durationSeconds,
-											generateAudio: data.generateAudio,
-											resolution: data.resolution,
-										};
-										const response = await fetch(
-											"/api/workflow/generate-video",
-											{
-												method: "POST",
-												headers: { "Content-Type": "application/json" },
-												body: JSON.stringify(request),
-											},
-										);
-										const payload =
-											await parseApiResponse<GenerateVideoResponse>(response);
-										generatedAssets.push(...payload.assets);
-									}
+									const responses = await Promise.all(
+										batchPlan.batches.map(async (referenceImages) => {
+											const request: GenerateVideoRequest = {
+												prompt,
+												referenceImages,
+												aspectRatio: data.aspectRatio,
+												durationSeconds: data.durationSeconds,
+												generateAudio: data.generateAudio,
+												resolution: data.resolution,
+											};
+											const response = await fetch(
+												"/api/workflow/generate-video",
+												{
+													method: "POST",
+													headers: { "Content-Type": "application/json" },
+													body: JSON.stringify(request),
+												},
+											);
+											return parseApiResponse<GenerateVideoResponse>(response);
+										}),
+									);
+									const generatedAssets = responses.flatMap(
+										(payload) => payload.assets,
+									);
 
 									updateNodeData(currentId, (current) => ({
 										...(current as VideoGeneratorNodeData),
@@ -1342,6 +1658,22 @@ export function WorkflowStudio() {
 			}
 		},
 		[updateNodeData],
+	);
+
+	const getGeneratorIterationInfo = useCallback(
+		(nodeId: string) =>
+			getGeneratorIterationPreview(
+				nodes as WorkflowNode[],
+				edges as WorkflowEdge[],
+				nodeId,
+			),
+		[edges, nodes],
+	);
+
+	const getGeneratorImageInputs = useCallback(
+		(nodeId: string) =>
+			getGeneratorImageInputHandles(edges as WorkflowEdge[], nodeId),
+		[edges],
 	);
 
 	const addNodeToCanvas = useCallback(
@@ -1417,8 +1749,11 @@ export function WorkflowStudio() {
 			),
 		);
 		setEdges((current) =>
-			(current as WorkflowEdge[]).filter(
-				(edge) => !edgeIdsToRemove.has(edge.id),
+			normalizeGeneratorImageTargetHandles(
+				nodesRef.current as WorkflowNode[],
+				(current as WorkflowEdge[]).filter(
+					(edge) => !edgeIdsToRemove.has(edge.id),
+				),
 			),
 		);
 		setActivity(
@@ -1445,7 +1780,7 @@ export function WorkflowStudio() {
 	}, [deleteSelection]);
 
 	const resetGraph = useCallback(() => {
-		const defaults = createDefaultDocument();
+		const defaults = normalizeWorkflowDocument(createDefaultDocument());
 		setNodes(defaults.nodes);
 		setEdges(defaults.edges);
 		window.localStorage.removeItem(STORAGE_KEY);
@@ -1456,15 +1791,30 @@ export function WorkflowStudio() {
 	const onConnect = useCallback(
 		(connection: Connection) => {
 			setEdges((current) =>
-				addEdge(
-					{
-						...connection,
-						id: createNodeId(),
-						type: "smoothstep",
-						animated: false,
-						style: { stroke: "rgba(226, 232, 240, 0.55)", strokeWidth: 2 },
-					},
-					current,
+				normalizeGeneratorImageTargetHandles(
+					nodesRef.current as WorkflowNode[],
+					addEdge(
+						{
+							...connection,
+							id: createNodeId(),
+							type: "smoothstep",
+							animated: false,
+							style: { stroke: "rgba(226, 232, 240, 0.55)", strokeWidth: 2 },
+						},
+						current,
+					),
+				),
+			);
+		},
+		[setEdges],
+	);
+
+	const onEdgesChange = useCallback(
+		(changes: Parameters<typeof applyEdgeChanges>[0]) => {
+			setEdges((current) =>
+				normalizeGeneratorImageTargetHandles(
+					nodesRef.current as WorkflowNode[],
+					applyEdgeChanges(changes, current as WorkflowEdge[]),
 				),
 			);
 		},
@@ -1476,9 +1826,18 @@ export function WorkflowStudio() {
 			updateNodeData,
 			uploadFilesToNode,
 			clearNodeAssets,
+			getGeneratorImageInputs,
+			getGeneratorIterationInfo,
 			runNode,
 		}),
-		[clearNodeAssets, runNode, updateNodeData, uploadFilesToNode],
+		[
+			clearNodeAssets,
+			getGeneratorImageInputs,
+			getGeneratorIterationInfo,
+			runNode,
+			updateNodeData,
+			uploadFilesToNode,
+		],
 	);
 
 	return (

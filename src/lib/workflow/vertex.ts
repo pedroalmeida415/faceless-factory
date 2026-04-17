@@ -1,4 +1,8 @@
-import { GoogleGenAI, Modality } from "@google/genai";
+import {
+	GoogleGenAI,
+	Modality,
+	VideoGenerationReferenceType,
+} from "@google/genai";
 import {
 	createExternalAsset,
 	readStoredAsset,
@@ -101,6 +105,13 @@ async function toSdkImage(asset: WorkflowAsset) {
 	};
 }
 
+async function toVideoReferenceImage(asset: WorkflowAsset) {
+	return {
+		image: await toSdkImage(asset),
+		referenceType: VideoGenerationReferenceType.ASSET,
+	};
+}
+
 function pickImageParts(
 	response: Awaited<ReturnType<GoogleGenAI["models"]["generateContent"]>>,
 ) {
@@ -178,6 +189,7 @@ export async function generateImagesWithNanoBananaPro({
 export async function generateVideosWithVeo31({
 	prompt,
 	referenceImage = null,
+	referenceImages = [],
 	aspectRatio = "16:9",
 	durationSeconds = 4,
 	generateAudio = true,
@@ -185,10 +197,22 @@ export async function generateVideosWithVeo31({
 }: GenerateVideoRequest) {
 	const client = createVertexClient(getVideoLocation());
 	const promptText = prompt.trim();
+	const inputImages =
+		referenceImages.length > 0
+			? referenceImages
+			: referenceImage
+				? [referenceImage]
+				: [];
 
-	if (!promptText && !referenceImage) {
+	if (!promptText && !inputImages.length) {
 		throw new Error(
 			"Prompt or reference image is required for video generation.",
+		);
+	}
+
+	if (inputImages.length > 1 && !promptText) {
+		throw new Error(
+			"Prompt is required when using multiple reference images for video generation.",
 		);
 	}
 
@@ -196,7 +220,10 @@ export async function generateVideosWithVeo31({
 		model: VEO_31_MODEL_ID,
 		source: {
 			prompt: promptText || undefined,
-			image: referenceImage ? await toSdkImage(referenceImage) : undefined,
+			image:
+				inputImages.length === 1
+					? await toSdkImage(inputImages[0] as WorkflowAsset)
+					: undefined,
 		},
 		config: {
 			numberOfVideos: 1,
@@ -205,6 +232,12 @@ export async function generateVideosWithVeo31({
 			generateAudio,
 			resolution,
 			personGeneration: "allow_adult",
+			referenceImages:
+				inputImages.length > 1
+					? await Promise.all(
+							inputImages.map((asset) => toVideoReferenceImage(asset)),
+						)
+					: undefined,
 		},
 	});
 
