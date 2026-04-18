@@ -11,13 +11,21 @@ import { ShellButton } from "./shared";
 export function WorkflowSidebar({
   activity,
   onAddNode,
+  onRedo,
   onReset,
   onRun,
+  onUndo,
+  canRedo,
+  canUndo,
 }: {
   activity: string;
   onAddNode: (kind: WorkflowNodeKind) => void;
+  onRedo: () => void;
   onReset: () => void;
   onRun: () => void;
+  onUndo: () => void;
+  canRedo: boolean;
+  canUndo: boolean;
 }) {
   return (
     <aside className="w-[320px] shrink-0 rounded-[32px] border border-white/10 bg-black/20 p-5 shadow-[0_30px_90px_rgba(0,0,0,0.35)] backdrop-blur">
@@ -64,6 +72,14 @@ export function WorkflowSidebar({
           <ShellButton className="justify-center" onClick={onRun}>
             Run selected or all generators
           </ShellButton>
+          <div className="grid grid-cols-2 gap-2">
+            <ShellButton disabled={!canUndo} onClick={onUndo}>
+              Undo
+            </ShellButton>
+            <ShellButton disabled={!canRedo} onClick={onRedo}>
+              Redo
+            </ShellButton>
+          </div>
           <ShellButton className="justify-center" onClick={onReset}>
             Reset starter graph
           </ShellButton>

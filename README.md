@@ -2,6 +2,8 @@
 
 Minimal Weavy-style workflow builder on Next.js. Current scope:
 
+- Architecture guide: `WORKFLOW_ARCHITECTURE.md`
+
 - `Prompt` node
 - `Image` upload node
 - `Video` upload node

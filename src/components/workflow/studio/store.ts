@@ -1,205 +1,497 @@
 "use client";
 
 import { useEffect } from "react";
-import {
-  addEdge,
-  applyEdgeChanges,
-  applyNodeChanges,
-  type Connection,
-  type EdgeChange,
-  type NodeChange,
-} from "reactflow";
+import type { Connection, EdgeChange, NodeChange } from "reactflow";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 
+import {
+  updateWorkflowDocumentNode,
+  type WorkflowDocument,
+  type WorkflowDocumentNode,
+} from "~/lib/workflow/document";
+import { getErrorMessage } from "~/lib/workflow/errors";
+import {
+  ImageGeneratorService,
+  PromptNodeService,
+  VideoGeneratorService,
+  WorkflowNodeAssetService,
+} from "~/lib/workflow/services/node-services";
+import { WorkflowPersistenceService } from "~/lib/workflow/services/workflow-persistence-service";
+import {
+  buildWorkflowCanvas,
+  createWorkflowNodeRuntimeState,
+  type WorkflowCanvasEdge,
+  type WorkflowCanvasNode,
+  type WorkflowEditorState,
+  type WorkflowNodeRuntimeState,
+  type WorkflowRuntimeState,
+  type WorkflowStudioSnapshot,
+} from "~/lib/workflow/studio-state";
 import type {
-  ImageGeneratorNodeData,
-  ImageIteratorNodeData,
-  VideoGeneratorNodeData,
-  WorkflowNodeData,
+  ImageAspectRatio,
+  VideoAspectRatio,
+  VideoDuration,
+  VideoResolution,
   WorkflowNodeKind,
+  WorkflowNodeStatus,
 } from "~/lib/workflow/types";
 import {
-  applyNodeUpdate,
-  createDefaultDocument,
-  createNode,
-  createNodeId,
-  formatDeletionActivity,
-  formatNodeTitle,
-  loadDocument,
-  normalizeGeneratorImageTargetHandles,
-  normalizeWorkflowDocument,
-  STORAGE_KEY,
-} from "./graph";
-import type { WorkflowEdge, WorkflowNode } from "./types";
+  DEFAULT_WORKFLOW_ACTIVITY,
+  WorkflowEngine,
+} from "~/lib/workflow/workflow-engine";
 
-const DEFAULT_DOCUMENT = normalizeWorkflowDocument(createDefaultDocument());
-const DEFAULT_ACTIVITY =
-  "Connect prompt and media nodes into the generators. Local graph state auto-saves in your browser.";
+function snapshotFromState(
+  state: Pick<WorkflowStudioState, "document" | "editor" | "runtime">,
+) {
+  return {
+    document: state.document,
+    editor: state.editor,
+    runtime: state.runtime,
+  } satisfies WorkflowStudioSnapshot;
+}
+
+function applySnapshotToState(
+  state: WorkflowStudioState,
+  snapshot: WorkflowStudioSnapshot,
+) {
+  state.document = snapshot.document;
+  state.editor = snapshot.editor;
+  state.runtime = snapshot.runtime;
+
+  const canvas = buildWorkflowCanvas(snapshot);
+  state.nodes = canvas.nodes;
+  state.edges = canvas.edges;
+}
+
+type WorkflowHistoryEntry = {
+  document: WorkflowDocument;
+  selectedEdgeIds: string[];
+  selectedNodeIds: string[];
+};
+
+type WorkflowHistoryState = {
+  future: WorkflowHistoryEntry[];
+  past: WorkflowHistoryEntry[];
+};
+
+const WORKFLOW_HISTORY_LIMIT = 100;
+
+function createHistoryState(): WorkflowHistoryState {
+  return {
+    future: [],
+    past: [],
+  };
+}
+
+function serializeWorkflowDocument(document: WorkflowDocument) {
+  return JSON.stringify(document);
+}
+
+function cloneWorkflowDocument(document: WorkflowDocument): WorkflowDocument {
+  return JSON.parse(serializeWorkflowDocument(document)) as WorkflowDocument;
+}
+
+function createHistoryEntry(
+  snapshot: WorkflowStudioSnapshot,
+): WorkflowHistoryEntry {
+  return {
+    document: cloneWorkflowDocument(snapshot.document),
+    selectedEdgeIds: [...snapshot.editor.selectedEdgeIds],
+    selectedNodeIds: [...snapshot.editor.selectedNodeIds],
+  };
+}
+
+function isSameWorkflowDocument(
+  left: WorkflowDocument,
+  right: WorkflowDocument,
+) {
+  return serializeWorkflowDocument(left) === serializeWorkflowDocument(right);
+}
+
+function syncHistoryFlags(state: WorkflowStudioState) {
+  state.canUndo = state.history.past.length > 0;
+  state.canRedo = state.history.future.length > 0;
+}
+
+function resetHistory(state: WorkflowStudioState) {
+  state.history = createHistoryState();
+  syncHistoryFlags(state);
+}
+
+function updateRuntimeNodeState(
+  runtime: WorkflowRuntimeState,
+  nodeId: string,
+  updater: (nodeState: WorkflowNodeRuntimeState) => WorkflowNodeRuntimeState,
+): WorkflowRuntimeState {
+  return {
+    ...runtime,
+    nodeStateById: {
+      ...runtime.nodeStateById,
+      [nodeId]: updater(
+        runtime.nodeStateById[nodeId] ?? createWorkflowNodeRuntimeState(),
+      ),
+    },
+  };
+}
+
+function commitSnapshot(
+  state: WorkflowStudioState,
+  nextSnapshot: WorkflowStudioSnapshot,
+  options: { recordHistory?: boolean } = {},
+) {
+  const previousSnapshot = snapshotFromState(state);
+  const documentChanged = !isSameWorkflowDocument(
+    previousSnapshot.document,
+    nextSnapshot.document,
+  );
+
+  if (options.recordHistory !== false && documentChanged) {
+    state.history.past.push(createHistoryEntry(previousSnapshot));
+    if (state.history.past.length > WORKFLOW_HISTORY_LIMIT) {
+      state.history.past.shift();
+    }
+    state.history.future = [];
+  }
+
+  applySnapshotToState(state, nextSnapshot);
+  syncHistoryFlags(state);
+}
+
+function runSnapshotMutation(
+  state: WorkflowStudioState,
+  buildNextSnapshot: () => WorkflowStudioSnapshot,
+  options?: { recordHistory?: boolean },
+) {
+  try {
+    commitSnapshot(state, buildNextSnapshot(), options);
+  } catch (error) {
+    state.runtime.activity = getErrorMessage(error);
+  }
+}
+
+function restoreHistoryEntry(
+  state: WorkflowStudioState,
+  entry: WorkflowHistoryEntry,
+) {
+  applySnapshotToState(
+    state,
+    WorkflowEngine.syncState({
+      document: cloneWorkflowDocument(entry.document),
+      editor: {
+        selectedEdgeIds: [...entry.selectedEdgeIds],
+        selectedNodeIds: [...entry.selectedNodeIds],
+        nodeDimensionsById: state.editor.nodeDimensionsById,
+      },
+      runtime: state.runtime,
+    }),
+  );
+}
+
+const initialSnapshot = WorkflowEngine.createInitialState();
+const initialCanvas = buildWorkflowCanvas(initialSnapshot);
 
 type WorkflowStudioState = {
-  nodes: WorkflowNode[];
-  edges: WorkflowEdge[];
-  activity: string;
+  document: WorkflowDocument;
+  editor: WorkflowEditorState;
+  runtime: WorkflowRuntimeState;
+  nodes: WorkflowCanvasNode[];
+  edges: WorkflowCanvasEdge[];
+  history: WorkflowHistoryState;
+  canUndo: boolean;
+  canRedo: boolean;
   ready: boolean;
   hydrate: () => void;
   setActivity: (activity: string) => void;
-  updateNodeData: (
+  setNodeRuntimeState: (
     nodeId: string,
-    updater: (data: WorkflowNodeData) => WorkflowNodeData,
+    status: WorkflowNodeStatus,
+    error: string | null,
+  ) => void;
+  updateDocumentNode: (
+    nodeId: string,
+    updater: (node: WorkflowDocumentNode) => WorkflowDocumentNode,
+  ) => void;
+  setPrompt: (nodeId: string, prompt: string) => void;
+  setImageGeneratorAspectRatio: (
+    nodeId: string,
+    aspectRatio: ImageAspectRatio,
+  ) => void;
+  setVideoGeneratorAspectRatio: (
+    nodeId: string,
+    aspectRatio: VideoAspectRatio,
+  ) => void;
+  setVideoGeneratorDuration: (
+    nodeId: string,
+    durationSeconds: VideoDuration,
+  ) => void;
+  setVideoGeneratorResolution: (
+    nodeId: string,
+    resolution: VideoResolution,
+  ) => void;
+  setVideoGeneratorGenerateAudio: (
+    nodeId: string,
+    generateAudio: boolean,
   ) => void;
   clearNodeAssets: (nodeId: string) => void;
   applyNodeChanges: (changes: NodeChange[]) => void;
   applyEdgeChanges: (changes: EdgeChange[]) => void;
   connect: (connection: Connection) => void;
+  canConnect: (connection: Connection) => boolean;
   addNode: (kind: WorkflowNodeKind) => void;
   deleteSelection: () => void;
   resetGraph: () => void;
+  undo: () => void;
+  redo: () => void;
 };
 
 export const useWorkflowStudioStore = create<WorkflowStudioState>()(
-  immer((set) => ({
-    nodes: DEFAULT_DOCUMENT.nodes,
-    edges: DEFAULT_DOCUMENT.edges,
-    activity: DEFAULT_ACTIVITY,
+  immer((set, get) => ({
+    document: initialSnapshot.document,
+    editor: initialSnapshot.editor,
+    runtime: initialSnapshot.runtime,
+    nodes: initialCanvas.nodes,
+    edges: initialCanvas.edges,
+    history: createHistoryState(),
+    canUndo: false,
+    canRedo: false,
     ready: false,
 
     hydrate: () => {
-      const loaded = loadDocument();
       set((state) => {
-        state.nodes = loaded.nodes;
-        state.edges = loaded.edges;
-        state.ready = true;
+        try {
+          const loadResult = WorkflowPersistenceService.loadDocument();
+          const nextSnapshot = WorkflowEngine.hydrate(
+            loadResult.document,
+            loadResult.activity ?? DEFAULT_WORKFLOW_ACTIVITY,
+          );
+
+          applySnapshotToState(state, nextSnapshot);
+          resetHistory(state);
+          state.ready = true;
+        } catch (error) {
+          applySnapshotToState(state, WorkflowEngine.resetGraph());
+          resetHistory(state);
+          state.ready = true;
+          state.runtime.activity = getErrorMessage(error);
+        }
       });
     },
 
     setActivity: (activity) => {
       set((state) => {
-        state.activity = activity;
+        state.runtime.activity = activity;
       });
     },
 
-    updateNodeData: (nodeId, updater) => {
+    setNodeRuntimeState: (nodeId, status, error) => {
       set((state) => {
-        state.nodes = applyNodeUpdate(state.nodes, nodeId, updater);
+        const currentSnapshot = snapshotFromState(state);
+        runSnapshotMutation(
+          state,
+          () =>
+            WorkflowEngine.syncState({
+              ...currentSnapshot,
+              runtime: updateRuntimeNodeState(
+                currentSnapshot.runtime,
+                nodeId,
+                (nodeState) => ({
+                  ...nodeState,
+                  error,
+                  status,
+                }),
+              ),
+            }),
+          { recordHistory: false },
+        );
       });
+    },
+
+    updateDocumentNode: (nodeId, updater) => {
+      set((state) => {
+        const currentSnapshot = snapshotFromState(state);
+        runSnapshotMutation(state, () =>
+          WorkflowEngine.syncState({
+            ...currentSnapshot,
+            document: updateWorkflowDocumentNode(
+              currentSnapshot.document,
+              nodeId,
+              updater,
+            ),
+          }),
+        );
+      });
+    },
+
+    setPrompt: (nodeId, prompt) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "prompt"
+          ? PromptNodeService.setPrompt(node, prompt)
+          : node,
+      );
+    },
+
+    setImageGeneratorAspectRatio: (nodeId, aspectRatio) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "imageGenerator"
+          ? ImageGeneratorService.setAspectRatio(node, aspectRatio)
+          : node,
+      );
+    },
+
+    setVideoGeneratorAspectRatio: (nodeId, aspectRatio) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "videoGenerator"
+          ? VideoGeneratorService.setAspectRatio(node, aspectRatio)
+          : node,
+      );
+    },
+
+    setVideoGeneratorDuration: (nodeId, durationSeconds) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "videoGenerator"
+          ? VideoGeneratorService.setDuration(node, durationSeconds)
+          : node,
+      );
+    },
+
+    setVideoGeneratorResolution: (nodeId, resolution) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "videoGenerator"
+          ? VideoGeneratorService.setResolution(node, resolution)
+          : node,
+      );
+    },
+
+    setVideoGeneratorGenerateAudio: (nodeId, generateAudio) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "videoGenerator"
+          ? VideoGeneratorService.setGenerateAudio(node, generateAudio)
+          : node,
+      );
     },
 
     clearNodeAssets: (nodeId) => {
       set((state) => {
-        state.nodes = applyNodeUpdate(state.nodes, nodeId, (current) => {
-          switch (current.kind) {
-            case "image":
-              return { ...current, asset: null, status: "idle", error: null };
-            case "video":
-              return { ...current, asset: null, status: "idle", error: null };
-            case "imageIterator":
-              return { ...current, assets: [], status: "idle", error: null };
-            case "imageGenerator":
-            case "videoGenerator":
-              return {
-                ...current,
-                outputAssets: [],
-                status: "idle",
-                error: null,
-              };
-            default:
-              return current;
-          }
-        });
+        const currentSnapshot = snapshotFromState(state);
+        runSnapshotMutation(state, () =>
+          WorkflowEngine.syncState({
+            ...currentSnapshot,
+            document: updateWorkflowDocumentNode(
+              currentSnapshot.document,
+              nodeId,
+              (node) => WorkflowNodeAssetService.clearAssets(node),
+            ),
+            runtime: updateRuntimeNodeState(
+              currentSnapshot.runtime,
+              nodeId,
+              () => createWorkflowNodeRuntimeState(),
+            ),
+          }),
+        );
       });
     },
 
     applyNodeChanges: (changes) => {
       set((state) => {
-        state.nodes = applyNodeChanges(changes, state.nodes) as WorkflowNode[];
+        const currentSnapshot = snapshotFromState(state);
+        runSnapshotMutation(state, () =>
+          WorkflowEngine.applyNodeChanges(currentSnapshot, changes),
+        );
       });
     },
 
     applyEdgeChanges: (changes) => {
       set((state) => {
-        state.edges = normalizeGeneratorImageTargetHandles(
-          state.nodes,
-          applyEdgeChanges(changes, state.edges) as WorkflowEdge[],
+        const currentSnapshot = snapshotFromState(state);
+        runSnapshotMutation(state, () =>
+          WorkflowEngine.applyEdgeChanges(currentSnapshot, changes),
         );
       });
     },
 
     connect: (connection) => {
       set((state) => {
-        state.edges = normalizeGeneratorImageTargetHandles(
-          state.nodes,
-          addEdge(
-            {
-              ...connection,
-              id: createNodeId(),
-              type: "smoothstep",
-              animated: false,
-              style: { stroke: "rgba(226, 232, 240, 0.55)", strokeWidth: 2 },
-            },
-            state.edges,
-          ) as WorkflowEdge[],
+        const currentSnapshot = snapshotFromState(state);
+        runSnapshotMutation(state, () =>
+          WorkflowEngine.connect(currentSnapshot, connection),
         );
       });
     },
 
+    canConnect: (connection) =>
+      WorkflowEngine.canConnect(get().document, connection),
+
     addNode: (kind) => {
       set((state) => {
-        state.nodes = [...state.nodes, createNode(kind, state.nodes.length)];
-        state.activity = `${formatNodeTitle(kind)} node added.`;
+        const currentSnapshot = snapshotFromState(state);
+        runSnapshotMutation(state, () =>
+          WorkflowEngine.addNode(currentSnapshot, kind),
+        );
       });
     },
 
     deleteSelection: () => {
       set((state) => {
-        const selectedNodeIds = new Set(
-          state.nodes.filter((node) => node.selected).map((node) => node.id),
-        );
-        const selectedEdgeIds = new Set(
-          state.edges.filter((edge) => edge.selected).map((edge) => edge.id),
-        );
-
-        if (!selectedNodeIds.size && !selectedEdgeIds.size) {
-          state.activity = "Nothing selected to delete.";
-          return;
-        }
-
-        const edgeIdsToRemove = new Set(
-          state.edges
-            .filter(
-              (edge) =>
-                selectedEdgeIds.has(edge.id) ||
-                selectedNodeIds.has(edge.source) ||
-                selectedNodeIds.has(edge.target),
-            )
-            .map((edge) => edge.id),
-        );
-
-        state.nodes = state.nodes.filter(
-          (node) => !selectedNodeIds.has(node.id),
-        );
-        state.edges = normalizeGeneratorImageTargetHandles(
-          state.nodes,
-          state.edges.filter((edge) => !edgeIdsToRemove.has(edge.id)),
-        );
-        state.activity = formatDeletionActivity(
-          selectedNodeIds.size,
-          edgeIdsToRemove.size,
+        const currentSnapshot = snapshotFromState(state);
+        runSnapshotMutation(state, () =>
+          WorkflowEngine.deleteSelection(currentSnapshot),
         );
       });
     },
 
     resetGraph: () => {
-      const defaults = normalizeWorkflowDocument(createDefaultDocument());
-      set((state) => {
-        state.nodes = defaults.nodes;
-        state.edges = defaults.edges;
-        state.activity = "Workflow reset to the starter graph.";
-      });
+      WorkflowPersistenceService.clearDocument();
 
-      if (typeof window !== "undefined") {
-        window.localStorage.removeItem(STORAGE_KEY);
-      }
+      set((state) => {
+        runSnapshotMutation(state, () => WorkflowEngine.resetGraph());
+      });
+    },
+
+    undo: () => {
+      set((state) => {
+        const previousEntry = state.history.past.pop();
+        if (!previousEntry) {
+          syncHistoryFlags(state);
+          return;
+        }
+
+        state.history.future.push(createHistoryEntry(snapshotFromState(state)));
+
+        try {
+          restoreHistoryEntry(state, previousEntry);
+          state.runtime.activity = "Undid last change.";
+        } catch (error) {
+          state.history.past.push(previousEntry);
+          state.history.future.pop();
+          state.runtime.activity = getErrorMessage(error);
+        }
+
+        syncHistoryFlags(state);
+      });
+    },
+
+    redo: () => {
+      set((state) => {
+        const nextEntry = state.history.future.pop();
+        if (!nextEntry) {
+          syncHistoryFlags(state);
+          return;
+        }
+
+        state.history.past.push(createHistoryEntry(snapshotFromState(state)));
+
+        try {
+          restoreHistoryEntry(state, nextEntry);
+          state.runtime.activity = "Redid last change.";
+        } catch (error) {
+          state.history.future.push(nextEntry);
+          state.history.past.pop();
+          state.runtime.activity = getErrorMessage(error);
+        }
+
+        syncHistoryFlags(state);
+      });
     },
   })),
 );
@@ -207,70 +499,21 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
 export function useWorkflowStudioPersistence() {
   const hydrate = useWorkflowStudioStore((state) => state.hydrate);
   const ready = useWorkflowStudioStore((state) => state.ready);
-  const nodes = useWorkflowStudioStore((state) => state.nodes);
-  const edges = useWorkflowStudioStore((state) => state.edges);
+  const document = useWorkflowStudioStore((state) => state.document);
 
   useEffect(() => {
     hydrate();
   }, [hydrate]);
 
   useEffect(() => {
-    if (!ready || typeof window === "undefined") {
+    if (!ready) {
       return;
     }
 
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        nodes,
-        edges,
-      }),
-    );
-  }, [edges, nodes, ready]);
-}
-
-export function setNodeStatus(
-  nodeId: string,
-  status: WorkflowNodeData["status"],
-  error: string | null,
-) {
-  useWorkflowStudioStore.getState().updateNodeData(nodeId, (current) => ({
-    ...current,
-    status,
-    error,
-  }));
-}
-
-export function setImageGeneratorResult(
-  nodeId: string,
-  updater: (current: ImageGeneratorNodeData) => ImageGeneratorNodeData,
-) {
-  useWorkflowStudioStore
-    .getState()
-    .updateNodeData(nodeId, (current) =>
-      current.kind === "imageGenerator" ? updater(current) : current,
-    );
-}
-
-export function setVideoGeneratorResult(
-  nodeId: string,
-  updater: (current: VideoGeneratorNodeData) => VideoGeneratorNodeData,
-) {
-  useWorkflowStudioStore
-    .getState()
-    .updateNodeData(nodeId, (current) =>
-      current.kind === "videoGenerator" ? updater(current) : current,
-    );
-}
-
-export function setImageIteratorAssets(
-  nodeId: string,
-  updater: (current: ImageIteratorNodeData) => ImageIteratorNodeData,
-) {
-  useWorkflowStudioStore
-    .getState()
-    .updateNodeData(nodeId, (current) =>
-      current.kind === "imageIterator" ? updater(current) : current,
-    );
+    try {
+      WorkflowPersistenceService.saveDocument(document);
+    } catch (error) {
+      useWorkflowStudioStore.getState().setActivity(getErrorMessage(error));
+    }
+  }, [document, ready]);
 }

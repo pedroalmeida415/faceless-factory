@@ -1,0 +1,509 @@
+import {
+  formatNodeTitle,
+  getNodeOutputHandleId,
+} from "~/lib/workflow/node-definitions";
+import {
+  IMAGE_ASPECT_RATIOS,
+  type ImageGeneratorSettings,
+  type ImageIteratorNodeFields,
+  type ImageNodeFields,
+  NANO_BANANA_PRO_MODEL_ID,
+  type PromptNodeFields,
+  VEO_31_MODEL_ID,
+  VIDEO_ASPECT_RATIOS,
+  VIDEO_DURATIONS,
+  VIDEO_RESOLUTIONS,
+  type VideoGeneratorSettings,
+  type VideoNodeFields,
+  type WorkflowAsset,
+  type WorkflowGeneratorResult,
+  type WorkflowNodeKind,
+} from "~/lib/workflow/types";
+
+export const WORKFLOW_DOCUMENT_VERSION = 3;
+export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v3";
+
+export type WorkflowPosition = {
+  x: number;
+  y: number;
+};
+
+type WorkflowDocumentNodeBase = {
+  id: string;
+  kind: WorkflowNodeKind;
+  label: string;
+  position: WorkflowPosition;
+};
+
+export type PromptWorkflowNode = WorkflowDocumentNodeBase &
+  PromptNodeFields & {
+    kind: "prompt";
+  };
+
+export type ImageWorkflowNode = WorkflowDocumentNodeBase &
+  ImageNodeFields & {
+    kind: "image";
+  };
+
+export type VideoWorkflowNode = WorkflowDocumentNodeBase &
+  VideoNodeFields & {
+    kind: "video";
+  };
+
+export type ImageIteratorWorkflowNode = WorkflowDocumentNodeBase &
+  ImageIteratorNodeFields & {
+    kind: "imageIterator";
+  };
+
+export type ImageGeneratorWorkflowNode = WorkflowDocumentNodeBase &
+  ImageGeneratorSettings &
+  WorkflowGeneratorResult & {
+    kind: "imageGenerator";
+  };
+
+export type VideoGeneratorWorkflowNode = WorkflowDocumentNodeBase &
+  VideoGeneratorSettings &
+  WorkflowGeneratorResult & {
+    kind: "videoGenerator";
+  };
+
+export type WorkflowDocumentNode =
+  | PromptWorkflowNode
+  | ImageWorkflowNode
+  | VideoWorkflowNode
+  | ImageIteratorWorkflowNode
+  | ImageGeneratorWorkflowNode
+  | VideoGeneratorWorkflowNode;
+
+export type WorkflowDocumentEdge = {
+  id: string;
+  source: string;
+  sourceHandle: string | null;
+  target: string;
+  targetHandle: string | null;
+};
+
+export type WorkflowDocument = {
+  version: typeof WORKFLOW_DOCUMENT_VERSION;
+  nodes: WorkflowDocumentNode[];
+  edges: WorkflowDocumentEdge[];
+};
+
+function nextNodePosition(index: number): WorkflowPosition {
+  const column = index % 3;
+  const row = Math.floor(index / 3);
+
+  return {
+    x: 80 + column * 360,
+    y: 80 + row * 290,
+  };
+}
+
+function createWorkflowGeneratorResult(): WorkflowGeneratorResult {
+  return {
+    lastPrompt: "",
+    responseText: null,
+    outputAssets: [],
+  };
+}
+
+function makeWorkflowNode(
+  id: string,
+  kind: WorkflowNodeKind,
+  position: WorkflowPosition,
+): WorkflowDocumentNode {
+  const label = formatNodeTitle(kind);
+
+  switch (kind) {
+    case "prompt":
+      return {
+        id,
+        kind,
+        label,
+        position,
+        prompt:
+          "Hyperreal studio portrait of a chrome mannequin under cinematic rim light.",
+      };
+    case "image":
+      return {
+        id,
+        kind,
+        label: "Image Upload",
+        position,
+        asset: null,
+      };
+    case "video":
+      return {
+        id,
+        kind,
+        label: "Video Upload",
+        position,
+        asset: null,
+      };
+    case "imageIterator":
+      return {
+        id,
+        kind,
+        label,
+        position,
+        assets: [],
+      };
+    case "imageGenerator":
+      return {
+        id,
+        kind,
+        label: "Nano Banana Pro",
+        position,
+        model: NANO_BANANA_PRO_MODEL_ID,
+        aspectRatio: "1:1",
+        ...createWorkflowGeneratorResult(),
+      };
+    case "videoGenerator":
+      return {
+        id,
+        kind,
+        label: "Veo 3.1",
+        position,
+        model: VEO_31_MODEL_ID,
+        aspectRatio: "16:9",
+        durationSeconds: 4,
+        generateAudio: true,
+        resolution: "720p",
+        ...createWorkflowGeneratorResult(),
+      };
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
+  return (
+    value === "prompt" ||
+    value === "image" ||
+    value === "video" ||
+    value === "imageIterator" ||
+    value === "imageGenerator" ||
+    value === "videoGenerator"
+  );
+}
+
+function isWorkflowPosition(value: unknown): value is WorkflowPosition {
+  return isRecord(value) && isNumber(value.x) && isNumber(value.y);
+}
+
+function asString(value: unknown, fallback: string) {
+  return isString(value) ? value : fallback;
+}
+
+function asNullableString(value: unknown, fallback: string | null) {
+  return value === null ? null : isString(value) ? value : fallback;
+}
+
+function asBoolean(value: unknown, fallback: boolean) {
+  return isBoolean(value) ? value : fallback;
+}
+
+function asEnumValue<T extends readonly (string | number)[]>(
+  value: unknown,
+  allowedValues: T,
+  fallback: T[number],
+): T[number] {
+  return allowedValues.includes(value as T[number])
+    ? (value as T[number])
+    : fallback;
+}
+
+function asWorkflowAsset(value: unknown): WorkflowAsset | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const kind = value.kind;
+  const source = value.source;
+  if (
+    (kind !== "image" && kind !== "video") ||
+    (source !== "upload" && source !== "generated")
+  ) {
+    return null;
+  }
+
+  return {
+    id: asString(value.id, crypto.randomUUID()),
+    kind,
+    source,
+    fileName: asString(value.fileName, "asset"),
+    mimeType: asString(value.mimeType, "application/octet-stream"),
+    size: isNumber(value.size) ? value.size : 0,
+    createdAt: asString(value.createdAt, new Date().toISOString()),
+    url: asString(value.url, ""),
+    storagePath: asNullableString(value.storagePath, null),
+    externalUri: asNullableString(value.externalUri, null),
+    model: asNullableString(value.model, null),
+  };
+}
+
+function asWorkflowAssets(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((asset) => asWorkflowAsset(asset))
+    .filter((asset): asset is WorkflowAsset => Boolean(asset));
+}
+
+function normalizeWorkflowNode(
+  value: unknown,
+  index: number,
+): WorkflowDocumentNode | null {
+  if (!isRecord(value) || !isWorkflowNodeKind(value.kind)) {
+    return null;
+  }
+
+  const id = asString(value.id, createWorkflowNodeId());
+  const position = isWorkflowPosition(value.position)
+    ? value.position
+    : nextNodePosition(index);
+
+  switch (value.kind) {
+    case "prompt": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as PromptWorkflowNode;
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        prompt: asString(value.prompt, baseNode.prompt),
+      };
+    }
+    case "image": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as ImageWorkflowNode;
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        asset: asWorkflowAsset(value.asset),
+      };
+    }
+    case "video": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as VideoWorkflowNode;
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        asset: asWorkflowAsset(value.asset),
+      };
+    }
+    case "imageIterator": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as ImageIteratorWorkflowNode;
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        assets: asWorkflowAssets(value.assets),
+      };
+    }
+    case "imageGenerator": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as ImageGeneratorWorkflowNode;
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        model: NANO_BANANA_PRO_MODEL_ID,
+        aspectRatio: asEnumValue(
+          value.aspectRatio,
+          IMAGE_ASPECT_RATIOS,
+          baseNode.aspectRatio,
+        ),
+        lastPrompt: asString(value.lastPrompt, baseNode.lastPrompt),
+        responseText: asNullableString(
+          value.responseText,
+          baseNode.responseText,
+        ),
+        outputAssets: asWorkflowAssets(value.outputAssets),
+      };
+    }
+    case "videoGenerator": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as VideoGeneratorWorkflowNode;
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        model: VEO_31_MODEL_ID,
+        aspectRatio: asEnumValue(
+          value.aspectRatio,
+          VIDEO_ASPECT_RATIOS,
+          baseNode.aspectRatio,
+        ),
+        durationSeconds: asEnumValue(
+          value.durationSeconds,
+          VIDEO_DURATIONS,
+          baseNode.durationSeconds,
+        ),
+        generateAudio: asBoolean(value.generateAudio, baseNode.generateAudio),
+        resolution: asEnumValue(
+          value.resolution,
+          VIDEO_RESOLUTIONS,
+          baseNode.resolution,
+        ),
+        lastPrompt: asString(value.lastPrompt, baseNode.lastPrompt),
+        responseText: asNullableString(
+          value.responseText,
+          baseNode.responseText,
+        ),
+        outputAssets: asWorkflowAssets(value.outputAssets),
+      };
+    }
+  }
+}
+
+function normalizeWorkflowDocument(
+  document: WorkflowDocument,
+): WorkflowDocument {
+  const nodes = document.nodes
+    .map((node, index) => normalizeWorkflowNode(node, index))
+    .filter((node): node is WorkflowDocumentNode => Boolean(node));
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = document.edges
+    .filter((edge) => isRecord(edge))
+    .map((edge) => ({
+      id: asString(edge.id, createWorkflowNodeId()),
+      source: asString(edge.source, ""),
+      sourceHandle: asNullableString(edge.sourceHandle, null),
+      target: asString(edge.target, ""),
+      targetHandle: asNullableString(edge.targetHandle, null),
+    }))
+    .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target));
+
+  return {
+    version: WORKFLOW_DOCUMENT_VERSION,
+    nodes,
+    edges,
+  };
+}
+
+function isWorkflowDocument(value: unknown): value is WorkflowDocument {
+  if (
+    !isRecord(value) ||
+    value.version !== WORKFLOW_DOCUMENT_VERSION ||
+    !Array.isArray(value.nodes) ||
+    !Array.isArray(value.edges)
+  ) {
+    return false;
+  }
+
+  return value.nodes.every(
+    (node) =>
+      isRecord(node) &&
+      typeof node.id === "string" &&
+      isWorkflowNodeKind(node.kind),
+  );
+}
+
+export function createWorkflowNodeId() {
+  return crypto.randomUUID();
+}
+
+export function updateWorkflowDocumentNode(
+  document: WorkflowDocument,
+  nodeId: string,
+  updater: (node: WorkflowDocumentNode) => WorkflowDocumentNode,
+) {
+  return {
+    ...document,
+    nodes: document.nodes.map((node) =>
+      node.id === nodeId ? updater(node) : node,
+    ),
+  } satisfies WorkflowDocument;
+}
+
+export function createWorkflowNode(kind: WorkflowNodeKind, index: number) {
+  return makeWorkflowNode(
+    createWorkflowNodeId(),
+    kind,
+    nextNodePosition(index),
+  );
+}
+
+export function createDefaultWorkflowDocument(): WorkflowDocument {
+  const prompt = createWorkflowNode("prompt", 0);
+  const imageGenerator = createWorkflowNode("imageGenerator", 1);
+  const imageIterator = createWorkflowNode("imageIterator", 2);
+  const videoGenerator = createWorkflowNode("videoGenerator", 3);
+  const image = createWorkflowNode("image", 4);
+  const video = createWorkflowNode("video", 5);
+
+  imageGenerator.position = { x: 470, y: 70 };
+  imageIterator.position = { x: 70, y: 350 };
+  videoGenerator.position = { x: 470, y: 380 };
+  image.position = { x: 70, y: 620 };
+  video.position = { x: 470, y: 680 };
+
+  return {
+    version: WORKFLOW_DOCUMENT_VERSION,
+    nodes: [
+      prompt,
+      imageGenerator,
+      imageIterator,
+      videoGenerator,
+      image,
+      video,
+    ],
+    edges: [
+      {
+        id: createWorkflowNodeId(),
+        source: prompt.id,
+        sourceHandle: getNodeOutputHandleId(prompt.kind),
+        target: imageGenerator.id,
+        targetHandle: "prompt",
+      },
+      {
+        id: createWorkflowNodeId(),
+        source: prompt.id,
+        sourceHandle: getNodeOutputHandleId(prompt.kind),
+        target: videoGenerator.id,
+        targetHandle: "prompt",
+      },
+    ],
+  };
+}
+
+export function deserializeStoredWorkflowDocument(raw: unknown) {
+  if (isWorkflowDocument(raw)) {
+    const normalized = normalizeWorkflowDocument(raw);
+    return normalized.nodes.length ? normalized : null;
+  }
+
+  return null;
+}

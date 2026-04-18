@@ -26,9 +26,10 @@ export function WorkflowStudio() {
   const flowRef = useRef<ReactFlowInstance | null>(null);
   const nodes = useWorkflowStudioStore((state) => state.nodes);
   const edges = useWorkflowStudioStore((state) => state.edges);
-  const activity = useWorkflowStudioStore((state) => state.activity);
+  const activity = useWorkflowStudioStore((state) => state.runtime.activity);
   const addNode = useWorkflowStudioStore((state) => state.addNode);
   const connect = useWorkflowStudioStore((state) => state.connect);
+  const canConnect = useWorkflowStudioStore((state) => state.canConnect);
   const applyNodeChanges = useWorkflowStudioStore(
     (state) => state.applyNodeChanges,
   );
@@ -39,15 +40,34 @@ export function WorkflowStudio() {
     (state) => state.deleteSelection,
   );
   const resetGraph = useWorkflowStudioStore((state) => state.resetGraph);
+  const undo = useWorkflowStudioStore((state) => state.undo);
+  const redo = useWorkflowStudioStore((state) => state.redo);
+  const canUndo = useWorkflowStudioStore((state) => state.canUndo);
+  const canRedo = useWorkflowStudioStore((state) => state.canRedo);
   const { contextValue, runSelectedOrAll } = useWorkflowStudioController();
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Delete") {
+      if (isEditableTarget(event.target)) {
         return;
       }
 
-      if (isEditableTarget(event.target)) {
+      const key = event.key.toLowerCase();
+      const modifierPressed = event.metaKey || event.ctrlKey;
+
+      if (modifierPressed && !event.shiftKey && key === "z") {
+        event.preventDefault();
+        undo();
+        return;
+      }
+
+      if (modifierPressed && ((event.shiftKey && key === "z") || key === "y")) {
+        event.preventDefault();
+        redo();
+        return;
+      }
+
+      if (event.key !== "Delete") {
         return;
       }
 
@@ -57,7 +77,7 @@ export function WorkflowStudio() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [deleteSelection]);
+  }, [deleteSelection, redo, undo]);
 
   const addNodeToCanvas = useCallback(
     (kind: Parameters<typeof addNode>[0]) => {
@@ -79,8 +99,12 @@ export function WorkflowStudio() {
           <WorkflowSidebar
             activity={activity}
             onAddNode={addNodeToCanvas}
+            onRedo={redo}
             onReset={handleReset}
             onRun={() => void runSelectedOrAll()}
+            onUndo={undo}
+            canRedo={canRedo}
+            canUndo={canUndo}
           />
 
           <main className="min-w-0 flex-1 overflow-hidden rounded-[36px] border border-white/10 bg-black/15 shadow-[0_40px_120px_rgba(0,0,0,0.45)] backdrop-blur">
@@ -116,6 +140,7 @@ export function WorkflowStudio() {
                 deleteKeyCode={null}
                 edges={edges}
                 fitView
+                isValidConnection={canConnect}
                 nodes={nodes}
                 nodeTypes={nodeTypes}
                 onConnect={connect}

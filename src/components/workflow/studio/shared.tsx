@@ -35,7 +35,7 @@ export function ShellButton(
 
   return (
     <button
-      className={`rounded-full border border-white/12 bg-white/8 px-3 py-2 text-sm text-white transition hover:border-white/20 hover:bg-white/14 ${className ?? ""}`}
+      className={`rounded-full border border-white/12 bg-white/8 px-3 py-2 text-sm text-white transition hover:border-white/20 hover:bg-white/14 disabled:cursor-not-allowed disabled:opacity-40 ${className ?? ""}`}
       type="button"
       {...rest}
     >

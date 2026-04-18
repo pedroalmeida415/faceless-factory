@@ -47,6 +47,41 @@ export type WorkflowAsset = {
   model: string | null;
 };
 
+export type PromptNodeFields = {
+  prompt: string;
+};
+
+export type ImageNodeFields = {
+  asset: WorkflowAsset | null;
+};
+
+export type VideoNodeFields = {
+  asset: WorkflowAsset | null;
+};
+
+export type ImageIteratorNodeFields = {
+  assets: WorkflowAsset[];
+};
+
+export type WorkflowGeneratorResult = {
+  lastPrompt: string;
+  responseText: string | null;
+  outputAssets: WorkflowAsset[];
+};
+
+export type ImageGeneratorSettings = {
+  model: typeof NANO_BANANA_PRO_MODEL_ID;
+  aspectRatio: ImageAspectRatio;
+};
+
+export type VideoGeneratorSettings = {
+  model: typeof VEO_31_MODEL_ID;
+  aspectRatio: VideoAspectRatio;
+  durationSeconds: VideoDuration;
+  generateAudio: boolean;
+  resolution: VideoResolution;
+};
+
 type BaseNodeData = {
   kind: WorkflowNodeKind;
   label: string;
@@ -54,46 +89,37 @@ type BaseNodeData = {
   error: string | null;
 };
 
-export type PromptNodeData = BaseNodeData & {
-  kind: "prompt";
-  prompt: string;
-};
+export type PromptNodeData = BaseNodeData &
+  PromptNodeFields & {
+    kind: "prompt";
+  };
 
-export type ImageNodeData = BaseNodeData & {
-  kind: "image";
-  asset: WorkflowAsset | null;
-};
+export type ImageNodeData = BaseNodeData &
+  ImageNodeFields & {
+    kind: "image";
+  };
 
-export type VideoNodeData = BaseNodeData & {
-  kind: "video";
-  asset: WorkflowAsset | null;
-};
+export type VideoNodeData = BaseNodeData &
+  VideoNodeFields & {
+    kind: "video";
+  };
 
-export type ImageIteratorNodeData = BaseNodeData & {
-  kind: "imageIterator";
-  assets: WorkflowAsset[];
-};
+export type ImageIteratorNodeData = BaseNodeData &
+  ImageIteratorNodeFields & {
+    kind: "imageIterator";
+  };
 
-type BaseGeneratorNodeData = BaseNodeData & {
-  lastPrompt: string;
-  responseText: string | null;
-  outputAssets: WorkflowAsset[];
-};
+export type ImageGeneratorNodeData = BaseNodeData &
+  WorkflowGeneratorResult &
+  ImageGeneratorSettings & {
+    kind: "imageGenerator";
+  };
 
-export type ImageGeneratorNodeData = BaseGeneratorNodeData & {
-  kind: "imageGenerator";
-  model: typeof NANO_BANANA_PRO_MODEL_ID;
-  aspectRatio: ImageAspectRatio;
-};
-
-export type VideoGeneratorNodeData = BaseGeneratorNodeData & {
-  kind: "videoGenerator";
-  model: typeof VEO_31_MODEL_ID;
-  aspectRatio: VideoAspectRatio;
-  durationSeconds: VideoDuration;
-  generateAudio: boolean;
-  resolution: VideoResolution;
-};
+export type VideoGeneratorNodeData = BaseNodeData &
+  WorkflowGeneratorResult &
+  VideoGeneratorSettings & {
+    kind: "videoGenerator";
+  };
 
 export type WorkflowNodeData =
   | PromptNodeData
@@ -138,4 +164,18 @@ export function isGeneratorNodeKind(
   kind: WorkflowNodeKind,
 ): kind is "imageGenerator" | "videoGenerator" {
   return kind === "imageGenerator" || kind === "videoGenerator";
+}
+
+export function isImageSourceNodeKind(
+  kind: WorkflowNodeKind,
+): kind is "image" | "imageIterator" | "imageGenerator" {
+  return (
+    kind === "image" || kind === "imageIterator" || kind === "imageGenerator"
+  );
+}
+
+export function isVideoSourceNodeKind(
+  kind: WorkflowNodeKind,
+): kind is "video" | "videoGenerator" {
+  return kind === "video" || kind === "videoGenerator";
 }

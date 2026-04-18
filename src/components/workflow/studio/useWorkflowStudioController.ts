@@ -16,24 +16,35 @@ import {
 import { useWorkflowStudioStore } from "./store";
 
 export function useWorkflowStudioController() {
-  const nodes = useWorkflowStudioStore((state) => state.nodes);
-  const edges = useWorkflowStudioStore((state) => state.edges);
-  const updateNodeData = useWorkflowStudioStore(
-    (state) => state.updateNodeData,
-  );
+  const setPrompt = useWorkflowStudioStore((state) => state.setPrompt);
   const clearNodeAssets = useWorkflowStudioStore(
     (state) => state.clearNodeAssets,
   );
-
-  const getGeneratorIterationInfo = useCallback(
-    (nodeId: string) => getGeneratorIterationPreview(nodes, edges, nodeId),
-    [edges, nodes],
+  const setImageGeneratorAspectRatio = useWorkflowStudioStore(
+    (state) => state.setImageGeneratorAspectRatio,
+  );
+  const setVideoGeneratorAspectRatio = useWorkflowStudioStore(
+    (state) => state.setVideoGeneratorAspectRatio,
+  );
+  const setVideoGeneratorDuration = useWorkflowStudioStore(
+    (state) => state.setVideoGeneratorDuration,
+  );
+  const setVideoGeneratorResolution = useWorkflowStudioStore(
+    (state) => state.setVideoGeneratorResolution,
+  );
+  const setVideoGeneratorGenerateAudio = useWorkflowStudioStore(
+    (state) => state.setVideoGeneratorGenerateAudio,
   );
 
-  const getGeneratorImageInputs = useCallback(
-    (nodeId: string) => getGeneratorImageInputHandles(edges, nodeId),
-    [edges],
-  );
+  const getGeneratorIterationInfo = useCallback((nodeId: string) => {
+    const { document } = useWorkflowStudioStore.getState();
+    return getGeneratorIterationPreview(document, nodeId);
+  }, []);
+
+  const getGeneratorImageInputs = useCallback((nodeId: string) => {
+    const { document } = useWorkflowStudioStore.getState();
+    return getGeneratorImageInputHandles(document.edges, nodeId);
+  }, []);
 
   const uploadFilesToNode = useCallback(
     async (
@@ -58,11 +69,16 @@ export function useWorkflowStudioController() {
 
   const contextValue = useMemo<StudioContextValue>(
     () => ({
-      updateNodeData,
+      setPrompt,
       uploadFilesToNode,
       clearNodeAssets,
       getGeneratorImageInputs,
       getGeneratorIterationInfo,
+      setImageGeneratorAspectRatio,
+      setVideoGeneratorAspectRatio,
+      setVideoGeneratorDuration,
+      setVideoGeneratorResolution,
+      setVideoGeneratorGenerateAudio,
       runNode,
     }),
     [
@@ -70,7 +86,12 @@ export function useWorkflowStudioController() {
       getGeneratorImageInputs,
       getGeneratorIterationInfo,
       runNode,
-      updateNodeData,
+      setImageGeneratorAspectRatio,
+      setPrompt,
+      setVideoGeneratorAspectRatio,
+      setVideoGeneratorDuration,
+      setVideoGeneratorGenerateAudio,
+      setVideoGeneratorResolution,
       uploadFilesToNode,
     ],
   );

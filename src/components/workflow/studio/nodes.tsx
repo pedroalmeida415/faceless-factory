@@ -30,7 +30,7 @@ import {
 } from "./shared";
 
 function PromptNode({ id, data, selected }: NodeProps<PromptNodeData>) {
-  const { updateNodeData } = useStudioContext();
+  const { setPrompt } = useStudioContext();
 
   return (
     <NodeShell
@@ -41,12 +41,7 @@ function PromptNode({ id, data, selected }: NodeProps<PromptNodeData>) {
     >
       <textarea
         className="h-40 w-full resize-none rounded-3xl border border-white/10 bg-black/25 px-4 py-4 text-slate-100 text-sm outline-none placeholder:text-slate-500"
-        onChange={(event) =>
-          updateNodeData(id, (current) => ({
-            ...(current as PromptNodeData),
-            prompt: event.target.value,
-          }))
-        }
+        onChange={(event) => setPrompt(id, event.target.value)}
         placeholder="Describe the shot, mood, framing, lens, motion."
         value={data.prompt}
       />
@@ -196,7 +191,7 @@ function ImageGeneratorNode({
   const {
     getGeneratorImageInputs,
     getGeneratorIterationInfo,
-    updateNodeData,
+    setImageGeneratorAspectRatio,
     runNode,
   } = useStudioContext();
   const imageInputs = getGeneratorImageInputs(id);
@@ -230,10 +225,10 @@ function ImageGeneratorNode({
           <select
             className="w-full bg-transparent outline-none"
             onChange={(event) =>
-              updateNodeData(id, (current) => ({
-                ...(current as ImageGeneratorNodeData),
-                aspectRatio: event.target.value as ImageAspectRatio,
-              }))
+              setImageGeneratorAspectRatio(
+                id,
+                event.target.value as ImageAspectRatio,
+              )
             }
             value={data.aspectRatio}
           >
@@ -299,7 +294,10 @@ function VideoGeneratorNode({
   const {
     getGeneratorImageInputs,
     getGeneratorIterationInfo,
-    updateNodeData,
+    setVideoGeneratorAspectRatio,
+    setVideoGeneratorDuration,
+    setVideoGeneratorResolution,
+    setVideoGeneratorGenerateAudio,
     runNode,
   } = useStudioContext();
   const imageInputs = getGeneratorImageInputs(id);
@@ -333,10 +331,10 @@ function VideoGeneratorNode({
           <select
             className="w-full bg-transparent outline-none"
             onChange={(event) =>
-              updateNodeData(id, (current) => ({
-                ...(current as VideoGeneratorNodeData),
-                aspectRatio: event.target.value as VideoAspectRatio,
-              }))
+              setVideoGeneratorAspectRatio(
+                id,
+                event.target.value as VideoAspectRatio,
+              )
             }
             value={data.aspectRatio}
           >
@@ -354,10 +352,10 @@ function VideoGeneratorNode({
           <select
             className="w-full bg-transparent outline-none"
             onChange={(event) =>
-              updateNodeData(id, (current) => ({
-                ...(current as VideoGeneratorNodeData),
-                durationSeconds: Number(event.target.value) as VideoDuration,
-              }))
+              setVideoGeneratorDuration(
+                id,
+                Number(event.target.value) as VideoDuration,
+              )
             }
             value={data.durationSeconds}
           >
@@ -375,10 +373,10 @@ function VideoGeneratorNode({
           <select
             className="w-full bg-transparent outline-none"
             onChange={(event) =>
-              updateNodeData(id, (current) => ({
-                ...(current as VideoGeneratorNodeData),
-                resolution: event.target.value as VideoResolution,
-              }))
+              setVideoGeneratorResolution(
+                id,
+                event.target.value as VideoResolution,
+              )
             }
             value={data.resolution}
           >
@@ -399,10 +397,7 @@ function VideoGeneratorNode({
             checked={data.generateAudio}
             className="h-4 w-4 accent-white"
             onChange={(event) =>
-              updateNodeData(id, (current) => ({
-                ...(current as VideoGeneratorNodeData),
-                generateAudio: event.target.checked,
-              }))
+              setVideoGeneratorGenerateAudio(id, event.target.checked)
             }
             type="checkbox"
           />

@@ -1,13 +1,15 @@
 import { createContext, useContext } from "react";
 
-import type { WorkflowNodeData } from "~/lib/workflow/types";
+import type {
+  ImageAspectRatio,
+  VideoAspectRatio,
+  VideoDuration,
+  VideoResolution,
+} from "~/lib/workflow/types";
 import type { GeneratorIterationInfo, HandleDefinition } from "./graph";
 
 export type StudioContextValue = {
-  updateNodeData: (
-    nodeId: string,
-    updater: (data: WorkflowNodeData) => WorkflowNodeData,
-  ) => void;
+  setPrompt: (nodeId: string, prompt: string) => void;
   uploadFilesToNode: (
     nodeId: string,
     files: File[],
@@ -16,6 +18,26 @@ export type StudioContextValue = {
   clearNodeAssets: (nodeId: string) => void;
   getGeneratorIterationInfo: (nodeId: string) => GeneratorIterationInfo;
   getGeneratorImageInputs: (nodeId: string) => HandleDefinition[];
+  setImageGeneratorAspectRatio: (
+    nodeId: string,
+    aspectRatio: ImageAspectRatio,
+  ) => void;
+  setVideoGeneratorAspectRatio: (
+    nodeId: string,
+    aspectRatio: VideoAspectRatio,
+  ) => void;
+  setVideoGeneratorDuration: (
+    nodeId: string,
+    durationSeconds: VideoDuration,
+  ) => void;
+  setVideoGeneratorResolution: (
+    nodeId: string,
+    resolution: VideoResolution,
+  ) => void;
+  setVideoGeneratorGenerateAudio: (
+    nodeId: string,
+    generateAudio: boolean,
+  ) => void;
   runNode: (nodeId: string) => Promise<void>;
 };
 
