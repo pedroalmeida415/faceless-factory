@@ -16,8 +16,6 @@ import type {
 	ImageGeneratorNodeData,
 	ImageIteratorNodeData,
 	VideoGeneratorNodeData,
-	WorkflowEdge,
-	WorkflowNode,
 	WorkflowNodeData,
 	WorkflowNodeKind,
 } from "~/lib/workflow/types";
@@ -33,6 +31,7 @@ import {
 	normalizeWorkflowDocument,
 	STORAGE_KEY,
 } from "./graph";
+import type { WorkflowEdge, WorkflowNode } from "./types";
 
 const DEFAULT_DOCUMENT = normalizeWorkflowDocument(createDefaultDocument());
 const DEFAULT_ACTIVITY =

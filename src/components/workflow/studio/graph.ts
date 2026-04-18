@@ -3,14 +3,16 @@ import type { Edge, Node } from "reactflow";
 import {
 	isGeneratorNodeKind,
 	NANO_BANANA_PRO_MODEL_ID,
-	type SavedWorkflowDocument,
 	VEO_31_MODEL_ID,
 	type WorkflowAsset,
-	type WorkflowEdge,
-	type WorkflowNode,
 	type WorkflowNodeData,
 	type WorkflowNodeKind,
 } from "~/lib/workflow/types";
+import type {
+	SavedWorkflowDocument,
+	WorkflowEdge,
+	WorkflowNode,
+} from "./types";
 
 export const STORAGE_KEY = "faceless-factory.workflow.v1";
 export const PROMPT_INPUT_HANDLE_ID = "prompt";

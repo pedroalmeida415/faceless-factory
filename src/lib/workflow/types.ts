@@ -1,5 +1,3 @@
-import type { Edge, Node } from "reactflow";
-
 export const NANO_BANANA_PRO_MODEL_ID = "gemini-3-pro-image-preview";
 export const VEO_31_MODEL_ID = "veo-3.1-fast-generate-001";
 
@@ -104,15 +102,6 @@ export type WorkflowNodeData =
 	| ImageIteratorNodeData
 	| ImageGeneratorNodeData
 	| VideoGeneratorNodeData;
-
-export type WorkflowNode = Node<WorkflowNodeData>;
-export type WorkflowEdge = Edge;
-
-export type SavedWorkflowDocument = {
-	version: 1;
-	nodes: WorkflowNode[];
-	edges: WorkflowEdge[];
-};
 
 export type UploadAssetResponse = {
 	asset: WorkflowAsset;

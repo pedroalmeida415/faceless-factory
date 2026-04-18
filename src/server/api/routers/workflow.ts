@@ -1,18 +1,18 @@
-import { TRPCError } from "@trpc/server";
+import { Effect } from "effect";
 import { z } from "zod";
 
-import { saveFormFileAsAsset } from "~/lib/workflow/storage";
+import { ServerRuntime } from "~/effect/server/runtime";
+import { WorkflowValidationError } from "~/lib/workflow/errors";
 import {
 	IMAGE_ASPECT_RATIOS,
 	VIDEO_ASPECT_RATIOS,
 	VIDEO_DURATIONS,
 	VIDEO_RESOLUTIONS,
 } from "~/lib/workflow/types";
-import {
-	generateImagesWithNanoBananaPro,
-	generateVideosWithVeo31,
-} from "~/lib/workflow/vertex";
+import { toTRPCError } from "~/server/api/errors";
 import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
+import { WorkflowStorage } from "~/server/workflow/storage";
+import { VertexAi } from "~/server/workflow/vertex";
 
 const workflowAssetSchema = z.object({
 	id: z.string(),
@@ -49,7 +49,16 @@ export const workflowRouter = createTRPCRouter({
 				aspectRatio: z.enum(IMAGE_ASPECT_RATIOS).optional(),
 			}),
 		)
-		.mutation(({ input }) => generateImagesWithNanoBananaPro(input)),
+		.mutation(async ({ input }) =>
+			ServerRuntime.runPromise(
+				Effect.gen(function* () {
+					const vertexAi = yield* VertexAi;
+					return yield* vertexAi.generateImagesWithNanoBananaPro(input);
+				}),
+			).catch((error) => {
+				throw toTRPCError(error);
+			}),
+		),
 
 	generateVideo: publicProcedure
 		.input(
@@ -63,39 +72,55 @@ export const workflowRouter = createTRPCRouter({
 				resolution: z.enum(VIDEO_RESOLUTIONS).optional(),
 			}),
 		)
-		.mutation(({ input }) => generateVideosWithVeo31(input)),
+		.mutation(async ({ input }) =>
+			ServerRuntime.runPromise(
+				Effect.gen(function* () {
+					const vertexAi = yield* VertexAi;
+					return yield* vertexAi.generateVideosWithVeo31(input);
+				}),
+			).catch((error) => {
+				throw toTRPCError(error);
+			}),
+		),
 
 	uploadAsset: publicProcedure
 		.input(formDataSchema)
-		.mutation(async ({ input }) => {
-			const file = input.get("file");
+		.mutation(async ({ input }) =>
+			ServerRuntime.runPromise(
+				Effect.gen(function* () {
+					const workflowStorage = yield* WorkflowStorage;
+					const file = input.get("file");
 
-			if (!(file instanceof File)) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Missing file upload.",
-				});
-			}
+					if (!(file instanceof File)) {
+						return yield* Effect.fail(
+							new WorkflowValidationError({ message: "Missing file upload." }),
+						);
+					}
 
-			const kind = file.type.startsWith("image/")
-				? "image"
-				: file.type.startsWith("video/")
-					? "video"
-					: null;
+					const kind = file.type.startsWith("image/")
+						? "image"
+						: file.type.startsWith("video/")
+							? "video"
+							: null;
 
-			if (!kind) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message: "Only image and video uploads are supported.",
-				});
-			}
+					if (!kind) {
+						return yield* Effect.fail(
+							new WorkflowValidationError({
+								message: "Only image and video uploads are supported.",
+							}),
+						);
+					}
 
-			const asset = await saveFormFileAsAsset({
-				file,
-				kind,
-				source: "upload",
-			});
+					const asset = yield* workflowStorage.saveFormFileAsAsset({
+						file,
+						kind,
+						source: "upload",
+					});
 
-			return { asset };
-		}),
+					return { asset };
+				}),
+			).catch((error) => {
+				throw toTRPCError(error);
+			}),
+		),
 });
