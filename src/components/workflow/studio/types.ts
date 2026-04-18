@@ -6,7 +6,7 @@ export type WorkflowNode = Node<WorkflowNodeData>;
 export type WorkflowEdge = Edge;
 
 export type SavedWorkflowDocument = {
-	version: 1;
-	nodes: WorkflowNode[];
-	edges: WorkflowEdge[];
+  version: 1;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
 };
