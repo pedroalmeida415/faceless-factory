@@ -116,7 +116,19 @@ function syncHistoryFlags(state: WorkflowStudioState) {
 
 function resetHistory(state: WorkflowStudioState) {
   state.history = createHistoryState();
+  state.pendingNodeDragHistoryEntry = null;
   syncHistoryFlags(state);
+}
+
+function pushHistoryEntry(
+  state: WorkflowStudioState,
+  entry: WorkflowHistoryEntry,
+) {
+  state.history.past.push(entry);
+  if (state.history.past.length > WORKFLOW_HISTORY_LIMIT) {
+    state.history.past.shift();
+  }
+  state.history.future = [];
 }
 
 function updateRuntimeNodeState(
@@ -138,20 +150,21 @@ function updateRuntimeNodeState(
 function commitSnapshot(
   state: WorkflowStudioState,
   nextSnapshot: WorkflowStudioSnapshot,
-  options: { recordHistory?: boolean } = {},
+  options: {
+    historyEntry?: WorkflowHistoryEntry;
+    recordHistory?: boolean;
+  } = {},
 ) {
   const previousSnapshot = snapshotFromState(state);
+  const historyEntry =
+    options.historyEntry ?? createHistoryEntry(previousSnapshot);
   const documentChanged = !isSameWorkflowDocument(
-    previousSnapshot.document,
+    historyEntry.document,
     nextSnapshot.document,
   );
 
   if (options.recordHistory !== false && documentChanged) {
-    state.history.past.push(createHistoryEntry(previousSnapshot));
-    if (state.history.past.length > WORKFLOW_HISTORY_LIMIT) {
-      state.history.past.shift();
-    }
-    state.history.future = [];
+    pushHistoryEntry(state, historyEntry);
   }
 
   applySnapshotToState(state, nextSnapshot);
@@ -161,7 +174,10 @@ function commitSnapshot(
 function runSnapshotMutation(
   state: WorkflowStudioState,
   buildNextSnapshot: () => WorkflowStudioSnapshot,
-  options?: { recordHistory?: boolean },
+  options?: {
+    historyEntry?: WorkflowHistoryEntry;
+    recordHistory?: boolean;
+  },
 ) {
   try {
     commitSnapshot(state, buildNextSnapshot(), options);
@@ -198,6 +214,7 @@ type WorkflowStudioState = {
   nodes: WorkflowCanvasNode[];
   edges: WorkflowCanvasEdge[];
   history: WorkflowHistoryState;
+  pendingNodeDragHistoryEntry: WorkflowHistoryEntry | null;
   canUndo: boolean;
   canRedo: boolean;
   ready: boolean;
@@ -253,6 +270,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     nodes: initialCanvas.nodes,
     edges: initialCanvas.edges,
     history: createHistoryState(),
+    pendingNodeDragHistoryEntry: null,
     canUndo: false,
     canRedo: false,
     ready: false,
@@ -395,9 +413,40 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     applyNodeChanges: (changes) => {
       set((state) => {
         const currentSnapshot = snapshotFromState(state);
-        runSnapshotMutation(state, () =>
-          WorkflowEngine.applyNodeChanges(currentSnapshot, changes),
+        const hasDraggingPositionChange = changes.some(
+          (change) => change.type === "position" && change.dragging === true,
         );
+        const hasDragStopPositionChange = changes.some(
+          (change) => change.type === "position" && change.dragging === false,
+        );
+
+        // React Flow emits every movement while dragging; keep the pre-drag
+        // snapshot so undo collapses the whole drag into one step.
+        if (hasDraggingPositionChange && !state.pendingNodeDragHistoryEntry) {
+          state.pendingNodeDragHistoryEntry =
+            createHistoryEntry(currentSnapshot);
+        }
+
+        runSnapshotMutation(
+          state,
+          () => WorkflowEngine.applyNodeChanges(currentSnapshot, changes),
+          hasDraggingPositionChange || hasDragStopPositionChange
+            ? {
+                historyEntry: hasDragStopPositionChange
+                  ? (state.pendingNodeDragHistoryEntry ??
+                    createHistoryEntry(currentSnapshot))
+                  : undefined,
+                recordHistory:
+                  hasDraggingPositionChange && !hasDragStopPositionChange
+                    ? false
+                    : undefined,
+              }
+            : undefined,
+        );
+
+        if (hasDragStopPositionChange) {
+          state.pendingNodeDragHistoryEntry = null;
+        }
       });
     },
 
@@ -444,12 +493,14 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       WorkflowPersistenceService.clearDocument();
 
       set((state) => {
+        state.pendingNodeDragHistoryEntry = null;
         runSnapshotMutation(state, () => WorkflowEngine.resetGraph());
       });
     },
 
     undo: () => {
       set((state) => {
+        state.pendingNodeDragHistoryEntry = null;
         const previousEntry = state.history.past.pop();
         if (!previousEntry) {
           syncHistoryFlags(state);
@@ -473,6 +524,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
 
     redo: () => {
       set((state) => {
+        state.pendingNodeDragHistoryEntry = null;
         const nextEntry = state.history.future.pop();
         if (!nextEntry) {
           syncHistoryFlags(state);
