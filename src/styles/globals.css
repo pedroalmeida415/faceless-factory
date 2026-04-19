@@ -80,16 +80,6 @@ textarea {
   background: rgba(56, 189, 248, 0.28);
 }
 
-.react-flow__controls-button {
-  background: transparent;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  color: white;
-}
-
-.react-flow__controls-button:hover {
-  background: rgba(255, 255, 255, 0.08);
-}
-
 .react-flow__edge.selected .react-flow__edge-path,
 .react-flow__edge.selected path {
   stroke: #67e8f9;

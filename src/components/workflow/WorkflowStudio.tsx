@@ -1,26 +1,125 @@
 "use client";
 
+import {
+  RiArrowGoBackLine,
+  RiArrowGoForwardLine,
+  RiFullscreenFill,
+  RiRefreshLine,
+  RiSparklingLine,
+} from "@remixicon/react";
 import { useCallback, useEffect, useRef } from "react";
 import {
   Background,
   ConnectionLineType,
-  Controls,
-  MiniMap,
   ReactFlow,
   type ReactFlowInstance,
+  useReactFlow,
 } from "reactflow";
-
-import { Badge } from "~/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
+import { Card, CardContent } from "~/components/ui/card";
 import { StudioContext } from "./studio/context";
 import { isEditableTarget } from "./studio/graph";
 import { nodeTypes } from "./studio/nodes";
 import { WorkflowSidebar } from "./studio/Sidebar";
+import { ShellButton } from "./studio/shared";
 import {
   useWorkflowStudioPersistence,
   useWorkflowStudioStore,
 } from "./studio/store";
 import { useWorkflowStudioController } from "./studio/useWorkflowStudioController";
+
+function WorkflowCanvasControls({
+  onRedo,
+  onReset,
+  onRun,
+  onUndo,
+  canRedo,
+  canUndo,
+}: {
+  onRedo: () => void;
+  onReset: () => void;
+  onRun: () => void;
+  onUndo: () => void;
+  canRedo: boolean;
+  canUndo: boolean;
+}) {
+  const reactFlow = useReactFlow();
+
+  return (
+    <div className="pointer-events-none absolute right-1/2 bottom-2 z-20 flex translate-x-1/2 justify-center">
+      <Card className="pointer-events-auto rounded-full border-border/60 bg-background/88 py-2 shadow-2xl backdrop-blur-xl">
+        <CardContent className="flex items-center gap-2 px-2 py-0">
+          <ShellButton
+            aria-label="Zoom in"
+            className="size-9 rounded-full border-border/60 bg-background/70 p-0 text-foreground"
+            onClick={() => void reactFlow.zoomIn({ duration: 180 })}
+            size="icon"
+            title="Zoom in"
+          >
+            +
+          </ShellButton>
+          <ShellButton
+            aria-label="Zoom out"
+            className="size-9 rounded-full border-border/60 bg-background/70 p-0 text-foreground"
+            onClick={() => void reactFlow.zoomOut({ duration: 180 })}
+            size="icon"
+            title="Zoom out"
+          >
+            -
+          </ShellButton>
+          <ShellButton
+            aria-label="Fit view"
+            className="size-9 rounded-full border-border/60 bg-background/70 p-0 text-foreground"
+            onClick={() =>
+              void reactFlow.fitView({ duration: 180, padding: 0.18 })
+            }
+            size="icon"
+            title="Fit view"
+          >
+            <RiFullscreenFill className="size-4" />
+          </ShellButton>
+          <ShellButton
+            aria-label="Run generators"
+            className="size-9 rounded-full border-border/60 bg-background/70 p-0 text-foreground"
+            onClick={onRun}
+            size="icon"
+            title="Run generators"
+          >
+            <RiSparklingLine className="size-4" />
+          </ShellButton>
+          <ShellButton
+            aria-label="Undo"
+            className="size-9 rounded-full border-border/60 bg-background/70 p-0 text-foreground"
+            disabled={!canUndo}
+            onClick={onUndo}
+            size="icon"
+            title="Undo"
+          >
+            <RiArrowGoBackLine className="size-4" />
+          </ShellButton>
+          <ShellButton
+            aria-label="Redo"
+            className="size-9 rounded-full border-border/60 bg-background/70 p-0 text-foreground"
+            disabled={!canRedo}
+            onClick={onRedo}
+            size="icon"
+            title="Redo"
+          >
+            <RiArrowGoForwardLine className="size-4" />
+          </ShellButton>
+          <ShellButton
+            aria-label="Reset graph"
+            className="size-9 rounded-full border-border/60 bg-background/70 p-0 text-foreground"
+            onClick={onReset}
+            size="icon"
+            title="Reset graph"
+          >
+            <RiRefreshLine className="size-4" />
+          </ShellButton>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 export function WorkflowStudio() {
   useWorkflowStudioPersistence();
@@ -28,7 +127,6 @@ export function WorkflowStudio() {
   const flowRef = useRef<ReactFlowInstance | null>(null);
   const nodes = useWorkflowStudioStore((state) => state.nodes);
   const edges = useWorkflowStudioStore((state) => state.edges);
-  const activity = useWorkflowStudioStore((state) => state.runtime.activity);
   const addNode = useWorkflowStudioStore((state) => state.addNode);
   const connect = useWorkflowStudioStore((state) => state.connect);
   const canConnect = useWorkflowStudioStore((state) => state.canConnect);
@@ -96,82 +194,49 @@ export function WorkflowStudio() {
 
   return (
     <StudioContext.Provider value={contextValue}>
-      <div className="min-h-screen bg-background">
-        <div className="mx-auto flex min-h-screen max-w-[1800px] gap-6 p-5">
-          <WorkflowSidebar
-            activity={activity}
-            onAddNode={addNodeToCanvas}
-            onRedo={redo}
-            onReset={handleReset}
-            onRun={() => void runSelectedOrAll()}
-            onUndo={undo}
-            canRedo={canRedo}
-            canUndo={canUndo}
-          />
+      <div className="relative h-screen p-2">
+        <WorkflowSidebar onAddNode={addNodeToCanvas} />
 
-          <Card className="min-w-0 flex-1 gap-0 overflow-hidden py-0">
-            <CardHeader className="flex flex-row items-center justify-between border-b py-5">
-              <div>
-                <div className="text-muted-foreground text-[11px] uppercase tracking-[0.32em]">
-                  Canvas
-                </div>
-                <CardTitle className="mt-1 text-2xl">
-                  Prompt to image/video workflow graph
-                </CardTitle>
-              </div>
-              <div className="flex items-center gap-2 text-xs">
-                <Badge variant="outline">Local graph autosave</Badge>
-                <Badge variant="outline">Vertex-backed generators</Badge>
-              </div>
-            </CardHeader>
-
-            <CardContent className="h-[calc(100vh-4rem)] min-h-[780px] p-0">
-              <ReactFlow
-                connectionLineType={ConnectionLineType.SmoothStep}
-                defaultEdgeOptions={{
-                  type: "smoothstep",
-                  style: {
-                    stroke: "rgba(226, 232, 240, 0.55)",
-                    strokeWidth: 2,
-                  },
-                }}
-                deleteKeyCode={null}
-                edges={edges}
-                fitView
-                isValidConnection={canConnect}
-                nodes={nodes}
-                nodeTypes={nodeTypes}
-                onConnect={connect}
-                onEdgesChange={applyEdgeChanges}
-                onInit={(instance) => {
-                  flowRef.current = instance;
-                  requestAnimationFrame(() =>
-                    instance.fitView({ padding: 0.18 }),
-                  );
-                }}
-                onNodesChange={applyNodeChanges}
-                proOptions={{ hideAttribution: true }}
-              >
-                <Background color="rgba(148, 163, 184, 0.16)" gap={22} />
-                <MiniMap
-                  maskColor="rgba(2, 6, 23, 0.7)"
-                  nodeColor={() => "rgba(226, 232, 240, 0.65)"}
-                  style={{
-                    background: "rgba(15, 23, 42, 0.82)",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                  }}
-                />
-                <Controls
-                  style={{
-                    background: "rgba(15, 23, 42, 0.82)",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    boxShadow: "none",
-                  }}
-                />
-              </ReactFlow>
-            </CardContent>
-          </Card>
-        </div>
+        <Card className="h-full min-w-0 overflow-hidden rounded-[28px] border-border/60 py-0 md:min-h-[calc(100vh-2.5rem)]">
+          <CardContent className="h-full p-0">
+            <ReactFlow
+              connectionLineType={ConnectionLineType.SmoothStep}
+              defaultEdgeOptions={{
+                type: "smoothstep",
+                style: {
+                  stroke: "rgba(226, 232, 240, 0.55)",
+                  strokeWidth: 2,
+                },
+              }}
+              deleteKeyCode={null}
+              edges={edges}
+              fitView
+              isValidConnection={canConnect}
+              nodes={nodes}
+              nodeTypes={nodeTypes}
+              onConnect={connect}
+              onEdgesChange={applyEdgeChanges}
+              onInit={(instance) => {
+                flowRef.current = instance;
+                requestAnimationFrame(() =>
+                  instance.fitView({ padding: 0.18 }),
+                );
+              }}
+              onNodesChange={applyNodeChanges}
+              proOptions={{ hideAttribution: true }}
+            >
+              <Background color="rgba(148, 163, 184, 0.16)" gap={22} />
+              <WorkflowCanvasControls
+                canRedo={canRedo}
+                canUndo={canUndo}
+                onRedo={redo}
+                onReset={handleReset}
+                onRun={() => void runSelectedOrAll()}
+                onUndo={undo}
+              />
+            </ReactFlow>
+          </CardContent>
+        </Card>
       </div>
     </StudioContext.Provider>
   );

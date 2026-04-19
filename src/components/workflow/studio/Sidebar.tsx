@@ -1,120 +1,86 @@
 "use client";
 
-import { Badge } from "~/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "~/components/ui/card";
-import { Separator } from "~/components/ui/separator";
-import {
-  NANO_BANANA_PRO_MODEL_ID,
-  VEO_31_MODEL_ID,
-  type WorkflowNodeKind,
-} from "~/lib/workflow/types";
-import { formatNodeTitle } from "./graph";
+import { RiImageAiLine, RiImageLine, RiVideoAiLine } from "@remixicon/react";
+import { Card, CardContent } from "~/components/ui/card";
+import type { WorkflowNodeKind } from "~/lib/workflow/types";
 import { ShellButton } from "./shared";
 
+const TextIcon = () => (
+  <svg
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <title>Text</title>
+    <g clipPath="url(#clip0_231_384)">
+      <path
+        d="M12 5.25V18.75"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      ></path>
+      <path
+        d="M5.25 8.25V5.25H18.75V8.25"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      ></path>
+      <path
+        d="M9 18.75H15"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      ></path>
+    </g>
+    <defs>
+      <clipPath id="clip0_231_384">
+        <rect width="24" height="24" fill="currentColor"></rect>
+      </clipPath>
+    </defs>
+  </svg>
+);
+
+const NODE_ACTIONS: Array<{
+  kind: WorkflowNodeKind;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+}> = [
+  { kind: "prompt", label: "Text", icon: TextIcon },
+  { kind: "image", label: "Asset", icon: RiImageLine },
+  { kind: "videoGenerator", label: "Video generator", icon: RiVideoAiLine },
+  {
+    kind: "imageGenerator",
+    label: "Image generator",
+    icon: RiImageAiLine,
+  },
+];
+
 export function WorkflowSidebar({
-  activity,
   onAddNode,
-  onRedo,
-  onReset,
-  onRun,
-  onUndo,
-  canRedo,
-  canUndo,
 }: {
-  activity: string;
   onAddNode: (kind: WorkflowNodeKind) => void;
-  onRedo: () => void;
-  onReset: () => void;
-  onRun: () => void;
-  onUndo: () => void;
-  canRedo: boolean;
-  canUndo: boolean;
 }) {
   return (
-    <aside className="w-[320px] shrink-0">
-      <Card className="sticky top-5 gap-0">
-        <CardHeader>
-          <Badge className="w-fit" variant="outline">
-            Faceless Factory
-          </Badge>
-          <CardTitle className="text-3xl leading-tight">
-            Node-based AI workflow MVP
-          </CardTitle>
-          <CardDescription className="leading-6">
-          Minimal Weavy-style canvas with local uploads, image iteration, Nano
-          Banana Pro image generation, and Veo 3.1 video generation.
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent className="space-y-3">
-          <div className="text-muted-foreground text-[11px] uppercase tracking-[0.32em]">
-          Add nodes
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-          {(
-            [
-              "prompt",
-              "image",
-              "video",
-              "imageIterator",
-              "imageGenerator",
-              "videoGenerator",
-            ] as WorkflowNodeKind[]
-          ).map((kind) => (
-            <ShellButton key={kind} onClick={() => onAddNode(kind)}>
-              {formatNodeTitle(kind)}
+    <aside className="pointer-events-none absolute top-4 left-4 z-20">
+      <Card className="pointer-events-auto rounded-[32px] border-border/60 bg-background/88 py-2 shadow-2xl backdrop-blur-xl">
+        <CardContent className="flex flex-col items-center gap-2 px-2 py-0">
+          {NODE_ACTIONS.map(({ kind, label, icon: Icon }) => (
+            <ShellButton
+              aria-label={label}
+              className="size-11 rounded-full border-border/60 bg-background/70 p-0"
+              key={kind}
+              onClick={() => onAddNode(kind)}
+              size="icon"
+              title={label}
+            >
+              <Icon className="size-4" />
             </ShellButton>
           ))}
-          </div>
-        </CardContent>
-
-        <CardContent className="space-y-3">
-          <div className="text-muted-foreground text-[11px] uppercase tracking-[0.32em]">
-          Run
-          </div>
-          <div className="grid grid-cols-1 gap-2">
-          <ShellButton className="justify-center" onClick={onRun}>
-            Run selected or all generators
-          </ShellButton>
-          <div className="grid grid-cols-2 gap-2">
-            <ShellButton disabled={!canUndo} onClick={onUndo}>
-              Undo
-            </ShellButton>
-            <ShellButton disabled={!canRedo} onClick={onRedo}>
-              Redo
-            </ShellButton>
-          </div>
-          <ShellButton className="justify-center" onClick={onReset}>
-            Reset starter graph
-          </ShellButton>
-          </div>
-        </CardContent>
-
-        <CardContent className="space-y-3">
-          <div className="text-muted-foreground text-[11px] uppercase tracking-[0.32em]">
-          Notes
-          </div>
-          <Card className="py-4">
-            <CardContent className="space-y-4 text-sm leading-6">
-          <p>{activity}</p>
-              <Separator />
-          <p>
-            Image model locked to{" "}
-                <span className="text-foreground">{NANO_BANANA_PRO_MODEL_ID}</span>.
-          </p>
-          <p>
-            Video model locked to{" "}
-                <span className="text-foreground">{VEO_31_MODEL_ID}</span>.
-          </p>
-          <p>Uploads and generated assets persist in local server storage.</p>
-            </CardContent>
-          </Card>
         </CardContent>
       </Card>
     </aside>
