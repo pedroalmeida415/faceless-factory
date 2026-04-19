@@ -256,7 +256,6 @@ type WorkflowStudioState = {
   canConnect: (connection: Connection) => boolean;
   addNode: (kind: WorkflowNodeKind) => void;
   deleteSelection: () => void;
-  resetGraph: () => void;
   undo: () => void;
   redo: () => void;
 };
@@ -287,7 +286,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           resetHistory(state);
           state.ready = true;
         } catch (error) {
-          applySnapshotToState(state, WorkflowEngine.resetGraph());
+          applySnapshotToState(state, WorkflowEngine.createInitialState());
           resetHistory(state);
           state.ready = true;
           state.runtime.activity = getErrorMessage(error);
@@ -493,15 +492,6 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
         runSnapshotMutation(state, () =>
           WorkflowEngine.deleteSelection(currentSnapshot),
         );
-      });
-    },
-
-    resetGraph: () => {
-      WorkflowPersistenceService.clearDocument();
-
-      set((state) => {
-        state.pendingNodeDragHistoryEntry = null;
-        runSnapshotMutation(state, () => WorkflowEngine.resetGraph());
       });
     },
 

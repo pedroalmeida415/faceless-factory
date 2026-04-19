@@ -7,6 +7,3 @@ export const uploadFilesToNode = WorkflowAssetService.uploadFilesToNode;
 
 export const runNode = (nodeId: string) =>
   WorkflowExecutionService.run({ type: "node", nodeId });
-
-export const runSelectedOrAll = () =>
-  WorkflowExecutionService.run({ type: "selected-or-all" });

@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  createDefaultWorkflowDocument,
+  createEmptyWorkflowDocument,
   deserializeStoredWorkflowDocument,
   WORKFLOW_STORAGE_KEY,
   type WorkflowDocument,
@@ -31,7 +31,7 @@ export const WorkflowPersistenceService = {
     if (typeof window === "undefined") {
       return {
         activity: null,
-        document: createDefaultWorkflowDocument(),
+        document: createEmptyWorkflowDocument(),
       };
     }
 
@@ -39,7 +39,7 @@ export const WorkflowPersistenceService = {
     if (!raw) {
       return {
         activity: null,
-        document: createDefaultWorkflowDocument(),
+        document: createEmptyWorkflowDocument(),
       };
     }
 
@@ -62,7 +62,7 @@ export const WorkflowPersistenceService = {
 
       return {
         activity: "Saved graph was incompatible and has been reset.",
-        document: createDefaultWorkflowDocument(),
+        document: createEmptyWorkflowDocument(),
       };
     }
   },
