@@ -11,13 +11,16 @@ import {
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
 import {
-  buildImageBatchPlan,
+  buildImageGenerationRequest,
+  buildVideoGenerationRequest,
+} from "~/lib/workflow/generator-models";
+import {
+  buildGeneratorAssetBatchPlan,
   buildIncomingByTarget,
+  getGeneratorInputHandles,
   getIncomingEdgesForHandle,
-  getIncomingGeneratorImageEdges,
   type RuntimeValue,
 } from "~/lib/workflow/graph";
-import { PROMPT_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
 import {
   ImageGeneratorService,
   VideoGeneratorService,
@@ -79,17 +82,26 @@ function getInputValues(
   );
 }
 
-function coerceTextInput(
+function coercePromptInput(
+  document: WorkflowDocument,
   path: ReadonlySet<string>,
   targetId: string,
   incomingByTarget: IncomingByTarget,
   evaluateNode: EvaluateNode,
 ) {
   return Effect.gen(function* () {
+    const promptHandle = getGeneratorInputHandles(document, targetId).find(
+      (handle) => handle.valueType === "text",
+    );
+
+    if (!promptHandle) {
+      return "";
+    }
+
     const values = yield* getInputValues(
       path,
       targetId,
-      PROMPT_INPUT_HANDLE_ID,
+      promptHandle.id,
       incomingByTarget,
       evaluateNode,
     );
@@ -98,7 +110,7 @@ function coerceTextInput(
     if (!prompt?.text.trim()) {
       return yield* Effect.fail(
         new WorkflowValidationError({
-          message: "Connect a prompt node with text.",
+          message: "Connect prompt text.",
         }),
       );
     }
@@ -107,25 +119,43 @@ function coerceTextInput(
   });
 }
 
-function coerceImageBatches(
+function coerceMediaInputBatches(
+  document: WorkflowDocument,
   path: ReadonlySet<string>,
   targetId: string,
+  valueType: "image" | "video",
   incomingByTarget: IncomingByTarget,
   evaluateNode: EvaluateNode,
 ) {
   return Effect.gen(function* () {
-    const incomingEdges = getIncomingGeneratorImageEdges(
-      incomingByTarget,
-      targetId,
-    );
-    const values = yield* Effect.forEach(
-      incomingEdges,
-      (edge) => evaluateNode(edge.source, path),
-      { concurrency: "unbounded" },
+    const inputValues = yield* Effect.forEach(
+      getGeneratorInputHandles(document, targetId).filter(
+        (handle) => handle.valueType === valueType,
+      ),
+      (handle) =>
+        Effect.gen(function* () {
+          const values = yield* getInputValues(
+            path,
+            targetId,
+            handle.id,
+            incomingByTarget,
+            evaluateNode,
+          );
+
+          return [
+            handle.id,
+            values.flatMap((value) =>
+              value.type === valueType ? [value] : [],
+            ),
+          ] as const;
+        }),
+      {
+        concurrency: "unbounded",
+      },
     );
 
-    return buildImageBatchPlan(
-      values.flatMap((value) => (value.type === "image" ? [value] : [])),
+    return buildGeneratorAssetBatchPlan(
+      Object.fromEntries(inputValues.filter(([, values]) => values.length)),
     );
   });
 }
@@ -142,6 +172,7 @@ function markNodeRuntime(
 }
 
 function executeNode(
+  document: WorkflowDocument,
   currentId: string,
   node: WorkflowDocumentNode,
   nextPath: ReadonlySet<string>,
@@ -169,54 +200,21 @@ function executeNode(
           text: node.prompt.trim(),
         } satisfies RuntimeValue;
       });
-    case "image":
+    case "asset":
       return Effect.gen(function* () {
-        if (!node.asset) {
+        if (!node.assetKind || !node.assets.length) {
           return yield* Effect.fail(
             new WorkflowValidationError({
-              message: "Image node has no uploaded asset.",
+              message: "Asset node is empty.",
             }),
           );
         }
 
         yield* markNodeRuntime(currentId, "success", null);
         return {
-          type: "image",
-          assets: [node.asset],
-          iterationMode: "static",
-        } satisfies RuntimeValue;
-      });
-    case "video":
-      return Effect.gen(function* () {
-        if (!node.asset) {
-          return yield* Effect.fail(
-            new WorkflowValidationError({
-              message: "Video node has no uploaded asset.",
-            }),
-          );
-        }
-
-        yield* markNodeRuntime(currentId, "success", null);
-        return {
-          type: "video",
-          assets: [node.asset],
-        } satisfies RuntimeValue;
-      });
-    case "imageIterator":
-      return Effect.gen(function* () {
-        if (!node.assets.length) {
-          return yield* Effect.fail(
-            new WorkflowValidationError({
-              message: "Image iterator is empty.",
-            }),
-          );
-        }
-
-        yield* markNodeRuntime(currentId, "success", null);
-        return {
-          type: "image",
+          type: node.assetKind,
           assets: node.assets,
-          iterationMode: "iterator",
+          iterationMode: node.assets.length > 1 ? "iterator" : "static",
         } satisfies RuntimeValue;
       });
     case "imageGenerator":
@@ -229,15 +227,18 @@ function executeNode(
           null,
         );
 
-        const prompt = yield* coerceTextInput(
+        const prompt = yield* coercePromptInput(
+          document,
           nextPath,
           currentId,
           incomingByTarget,
           evaluateNode,
         );
-        const batchPlan = yield* coerceImageBatches(
+        const batchPlan = yield* coerceMediaInputBatches(
+          document,
           nextPath,
           currentId,
+          "image",
           incomingByTarget,
           evaluateNode,
         );
@@ -252,12 +253,14 @@ function executeNode(
 
         const responses = yield* Effect.forEach(
           batchPlan.batches,
-          (referenceImages) =>
-            WorkflowClientService.generateImage({
-              prompt,
-              referenceImages,
-              aspectRatio: node.aspectRatio,
-            }),
+          (imageInputsByHandle) =>
+            WorkflowClientService.generateImage(
+              buildImageGenerationRequest({
+                settings: node,
+                imageInputsByHandle,
+                prompt,
+              }),
+            ),
           { concurrency: "unbounded" },
         );
 
@@ -302,15 +305,18 @@ function executeNode(
           null,
         );
 
-        const prompt = yield* coerceTextInput(
+        const prompt = yield* coercePromptInput(
+          document,
           nextPath,
           currentId,
           incomingByTarget,
           evaluateNode,
         );
-        const batchPlan = yield* coerceImageBatches(
+        const batchPlan = yield* coerceMediaInputBatches(
+          document,
           nextPath,
           currentId,
+          "image",
           incomingByTarget,
           evaluateNode,
         );
@@ -325,15 +331,14 @@ function executeNode(
 
         const responses = yield* Effect.forEach(
           batchPlan.batches,
-          (referenceImages) =>
-            WorkflowClientService.generateVideo({
-              prompt,
-              referenceImages,
-              aspectRatio: node.aspectRatio,
-              durationSeconds: node.durationSeconds,
-              generateAudio: node.generateAudio,
-              resolution: node.resolution,
-            }),
+          (imageInputsByHandle) =>
+            WorkflowClientService.generateVideo(
+              buildVideoGenerationRequest({
+                settings: node,
+                imageInputsByHandle,
+                prompt,
+              }),
+            ),
           { concurrency: "unbounded" },
         );
 
@@ -359,12 +364,14 @@ function executeNode(
         return {
           type: "video",
           assets: outputAssets,
+          iterationMode: "static",
         } satisfies RuntimeValue;
       });
   }
 }
 
 function evaluateNode(
+  document: WorkflowDocument,
   currentId: string,
   path: ReadonlySet<string>,
   nodeMap: NodeMap,
@@ -390,7 +397,14 @@ function evaluateNode(
     }
 
     const recursiveEvaluateNode: EvaluateNode = (nextId, nextPath) =>
-      evaluateNode(nextId, nextPath, nodeMap, incomingByTarget, pending);
+      evaluateNode(
+        document,
+        nextId,
+        nextPath,
+        nodeMap,
+        incomingByTarget,
+        pending,
+      );
 
     return Effect.gen(function* () {
       const deferred = yield* Deferred.make<
@@ -414,6 +428,7 @@ function evaluateNode(
           }
 
           return yield* executeNode(
+            document,
             currentId,
             node,
             nextPath,
@@ -490,7 +505,14 @@ export const WorkflowExecutionService = {
       yield* Effect.forEach(
         targetIds,
         (nodeId) =>
-          evaluateNode(nodeId, new Set(), nodeMap, incomingByTarget, pending),
+          evaluateNode(
+            snapshot.document,
+            nodeId,
+            new Set(),
+            nodeMap,
+            incomingByTarget,
+            pending,
+          ),
         {
           concurrency: 1,
           discard: true,

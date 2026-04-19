@@ -1,7 +1,7 @@
 export {
   buildIncomingByTarget,
   type GeneratorIterationInfo,
-  getGeneratorImageInputHandles,
+  getGeneratorInputHandles,
   getGeneratorIterationPreview,
   type RuntimeValue,
 } from "~/lib/workflow/graph";

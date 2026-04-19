@@ -10,7 +10,7 @@ import {
 import { ClientRuntime } from "~/effect/client/runtime";
 import type { StudioContextValue } from "./context";
 import {
-  getGeneratorImageInputHandles,
+  getGeneratorInputHandles,
   getGeneratorIterationPreview,
 } from "./graph";
 import { useWorkflowStudioStore } from "./store";
@@ -20,20 +20,23 @@ export function useWorkflowStudioController() {
   const clearNodeAssets = useWorkflowStudioStore(
     (state) => state.clearNodeAssets,
   );
-  const setImageGeneratorAspectRatio = useWorkflowStudioStore(
-    (state) => state.setImageGeneratorAspectRatio,
+  const setImageGeneratorModel = useWorkflowStudioStore(
+    (state) => state.setImageGeneratorModel,
   );
-  const setVideoGeneratorAspectRatio = useWorkflowStudioStore(
-    (state) => state.setVideoGeneratorAspectRatio,
+  const setVideoGeneratorModel = useWorkflowStudioStore(
+    (state) => state.setVideoGeneratorModel,
   );
-  const setVideoGeneratorDuration = useWorkflowStudioStore(
-    (state) => state.setVideoGeneratorDuration,
+  const setImageGeneratorMode = useWorkflowStudioStore(
+    (state) => state.setImageGeneratorMode,
   );
-  const setVideoGeneratorResolution = useWorkflowStudioStore(
-    (state) => state.setVideoGeneratorResolution,
+  const setVideoGeneratorMode = useWorkflowStudioStore(
+    (state) => state.setVideoGeneratorMode,
   );
-  const setVideoGeneratorGenerateAudio = useWorkflowStudioStore(
-    (state) => state.setVideoGeneratorGenerateAudio,
+  const setImageGeneratorConfigValue = useWorkflowStudioStore(
+    (state) => state.setImageGeneratorConfigValue,
+  );
+  const setVideoGeneratorConfigValue = useWorkflowStudioStore(
+    (state) => state.setVideoGeneratorConfigValue,
   );
 
   const getGeneratorIterationInfo = useCallback((nodeId: string) => {
@@ -41,20 +44,14 @@ export function useWorkflowStudioController() {
     return getGeneratorIterationPreview(document, nodeId);
   }, []);
 
-  const getGeneratorImageInputs = useCallback((nodeId: string) => {
+  const getGeneratorInputs = useCallback((nodeId: string) => {
     const { document } = useWorkflowStudioStore.getState();
-    return getGeneratorImageInputHandles(document.edges, nodeId);
+    return getGeneratorInputHandles(document, nodeId);
   }, []);
 
   const uploadFilesToNode = useCallback(
-    async (
-      nodeId: string,
-      files: File[],
-      options: { kind: "image" | "video"; multiple: boolean },
-    ) => {
-      await ClientRuntime.runPromise(
-        uploadWorkflowFilesToNode(nodeId, files, options),
-      );
+    async (nodeId: string, files: File[]) => {
+      await ClientRuntime.runPromise(uploadWorkflowFilesToNode(nodeId, files));
     },
     [],
   );
@@ -72,26 +69,28 @@ export function useWorkflowStudioController() {
       setPrompt,
       uploadFilesToNode,
       clearNodeAssets,
-      getGeneratorImageInputs,
+      getGeneratorInputs,
       getGeneratorIterationInfo,
-      setImageGeneratorAspectRatio,
-      setVideoGeneratorAspectRatio,
-      setVideoGeneratorDuration,
-      setVideoGeneratorResolution,
-      setVideoGeneratorGenerateAudio,
+      setImageGeneratorModel,
+      setVideoGeneratorModel,
+      setImageGeneratorMode,
+      setVideoGeneratorMode,
+      setImageGeneratorConfigValue,
+      setVideoGeneratorConfigValue,
       runNode,
     }),
     [
       clearNodeAssets,
-      getGeneratorImageInputs,
+      getGeneratorInputs,
       getGeneratorIterationInfo,
       runNode,
-      setImageGeneratorAspectRatio,
+      setImageGeneratorConfigValue,
+      setImageGeneratorMode,
+      setImageGeneratorModel,
       setPrompt,
-      setVideoGeneratorAspectRatio,
-      setVideoGeneratorDuration,
-      setVideoGeneratorGenerateAudio,
-      setVideoGeneratorResolution,
+      setVideoGeneratorConfigValue,
+      setVideoGeneratorMode,
+      setVideoGeneratorModel,
       uploadFilesToNode,
     ],
   );

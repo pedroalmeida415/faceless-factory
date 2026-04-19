@@ -1,10 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import {
-  type PropsWithChildren,
-  useId,
-} from "react";
+import { type PropsWithChildren, useId } from "react";
 import { Handle, Position } from "reactflow";
 
 import { Badge } from "~/components/ui/badge";
@@ -16,12 +13,12 @@ import {
   CardHeader,
   CardTitle,
 } from "~/components/ui/card";
+import { cn } from "~/lib/utils";
 import type {
   WorkflowAsset,
   WorkflowNodeData,
   WorkflowNodeStatus,
 } from "~/lib/workflow/types";
-import { cn } from "~/lib/utils";
 import { formatNodeTitle, type HandleDefinition } from "./graph";
 
 function statusBadgeVariant(status: WorkflowNodeStatus) {
@@ -93,7 +90,7 @@ export function OutputGallery({ assets }: { assets: WorkflowAsset[] }) {
     return (
       <Card className="border-dashed">
         <CardContent className="py-4 text-muted-foreground">
-        No outputs yet.
+          No outputs yet.
         </CardContent>
       </Card>
     );
@@ -104,19 +101,60 @@ export function OutputGallery({ assets }: { assets: WorkflowAsset[] }) {
       {assets.map((asset) => (
         <Card className="gap-0 py-0" key={asset.id}>
           <a href={asset.url} rel="noreferrer" target="_blank">
-            <div className="aspect-square overflow-hidden">
-            <AssetPreview asset={asset} />
+            <div
+              className={cn(
+                "overflow-hidden",
+                asset.kind === "video" ? "aspect-video" : "aspect-square",
+              )}
+            >
+              <AssetPreview asset={asset} />
             </div>
           </a>
           <CardContent className="border-t px-2 py-2 text-xs">
             <div className="truncate">{asset.fileName}</div>
-            <div className="text-muted-foreground text-[10px] uppercase tracking-[0.24em]">
+            <div className="text-[10px] text-muted-foreground uppercase tracking-[0.24em]">
               {asset.source}
             </div>
           </CardContent>
         </Card>
       ))}
     </div>
+  );
+}
+
+export function NodeFieldCard({
+  children,
+  label,
+}: PropsWithChildren<{
+  label: string;
+}>) {
+  return (
+    <Card className="py-0">
+      <CardContent className="space-y-2 py-3 text-sm">
+        <div className="text-[11px] text-muted-foreground uppercase tracking-[0.24em]">
+          {label}
+        </div>
+        {children}
+      </CardContent>
+    </Card>
+  );
+}
+
+export function NodeNotice({
+  children,
+  tone = "default",
+}: PropsWithChildren<{
+  tone?: "default" | "accent";
+}>) {
+  return (
+    <Card
+      className={cn(
+        "py-0",
+        tone === "accent" && "border-primary/30 bg-primary/10",
+      )}
+    >
+      <CardContent className="py-3 text-sm">{children}</CardContent>
+    </Card>
   );
 }
 
@@ -137,7 +175,7 @@ export function FilePickerButton({
     <>
       <Button asChild type="button" variant="outline">
         <label className="cursor-pointer" htmlFor={inputId}>
-        {label}
+          {label}
         </label>
       </Button>
       <input
@@ -225,18 +263,18 @@ export function NodeShell({
 
       <CardHeader className="gap-3">
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-[0.28em]">
-            <span>{formatNodeTitle(data.kind)}</span>
-            {selected ? (
-              <Badge variant="secondary">selected</Badge>
-            ) : null}
-            <Badge variant={statusBadgeVariant(data.status)}>
-              {data.status}
-            </Badge>
+          <span>{formatNodeTitle(data.kind)}</span>
+          {selected ? <Badge variant="secondary">selected</Badge> : null}
+          <Badge variant={statusBadgeVariant(data.status)}>{data.status}</Badge>
         </div>
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
-            <CardTitle className="text-lg leading-tight">{data.label}</CardTitle>
-            {model ? <CardDescription className="text-xs">{model}</CardDescription> : null}
+            <CardTitle className="text-lg leading-tight">
+              {data.label}
+            </CardTitle>
+            {model ? (
+              <CardDescription className="text-xs">{model}</CardDescription>
+            ) : null}
           </div>
           <Badge variant="outline">{icon}</Badge>
         </div>

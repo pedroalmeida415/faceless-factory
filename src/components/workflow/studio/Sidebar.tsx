@@ -51,7 +51,7 @@ const NODE_ACTIONS: Array<{
   icon: React.ComponentType<{ className?: string }>;
 }> = [
   { kind: "prompt", label: "Text", icon: TextIcon },
-  { kind: "image", label: "Asset", icon: RiImageLine },
+  { kind: "asset", label: "Asset", icon: RiImageLine },
   { kind: "videoGenerator", label: "Video generator", icon: RiVideoAiLine },
   {
     kind: "imageGenerator",

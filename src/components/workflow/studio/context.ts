@@ -1,42 +1,37 @@
 import { createContext, useContext } from "react";
-
+import type { GeneratorHandleDefinition } from "~/lib/workflow/generator-models";
 import type {
-  ImageAspectRatio,
-  VideoAspectRatio,
-  VideoDuration,
-  VideoResolution,
+  GeneratorConfigValue,
+  ImageGeneratorModelId,
+  VideoGeneratorModelId,
 } from "~/lib/workflow/types";
-import type { GeneratorIterationInfo, HandleDefinition } from "./graph";
+import type { GeneratorIterationInfo } from "./graph";
 
 export type StudioContextValue = {
   setPrompt: (nodeId: string, prompt: string) => void;
-  uploadFilesToNode: (
-    nodeId: string,
-    files: File[],
-    options: { kind: "image" | "video"; multiple: boolean },
-  ) => Promise<void>;
+  uploadFilesToNode: (nodeId: string, files: File[]) => Promise<void>;
   clearNodeAssets: (nodeId: string) => void;
   getGeneratorIterationInfo: (nodeId: string) => GeneratorIterationInfo;
-  getGeneratorImageInputs: (nodeId: string) => HandleDefinition[];
-  setImageGeneratorAspectRatio: (
+  getGeneratorInputs: (nodeId: string) => GeneratorHandleDefinition[];
+  setImageGeneratorModel: (
     nodeId: string,
-    aspectRatio: ImageAspectRatio,
+    model: ImageGeneratorModelId,
   ) => void;
-  setVideoGeneratorAspectRatio: (
+  setVideoGeneratorModel: (
     nodeId: string,
-    aspectRatio: VideoAspectRatio,
+    model: VideoGeneratorModelId,
   ) => void;
-  setVideoGeneratorDuration: (
+  setImageGeneratorMode: (nodeId: string, mode: string) => void;
+  setVideoGeneratorMode: (nodeId: string, mode: string) => void;
+  setImageGeneratorConfigValue: (
     nodeId: string,
-    durationSeconds: VideoDuration,
+    key: string,
+    value: GeneratorConfigValue,
   ) => void;
-  setVideoGeneratorResolution: (
+  setVideoGeneratorConfigValue: (
     nodeId: string,
-    resolution: VideoResolution,
-  ) => void;
-  setVideoGeneratorGenerateAudio: (
-    nodeId: string,
-    generateAudio: boolean,
+    key: string,
+    value: GeneratorConfigValue,
   ) => void;
   runNode: (nodeId: string) => Promise<void>;
 };

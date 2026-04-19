@@ -1,0 +1,1 @@
+- Create iterator combination visualizer to show all combinations that are about to be run, clearing any confusion

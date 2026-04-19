@@ -5,8 +5,10 @@ import { ServerRuntime } from "~/effect/server/runtime";
 import { WorkflowValidationError } from "~/lib/workflow/errors";
 import {
   IMAGE_ASPECT_RATIOS,
+  IMAGE_MODEL_IDS,
   VIDEO_ASPECT_RATIOS,
   VIDEO_DURATIONS,
+  VIDEO_MODEL_IDS,
   VIDEO_RESOLUTIONS,
 } from "~/lib/workflow/types";
 import { toTRPCError } from "~/server/api/errors";
@@ -44,6 +46,8 @@ export const workflowRouter = createTRPCRouter({
   generateImage: publicProcedure
     .input(
       z.object({
+        model: z.enum(IMAGE_MODEL_IDS),
+        mode: z.string().nullable(),
         prompt: z.string(),
         referenceImages: z.array(workflowAssetSchema).optional(),
         aspectRatio: z.enum(IMAGE_ASPECT_RATIOS).optional(),
@@ -63,8 +67,9 @@ export const workflowRouter = createTRPCRouter({
   generateVideo: publicProcedure
     .input(
       z.object({
+        model: z.enum(VIDEO_MODEL_IDS),
+        mode: z.string().nullable(),
         prompt: z.string(),
-        referenceImage: workflowAssetSchema.nullable().optional(),
         referenceImages: z.array(workflowAssetSchema).optional(),
         aspectRatio: z.enum(VIDEO_ASPECT_RATIOS).optional(),
         durationSeconds: videoDurationSchema.optional(),

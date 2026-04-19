@@ -6,28 +6,34 @@ import type {
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
 import {
-  getGeneratorImageInputColor,
-  getNodeInputValueType,
-  getNodeOutputValueType,
-  type HandleDefinition,
-  isGeneratorImageHandle,
-  makeGeneratorImageHandleId,
+  type GeneratorHandleDefinition,
+  getImageGeneratorHandleDefinitions,
+  getVideoGeneratorHandleDefinitions,
+} from "~/lib/workflow/generator-models";
+import {
+  getNodeOutputHandleId,
+  type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
 import { isGeneratorNodeKind, type WorkflowAsset } from "~/lib/workflow/types";
 
 export type RuntimeValue =
   | { type: "text"; text: string }
   | {
-      type: "image";
+      type: "image" | "video";
       assets: WorkflowAsset[];
       iterationMode: "static" | "iterator";
-    }
-  | { type: "video"; assets: WorkflowAsset[] };
+    };
 
-type ImageRuntimeValue = Extract<RuntimeValue, { type: "image" }>;
+type MediaRuntimeValue = Extract<RuntimeValue, { type: "image" | "video" }>;
 
-export type ImageBatchPlan = {
+type MediaBatchPlan = {
   batches: WorkflowAsset[][];
+  hasIterator: boolean;
+  iterations: number;
+};
+
+export type GeneratorAssetBatchPlan = {
+  batches: Record<string, WorkflowAsset[]>[];
   hasIterator: boolean;
   iterations: number;
 };
@@ -76,37 +82,53 @@ export function getIncomingEdgesForHandle(
   );
 }
 
-export function getIncomingGeneratorImageEdges(
-  incomingByTarget: Map<string, WorkflowDocumentEdge[]>,
-  targetId: string,
+function getGeneratorHandleDefinitions(
+  node: WorkflowDocumentNode,
+  edges: WorkflowDocumentEdge[],
+): GeneratorHandleDefinition[] {
+  switch (node.kind) {
+    case "imageGenerator":
+      return getImageGeneratorHandleDefinitions(node, edges, node.id);
+    case "videoGenerator":
+      return getVideoGeneratorHandleDefinitions(node, edges, node.id);
+    default:
+      return [];
+  }
+}
+
+function getGeneratorRepeatableHandlePrefixes(
+  node: WorkflowDocumentNode,
+  edges: WorkflowDocumentEdge[],
 ) {
-  return (incomingByTarget.get(targetId) ?? []).filter((edge) =>
-    isGeneratorImageHandle(edge.targetHandle),
+  return Array.from(
+    new Set(
+      getGeneratorHandleDefinitions(node, edges)
+        .flatMap((handle) =>
+          handle.inputType === "repeatable" ? [handle.idPrefix] : [],
+        )
+        .filter(Boolean),
+    ),
   );
 }
 
-export function getGeneratorImageInputHandles(
-  edges: WorkflowDocumentEdge[],
+export function getGeneratorInputHandles(
+  document: WorkflowDocument,
   targetId: string,
-): HandleDefinition[] {
-  const connectedCount = edges.filter(
-    (edge) =>
-      edge.target === targetId && isGeneratorImageHandle(edge.targetHandle),
-  ).length;
+) {
+  const node = document.nodes.find((candidate) => candidate.id === targetId);
+  if (!node) {
+    return [];
+  }
 
-  return Array.from({ length: connectedCount + 1 }, (_, index) => ({
-    id: makeGeneratorImageHandleId(index),
-    label: "Image",
-    color: getGeneratorImageInputColor(),
-  }));
+  return getGeneratorHandleDefinitions(node, document.edges);
 }
 
-export function normalizeGeneratorImageTargetHandles(
+export function normalizeGeneratorTargetHandles(
   nodes: WorkflowDocumentNode[],
   edges: WorkflowDocumentEdge[],
 ) {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
-  const nextImageHandleByTarget = new Map<string, number>();
+  const nextIndexByTargetPrefix = new Map<string, number>();
 
   return edges.map((edge) => {
     const targetNode = nodeMap.get(edge.target);
@@ -114,38 +136,80 @@ export function normalizeGeneratorImageTargetHandles(
       return edge;
     }
 
-    if (!isGeneratorImageHandle(edge.targetHandle)) {
+    const repeatablePrefixes = getGeneratorRepeatableHandlePrefixes(
+      targetNode,
+      edges,
+    );
+    const matchedPrefix = repeatablePrefixes.find((prefix) =>
+      edge.targetHandle?.startsWith(prefix),
+    );
+
+    if (!matchedPrefix) {
       return edge;
     }
 
-    const nextIndex = nextImageHandleByTarget.get(edge.target) ?? 0;
-    nextImageHandleByTarget.set(edge.target, nextIndex + 1);
+    const key = `${edge.target}::${matchedPrefix}`;
+    const nextIndex = nextIndexByTargetPrefix.get(key) ?? 0;
+    nextIndexByTargetPrefix.set(key, nextIndex + 1);
 
-    const targetHandle = makeGeneratorImageHandleId(nextIndex);
+    const targetHandle = `${matchedPrefix}${nextIndex}`;
     return edge.targetHandle === targetHandle
       ? edge
       : { ...edge, targetHandle };
   });
 }
 
-function toImageRuntimeValue(
+function getNodeOutputValueType(
   node: WorkflowDocumentNode,
-): ImageRuntimeValue | null {
+  handleId: string | null | undefined,
+): WorkflowValueType | null {
+  const normalizedHandleId = handleId ?? getNodeOutputHandleId(node.kind);
+
   switch (node.kind) {
-    case "image":
-      return node.asset
+    case "prompt":
+      return normalizedHandleId === "text" ? "text" : null;
+    case "asset":
+      return normalizedHandleId === "asset" ? node.assetKind : null;
+    case "imageGenerator":
+      return normalizedHandleId === "images" ? "image" : null;
+    case "videoGenerator":
+      return normalizedHandleId === "videos" ? "video" : null;
+  }
+}
+
+function getNodeInputValueType(
+  node: WorkflowDocumentNode,
+  handleId: string | null | undefined,
+  edges: WorkflowDocumentEdge[],
+): WorkflowValueType | null {
+  if (!isGeneratorNodeKind(node.kind) || !handleId) {
+    return null;
+  }
+
+  return (
+    getGeneratorHandleDefinitions(node, edges).find(
+      (handle) => handle.id === handleId,
+    )?.valueType ?? null
+  );
+}
+
+function toRuntimeValue(node: WorkflowDocumentNode): RuntimeValue | null {
+  switch (node.kind) {
+    case "prompt":
+      return node.prompt.trim()
         ? {
-            type: "image",
-            assets: [node.asset],
-            iterationMode: "static",
+            type: "text",
+            text: node.prompt.trim(),
           }
         : null;
-    case "imageIterator":
-      return {
-        type: "image",
-        assets: node.assets,
-        iterationMode: "iterator",
-      };
+    case "asset":
+      return node.assetKind && node.assets.length
+        ? {
+            type: node.assetKind,
+            assets: node.assets,
+            iterationMode: node.assets.length > 1 ? "iterator" : "static",
+          }
+        : null;
     case "imageGenerator":
       return node.outputAssets.length
         ? {
@@ -154,14 +218,18 @@ function toImageRuntimeValue(
             iterationMode: "static",
           }
         : null;
-    default:
-      return null;
+    case "videoGenerator":
+      return node.outputAssets.length
+        ? {
+            type: "video",
+            assets: node.outputAssets,
+            iterationMode: "static",
+          }
+        : null;
   }
 }
 
-export function buildImageBatchPlan(
-  values: ImageRuntimeValue[],
-): ImageBatchPlan {
+function buildMediaBatchPlan(values: MediaRuntimeValue[]): MediaBatchPlan {
   const staticAssets = values.flatMap((value) =>
     value.iterationMode === "static" ? value.assets : [],
   );
@@ -179,26 +247,69 @@ export function buildImageBatchPlan(
 
   const firstIterator = iteratorValues[0];
   if (!firstIterator?.assets.length) {
-    throw new Error("Image iterator is empty.");
+    throw new Error("Connected asset batch is empty.");
   }
 
   for (const iteratorValue of iteratorValues) {
-    if (iteratorValue.assets.length !== firstIterator.assets.length) {
-      throw new Error(
-        "Connected image iterators must contain the same number of images.",
-      );
+    if (!iteratorValue.assets.length) {
+      throw new Error("Connected asset batch is empty.");
     }
   }
 
+  const iteratorCombinations = iteratorValues.reduce<WorkflowAsset[][]>(
+    (combinations, iteratorValue) =>
+      combinations.flatMap((combination) =>
+        iteratorValue.assets.map((asset) => [...combination, asset]),
+      ),
+    [[]],
+  );
+
   return {
-    batches: firstIterator.assets.map((_, index) => [
-      ...staticAssets,
-      ...iteratorValues
-        .map((iteratorValue) => iteratorValue.assets[index])
-        .filter((asset): asset is WorkflowAsset => Boolean(asset)),
-    ]),
+    batches: iteratorCombinations.map((assets) => [...staticAssets, ...assets]),
     hasIterator: true,
-    iterations: firstIterator.assets.length,
+    iterations: iteratorCombinations.length,
+  };
+}
+
+export function buildGeneratorAssetBatchPlan(
+  valuesByHandle: Record<string, MediaRuntimeValue[]>,
+): GeneratorAssetBatchPlan {
+  const plansByHandle = Object.entries(valuesByHandle).map(
+    ([handleId, values]) => [handleId, buildMediaBatchPlan(values)] as const,
+  );
+
+  if (!plansByHandle.some(([, plan]) => plan.hasIterator)) {
+    return {
+      batches: [
+        Object.fromEntries(
+          plansByHandle.map(([handleId, plan]) => [
+            handleId,
+            plan.batches[0] ?? [],
+          ]),
+        ),
+      ],
+      hasIterator: false,
+      iterations: 1,
+    };
+  }
+
+  const combinations = plansByHandle.reduce<
+    Array<Array<readonly [string, WorkflowAsset[]]>>
+  >(
+    (currentCombinations, [handleId, plan]) =>
+      currentCombinations.flatMap((combination) =>
+        plan.batches.map((batch) => [
+          ...combination,
+          [handleId, batch] as const,
+        ]),
+      ),
+    [[]],
+  );
+
+  return {
+    batches: combinations.map((combination) => Object.fromEntries(combination)),
+    hasIterator: true,
+    iterations: combinations.length,
   };
 }
 
@@ -207,20 +318,8 @@ export function getGeneratorIterationPreview(
   targetId: string,
 ): GeneratorIterationInfo {
   const nodeMap = toNodeMap(document);
-  const incomingByTarget = buildIncomingByTarget(document.edges);
-  const imageValues = getIncomingGeneratorImageEdges(incomingByTarget, targetId)
-    .flatMap((edge) => {
-      const sourceNode = nodeMap.get(edge.source);
-      if (!sourceNode) {
-        return [];
-      }
-
-      const imageValue = toImageRuntimeValue(sourceNode);
-      return imageValue ? [imageValue] : [];
-    })
-    .filter((value) => value.iterationMode === "iterator");
-
-  if (!imageValues.length) {
+  const targetNode = nodeMap.get(targetId);
+  if (!targetNode || !isGeneratorNodeKind(targetNode.kind)) {
     return {
       hasIterator: false,
       iterations: 1,
@@ -228,17 +327,77 @@ export function getGeneratorIterationPreview(
     };
   }
 
-  const iterationCounts = imageValues.map((value) => value.assets.length);
-  const firstCount = iterationCounts[0] ?? 0;
-  const mismatchedIterators = iterationCounts.some(
-    (count) => count !== firstCount,
+  const incomingByTarget = buildIncomingByTarget(document.edges);
+  const imageHandles = getGeneratorHandleDefinitions(
+    targetNode,
+    document.edges,
+  ).filter((handle) => handle.valueType === "image");
+  const iterationCounts = imageHandles.flatMap((handle) =>
+    getIncomingEdgesForHandle(incomingByTarget, targetId, handle.id).flatMap(
+      (edge) => {
+        const sourceNode = nodeMap.get(edge.source);
+        const runtimeValue = sourceNode ? toRuntimeValue(sourceNode) : null;
+        return runtimeValue?.type === "image" &&
+          runtimeValue.iterationMode === "iterator"
+          ? [runtimeValue.assets.length]
+          : [];
+      },
+    ),
   );
+
+  if (!iterationCounts.length) {
+    return {
+      hasIterator: false,
+      iterations: 1,
+      mismatchedIterators: false,
+    };
+  }
 
   return {
     hasIterator: true,
-    iterations: mismatchedIterators ? Math.max(...iterationCounts) : firstCount,
-    mismatchedIterators,
+    iterations: iterationCounts.reduce(
+      (totalIterations, count) => totalIterations * count,
+      1,
+    ),
+    mismatchedIterators: false,
   };
+}
+
+export function getGeneratorMediaValuesByHandle(
+  document: WorkflowDocument,
+  targetId: string,
+  valueType: Extract<WorkflowValueType, "image" | "video">,
+) {
+  const nodeMap = toNodeMap(document);
+  const targetNode = nodeMap.get(targetId);
+  if (!targetNode || !isGeneratorNodeKind(targetNode.kind)) {
+    return {} as Record<string, MediaRuntimeValue[]>;
+  }
+
+  const incomingByTarget = buildIncomingByTarget(document.edges);
+
+  return Object.fromEntries(
+    getGeneratorHandleDefinitions(targetNode, document.edges)
+      .filter((handle) => handle.valueType === valueType)
+      .map(
+        (handle) =>
+          [
+            handle.id,
+            getIncomingEdgesForHandle(
+              incomingByTarget,
+              targetId,
+              handle.id,
+            ).flatMap((edge) => {
+              const sourceNode = nodeMap.get(edge.source);
+              const runtimeValue = sourceNode
+                ? toRuntimeValue(sourceNode)
+                : null;
+              return runtimeValue?.type === valueType ? [runtimeValue] : [];
+            }),
+          ] as const,
+      )
+      .filter(([, values]) => values.length),
+  );
 }
 
 function edgeExists(
@@ -277,12 +436,13 @@ function hasCompatibleConnection(
   }
 
   const sourceValueType = getNodeOutputValueType(
-    sourceNode.kind,
+    sourceNode,
     connection.sourceHandle,
   );
   const targetValueType = getNodeInputValueType(
-    targetNode.kind,
+    targetNode,
     connection.targetHandle,
+    document.edges,
   );
 
   if (!sourceValueType || !targetValueType) {

@@ -3,11 +3,11 @@ import { WorkflowValidationError } from "~/lib/workflow/errors";
 import {
   buildIncomingByTarget,
   buildOutgoingBySource,
+  getGeneratorInputHandles,
   getGeneratorIterationPreview,
   getIncomingEdgesForHandle,
   isValidWorkflowEdge,
 } from "~/lib/workflow/graph";
-import { PROMPT_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
 
 function failValidation(message: string): never {
@@ -72,39 +72,28 @@ function validateExecutionSubgraph(
         failValidation("Prompt node is empty.");
       }
       break;
-    case "image":
-      if (!node.asset) {
-        failValidation("Image node has no uploaded asset.");
-      }
-      break;
-    case "video":
-      if (!node.asset) {
-        failValidation("Video node has no uploaded asset.");
-      }
-      break;
-    case "imageIterator":
-      if (!node.assets.length) {
-        failValidation("Image iterator is empty.");
+    case "asset":
+      if (!node.assetKind || !node.assets.length) {
+        failValidation("Asset node is empty.");
       }
       break;
     case "imageGenerator":
     case "videoGenerator": {
-      const promptEdges = getIncomingEdgesForHandle(
-        incomingByTarget,
+      const requiredTextHandles = getGeneratorInputHandles(
+        document,
         node.id,
-        PROMPT_INPUT_HANDLE_ID,
-      );
+      ).filter((handle) => handle.required && handle.valueType === "text");
 
-      if (!promptEdges.length) {
-        failValidation("Connect a prompt node with text.");
-      }
+      for (const handle of requiredTextHandles) {
+        if (
+          getIncomingEdgesForHandle(incomingByTarget, node.id, handle.id).length
+        ) {
+          continue;
+        }
 
-      const iterationInfo = getGeneratorIterationPreview(document, node.id);
-      if (iterationInfo.mismatchedIterators) {
-        failValidation(
-          "Connected image iterators must contain the same number of images.",
-        );
+        failValidation(`Connect ${handle.label.toLowerCase()} text.`);
       }
+      getGeneratorIterationPreview(document, node.id);
       break;
     }
   }

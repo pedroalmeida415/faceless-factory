@@ -1,27 +1,25 @@
 import {
+  createDefaultImageGeneratorSettings,
+  createDefaultVideoGeneratorSettings,
+  normalizeImageGeneratorSettings,
+  normalizeVideoGeneratorSettings,
+} from "~/lib/workflow/generator-models";
+import {
   formatNodeTitle,
   getNodeOutputHandleId,
 } from "~/lib/workflow/node-definitions";
-import {
-  IMAGE_ASPECT_RATIOS,
-  type ImageGeneratorSettings,
-  type ImageIteratorNodeFields,
-  type ImageNodeFields,
-  NANO_BANANA_PRO_MODEL_ID,
-  type PromptNodeFields,
-  VEO_31_MODEL_ID,
-  VIDEO_ASPECT_RATIOS,
-  VIDEO_DURATIONS,
-  VIDEO_RESOLUTIONS,
-  type VideoGeneratorSettings,
-  type VideoNodeFields,
-  type WorkflowAsset,
-  type WorkflowGeneratorResult,
-  type WorkflowNodeKind,
+import type {
+  AssetNodeFields,
+  ImageGeneratorSettings,
+  PromptNodeFields,
+  VideoGeneratorSettings,
+  WorkflowAsset,
+  WorkflowGeneratorResult,
+  WorkflowNodeKind,
 } from "~/lib/workflow/types";
 
-export const WORKFLOW_DOCUMENT_VERSION = 3;
-export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v3";
+export const WORKFLOW_DOCUMENT_VERSION = 4;
+export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v4";
 
 export type WorkflowPosition = {
   x: number;
@@ -40,19 +38,9 @@ export type PromptWorkflowNode = WorkflowDocumentNodeBase &
     kind: "prompt";
   };
 
-export type ImageWorkflowNode = WorkflowDocumentNodeBase &
-  ImageNodeFields & {
-    kind: "image";
-  };
-
-export type VideoWorkflowNode = WorkflowDocumentNodeBase &
-  VideoNodeFields & {
-    kind: "video";
-  };
-
-export type ImageIteratorWorkflowNode = WorkflowDocumentNodeBase &
-  ImageIteratorNodeFields & {
-    kind: "imageIterator";
+export type AssetWorkflowNode = WorkflowDocumentNodeBase &
+  AssetNodeFields & {
+    kind: "asset";
   };
 
 export type ImageGeneratorWorkflowNode = WorkflowDocumentNodeBase &
@@ -69,9 +57,7 @@ export type VideoGeneratorWorkflowNode = WorkflowDocumentNodeBase &
 
 export type WorkflowDocumentNode =
   | PromptWorkflowNode
-  | ImageWorkflowNode
-  | VideoWorkflowNode
-  | ImageIteratorWorkflowNode
+  | AssetWorkflowNode
   | ImageGeneratorWorkflowNode
   | VideoGeneratorWorkflowNode;
 
@@ -124,38 +110,22 @@ function makeWorkflowNode(
         prompt:
           "Hyperreal studio portrait of a chrome mannequin under cinematic rim light.",
       };
-    case "image":
-      return {
-        id,
-        kind,
-        label: "Image Upload",
-        position,
-        asset: null,
-      };
-    case "video":
-      return {
-        id,
-        kind,
-        label: "Video Upload",
-        position,
-        asset: null,
-      };
-    case "imageIterator":
+    case "asset":
       return {
         id,
         kind,
         label,
         position,
+        assetKind: null,
         assets: [],
       };
     case "imageGenerator":
       return {
         id,
         kind,
-        label: "Nano Banana Pro",
+        label: "Gemini 3 Pro Image",
         position,
-        model: NANO_BANANA_PRO_MODEL_ID,
-        aspectRatio: "1:1",
+        ...createDefaultImageGeneratorSettings(),
         ...createWorkflowGeneratorResult(),
       };
     case "videoGenerator":
@@ -164,11 +134,7 @@ function makeWorkflowNode(
         kind,
         label: "Veo 3.1",
         position,
-        model: VEO_31_MODEL_ID,
-        aspectRatio: "16:9",
-        durationSeconds: 4,
-        generateAudio: true,
-        resolution: "720p",
+        ...createDefaultVideoGeneratorSettings(),
         ...createWorkflowGeneratorResult(),
       };
   }
@@ -182,10 +148,6 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
-function isBoolean(value: unknown): value is boolean {
-  return typeof value === "boolean";
-}
-
 function isNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -193,9 +155,7 @@ function isNumber(value: unknown): value is number {
 function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
   return (
     value === "prompt" ||
-    value === "image" ||
-    value === "video" ||
-    value === "imageIterator" ||
+    value === "asset" ||
     value === "imageGenerator" ||
     value === "videoGenerator"
   );
@@ -211,20 +171,6 @@ function asString(value: unknown, fallback: string) {
 
 function asNullableString(value: unknown, fallback: string | null) {
   return value === null ? null : isString(value) ? value : fallback;
-}
-
-function asBoolean(value: unknown, fallback: boolean) {
-  return isBoolean(value) ? value : fallback;
-}
-
-function asEnumValue<T extends readonly (string | number)[]>(
-  value: unknown,
-  allowedValues: T,
-  fallback: T[number],
-): T[number] {
-  return allowedValues.includes(value as T[number])
-    ? (value as T[number])
-    : fallback;
 }
 
 function asWorkflowAsset(value: unknown): WorkflowAsset | null {
@@ -266,6 +212,21 @@ function asWorkflowAssets(value: unknown) {
     .filter((asset): asset is WorkflowAsset => Boolean(asset));
 }
 
+function inferAssetKindFromAssets(assets: WorkflowAsset[]) {
+  if (!assets.length) {
+    return null;
+  }
+
+  const [firstAsset] = assets;
+  if (!firstAsset) {
+    return null;
+  }
+
+  return assets.every((asset) => asset.kind === firstAsset.kind)
+    ? firstAsset.kind
+    : null;
+}
+
 function normalizeWorkflowNode(
   value: unknown,
   index: number,
@@ -292,40 +253,26 @@ function normalizeWorkflowNode(
         prompt: asString(value.prompt, baseNode.prompt),
       };
     }
-    case "image": {
+    case "asset": {
       const baseNode = makeWorkflowNode(
         id,
         value.kind,
         position,
-      ) as ImageWorkflowNode;
+      ) as AssetWorkflowNode;
+      const assets = asWorkflowAssets(value.assets);
+      const inferredAssetKind = inferAssetKindFromAssets(assets);
+
       return {
         ...baseNode,
         label: asString(value.label, baseNode.label),
-        asset: asWorkflowAsset(value.asset),
-      };
-    }
-    case "video": {
-      const baseNode = makeWorkflowNode(
-        id,
-        value.kind,
-        position,
-      ) as VideoWorkflowNode;
-      return {
-        ...baseNode,
-        label: asString(value.label, baseNode.label),
-        asset: asWorkflowAsset(value.asset),
-      };
-    }
-    case "imageIterator": {
-      const baseNode = makeWorkflowNode(
-        id,
-        value.kind,
-        position,
-      ) as ImageIteratorWorkflowNode;
-      return {
-        ...baseNode,
-        label: asString(value.label, baseNode.label),
-        assets: asWorkflowAssets(value.assets),
+        assetKind:
+          value.assetKind === "image" || value.assetKind === "video"
+            ? value.assetKind
+            : inferredAssetKind,
+        assets:
+          inferredAssetKind || !assets.length
+            ? assets
+            : assets.filter((asset) => asset.kind === assets[0]?.kind),
       };
     }
     case "imageGenerator": {
@@ -334,15 +281,18 @@ function normalizeWorkflowNode(
         value.kind,
         position,
       ) as ImageGeneratorWorkflowNode;
+      const settings = normalizeImageGeneratorSettings({
+        model: value.model as ImageGeneratorSettings["model"] | undefined,
+        mode: value.mode as string | null | undefined,
+        config: isRecord(value.config)
+          ? (value.config as ImageGeneratorSettings["config"])
+          : {},
+      });
+
       return {
         ...baseNode,
+        ...settings,
         label: asString(value.label, baseNode.label),
-        model: NANO_BANANA_PRO_MODEL_ID,
-        aspectRatio: asEnumValue(
-          value.aspectRatio,
-          IMAGE_ASPECT_RATIOS,
-          baseNode.aspectRatio,
-        ),
         lastPrompt: asString(value.lastPrompt, baseNode.lastPrompt),
         responseText: asNullableString(
           value.responseText,
@@ -357,26 +307,18 @@ function normalizeWorkflowNode(
         value.kind,
         position,
       ) as VideoGeneratorWorkflowNode;
+      const settings = normalizeVideoGeneratorSettings({
+        model: value.model as VideoGeneratorSettings["model"] | undefined,
+        mode: value.mode as string | null | undefined,
+        config: isRecord(value.config)
+          ? (value.config as VideoGeneratorSettings["config"])
+          : {},
+      });
+
       return {
         ...baseNode,
+        ...settings,
         label: asString(value.label, baseNode.label),
-        model: VEO_31_MODEL_ID,
-        aspectRatio: asEnumValue(
-          value.aspectRatio,
-          VIDEO_ASPECT_RATIOS,
-          baseNode.aspectRatio,
-        ),
-        durationSeconds: asEnumValue(
-          value.durationSeconds,
-          VIDEO_DURATIONS,
-          baseNode.durationSeconds,
-        ),
-        generateAudio: asBoolean(value.generateAudio, baseNode.generateAudio),
-        resolution: asEnumValue(
-          value.resolution,
-          VIDEO_RESOLUTIONS,
-          baseNode.resolution,
-        ),
         lastPrompt: asString(value.lastPrompt, baseNode.lastPrompt),
         responseText: asNullableString(
           value.responseText,
@@ -459,27 +401,17 @@ export function createWorkflowNode(kind: WorkflowNodeKind, index: number) {
 export function createDefaultWorkflowDocument(): WorkflowDocument {
   const prompt = createWorkflowNode("prompt", 0);
   const imageGenerator = createWorkflowNode("imageGenerator", 1);
-  const imageIterator = createWorkflowNode("imageIterator", 2);
+  const asset = createWorkflowNode("asset", 2);
   const videoGenerator = createWorkflowNode("videoGenerator", 3);
-  const image = createWorkflowNode("image", 4);
-  const video = createWorkflowNode("video", 5);
 
+  prompt.position = { x: 70, y: 70 };
   imageGenerator.position = { x: 470, y: 70 };
-  imageIterator.position = { x: 70, y: 350 };
+  asset.position = { x: 70, y: 350 };
   videoGenerator.position = { x: 470, y: 380 };
-  image.position = { x: 70, y: 620 };
-  video.position = { x: 470, y: 680 };
 
   return {
     version: WORKFLOW_DOCUMENT_VERSION,
-    nodes: [
-      prompt,
-      imageGenerator,
-      imageIterator,
-      videoGenerator,
-      image,
-      video,
-    ],
+    nodes: [prompt, imageGenerator, asset, videoGenerator],
     edges: [
       {
         id: createWorkflowNodeId(),

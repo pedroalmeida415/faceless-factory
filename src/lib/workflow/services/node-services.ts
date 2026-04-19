@@ -4,13 +4,49 @@ import type {
   VideoGeneratorWorkflowNode,
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
+import { WorkflowValidationError } from "~/lib/workflow/errors";
+import {
+  setGeneratorConfigValue,
+  setImageGeneratorMode,
+  setImageGeneratorModel,
+  setVideoGeneratorMode,
+  setVideoGeneratorModel,
+} from "~/lib/workflow/generator-models";
 import type {
-  ImageAspectRatio,
-  VideoAspectRatio,
-  VideoDuration,
-  VideoResolution,
+  AssetKind,
+  GeneratorConfigValue,
+  ImageGeneratorModelId,
+  VideoGeneratorModelId,
   WorkflowAsset,
 } from "~/lib/workflow/types";
+
+function getBatchAssetKind(assets: WorkflowAsset[]) {
+  const firstAsset = assets[0];
+  if (!firstAsset) {
+    return null;
+  }
+
+  if (!assets.every((asset) => asset.kind === firstAsset.kind)) {
+    throw new WorkflowValidationError({
+      message: "Asset nodes only accept one media type at a time.",
+    });
+  }
+
+  return firstAsset.kind;
+}
+
+function assertCompatibleAssetKind(
+  expectedKind: AssetKind | null,
+  nextKind: AssetKind | null,
+) {
+  if (!expectedKind || !nextKind || expectedKind === nextKind) {
+    return;
+  }
+
+  throw new WorkflowValidationError({
+    message: `This asset node is locked to ${expectedKind}s. Clear it before switching media type.`,
+  });
+}
 
 export const PromptNodeService = {
   setPrompt(node: PromptWorkflowNode, prompt: string): PromptWorkflowNode {
@@ -22,13 +58,34 @@ export const PromptNodeService = {
 };
 
 export const ImageGeneratorService = {
-  setAspectRatio(
+  setModel(
     node: ImageGeneratorWorkflowNode,
-    aspectRatio: ImageAspectRatio,
+    model: ImageGeneratorModelId,
   ): ImageGeneratorWorkflowNode {
     return {
       ...node,
-      aspectRatio,
+      ...setImageGeneratorModel(model),
+    };
+  },
+
+  setMode(
+    node: ImageGeneratorWorkflowNode,
+    mode: string,
+  ): ImageGeneratorWorkflowNode {
+    return {
+      ...node,
+      ...setImageGeneratorMode(node, mode),
+    };
+  },
+
+  setConfigValue(
+    node: ImageGeneratorWorkflowNode,
+    key: string,
+    value: GeneratorConfigValue,
+  ): ImageGeneratorWorkflowNode {
+    return {
+      ...node,
+      config: setGeneratorConfigValue(node.config, key, value),
     };
   },
 
@@ -50,43 +107,34 @@ export const ImageGeneratorService = {
 };
 
 export const VideoGeneratorService = {
-  setAspectRatio(
+  setModel(
     node: VideoGeneratorWorkflowNode,
-    aspectRatio: VideoAspectRatio,
+    model: VideoGeneratorModelId,
   ): VideoGeneratorWorkflowNode {
     return {
       ...node,
-      aspectRatio,
+      ...setVideoGeneratorModel(model),
     };
   },
 
-  setDuration(
+  setMode(
     node: VideoGeneratorWorkflowNode,
-    durationSeconds: VideoDuration,
+    mode: string,
   ): VideoGeneratorWorkflowNode {
     return {
       ...node,
-      durationSeconds,
+      ...setVideoGeneratorMode(node, mode),
     };
   },
 
-  setResolution(
+  setConfigValue(
     node: VideoGeneratorWorkflowNode,
-    resolution: VideoResolution,
+    key: string,
+    value: GeneratorConfigValue,
   ): VideoGeneratorWorkflowNode {
     return {
       ...node,
-      resolution,
-    };
-  },
-
-  setGenerateAudio(
-    node: VideoGeneratorWorkflowNode,
-    generateAudio: boolean,
-  ): VideoGeneratorWorkflowNode {
-    return {
-      ...node,
-      generateAudio,
+      config: setGeneratorConfigValue(node.config, key, value),
     };
   },
 
@@ -110,12 +158,11 @@ export const VideoGeneratorService = {
 export const WorkflowNodeAssetService = {
   clearAssets(node: WorkflowDocumentNode): WorkflowDocumentNode {
     switch (node.kind) {
-      case "image":
-        return { ...node, asset: null };
-      case "video":
-        return { ...node, asset: null };
-      case "imageIterator":
-        return { ...node, assets: [] };
+      case "asset":
+        return {
+          ...node,
+          assets: [],
+        };
       case "imageGenerator":
       case "videoGenerator":
         return {
@@ -132,26 +179,22 @@ export const WorkflowNodeAssetService = {
   applyUploadedAssets(
     node: WorkflowDocumentNode,
     assets: WorkflowAsset[],
-    options: { multiple: boolean },
   ): WorkflowDocumentNode {
+    if (!assets.length) {
+      return node;
+    }
+
     switch (node.kind) {
-      case "image":
+      case "asset": {
+        const batchKind = getBatchAssetKind(assets);
+        assertCompatibleAssetKind(node.assetKind, batchKind);
+
         return {
           ...node,
-          asset: assets[0] ?? null,
+          assetKind: node.assetKind ?? batchKind,
+          assets: [...node.assets, ...assets],
         };
-      case "video":
-        return {
-          ...node,
-          asset: assets[0] ?? null,
-        };
-      case "imageIterator":
-        return {
-          ...node,
-          assets: options.multiple
-            ? [...node.assets, ...assets]
-            : assets.slice(0, 1),
-        };
+      }
       default:
         return node;
     }

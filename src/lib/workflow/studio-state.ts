@@ -104,28 +104,13 @@ function toWorkflowNodeData(
         error,
         prompt: node.prompt,
       };
-    case "image":
+    case "asset":
       return {
         kind: node.kind,
         label: node.label,
         status,
         error,
-        asset: node.asset,
-      };
-    case "video":
-      return {
-        kind: node.kind,
-        label: node.label,
-        status,
-        error,
-        asset: node.asset,
-      };
-    case "imageIterator":
-      return {
-        kind: node.kind,
-        label: node.label,
-        status,
-        error,
+        assetKind: node.assetKind,
         assets: node.assets,
       };
     case "imageGenerator":
@@ -135,7 +120,8 @@ function toWorkflowNodeData(
         status,
         error,
         model: node.model,
-        aspectRatio: node.aspectRatio,
+        mode: node.mode,
+        config: node.config,
         lastPrompt: node.lastPrompt,
         responseText: node.responseText,
         outputAssets: node.outputAssets,
@@ -147,10 +133,8 @@ function toWorkflowNodeData(
         status,
         error,
         model: node.model,
-        aspectRatio: node.aspectRatio,
-        durationSeconds: node.durationSeconds,
-        generateAudio: node.generateAudio,
-        resolution: node.resolution,
+        mode: node.mode,
+        config: node.config,
         lastPrompt: node.lastPrompt,
         responseText: node.responseText,
         outputAssets: node.outputAssets,

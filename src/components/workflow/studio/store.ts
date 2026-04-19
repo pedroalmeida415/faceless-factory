@@ -29,10 +29,9 @@ import {
   type WorkflowStudioSnapshot,
 } from "~/lib/workflow/studio-state";
 import type {
-  ImageAspectRatio,
-  VideoAspectRatio,
-  VideoDuration,
-  VideoResolution,
+  GeneratorConfigValue,
+  ImageGeneratorModelId,
+  VideoGeneratorModelId,
   WorkflowNodeKind,
   WorkflowNodeStatus,
 } from "~/lib/workflow/types";
@@ -230,25 +229,25 @@ type WorkflowStudioState = {
     updater: (node: WorkflowDocumentNode) => WorkflowDocumentNode,
   ) => void;
   setPrompt: (nodeId: string, prompt: string) => void;
-  setImageGeneratorAspectRatio: (
+  setImageGeneratorModel: (
     nodeId: string,
-    aspectRatio: ImageAspectRatio,
+    model: ImageGeneratorModelId,
   ) => void;
-  setVideoGeneratorAspectRatio: (
+  setVideoGeneratorModel: (
     nodeId: string,
-    aspectRatio: VideoAspectRatio,
+    model: VideoGeneratorModelId,
   ) => void;
-  setVideoGeneratorDuration: (
+  setImageGeneratorMode: (nodeId: string, mode: string) => void;
+  setVideoGeneratorMode: (nodeId: string, mode: string) => void;
+  setImageGeneratorConfigValue: (
     nodeId: string,
-    durationSeconds: VideoDuration,
+    key: string,
+    value: GeneratorConfigValue,
   ) => void;
-  setVideoGeneratorResolution: (
+  setVideoGeneratorConfigValue: (
     nodeId: string,
-    resolution: VideoResolution,
-  ) => void;
-  setVideoGeneratorGenerateAudio: (
-    nodeId: string,
-    generateAudio: boolean,
+    key: string,
+    value: GeneratorConfigValue,
   ) => void;
   clearNodeAssets: (nodeId: string) => void;
   applyNodeChanges: (changes: NodeChange[]) => void;
@@ -349,42 +348,50 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       );
     },
 
-    setImageGeneratorAspectRatio: (nodeId, aspectRatio) => {
+    setImageGeneratorModel: (nodeId, model) => {
       get().updateDocumentNode(nodeId, (node) =>
         node.kind === "imageGenerator"
-          ? ImageGeneratorService.setAspectRatio(node, aspectRatio)
+          ? ImageGeneratorService.setModel(node, model)
           : node,
       );
     },
 
-    setVideoGeneratorAspectRatio: (nodeId, aspectRatio) => {
+    setVideoGeneratorModel: (nodeId, model) => {
       get().updateDocumentNode(nodeId, (node) =>
         node.kind === "videoGenerator"
-          ? VideoGeneratorService.setAspectRatio(node, aspectRatio)
+          ? VideoGeneratorService.setModel(node, model)
           : node,
       );
     },
 
-    setVideoGeneratorDuration: (nodeId, durationSeconds) => {
+    setImageGeneratorMode: (nodeId, mode) => {
       get().updateDocumentNode(nodeId, (node) =>
-        node.kind === "videoGenerator"
-          ? VideoGeneratorService.setDuration(node, durationSeconds)
+        node.kind === "imageGenerator"
+          ? ImageGeneratorService.setMode(node, mode)
           : node,
       );
     },
 
-    setVideoGeneratorResolution: (nodeId, resolution) => {
+    setVideoGeneratorMode: (nodeId, mode) => {
       get().updateDocumentNode(nodeId, (node) =>
         node.kind === "videoGenerator"
-          ? VideoGeneratorService.setResolution(node, resolution)
+          ? VideoGeneratorService.setMode(node, mode)
           : node,
       );
     },
 
-    setVideoGeneratorGenerateAudio: (nodeId, generateAudio) => {
+    setImageGeneratorConfigValue: (nodeId, key, value) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "imageGenerator"
+          ? ImageGeneratorService.setConfigValue(node, key, value)
+          : node,
+      );
+    },
+
+    setVideoGeneratorConfigValue: (nodeId, key, value) => {
       get().updateDocumentNode(nodeId, (node) =>
         node.kind === "videoGenerator"
-          ? VideoGeneratorService.setGenerateAudio(node, generateAudio)
+          ? VideoGeneratorService.setConfigValue(node, key, value)
           : node,
       );
     },

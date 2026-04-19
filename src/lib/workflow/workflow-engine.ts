@@ -13,9 +13,9 @@ import {
   type WorkflowDocument,
 } from "~/lib/workflow/document";
 import {
-  getGeneratorImageInputHandles,
+  getGeneratorInputHandles,
   isValidWorkflowConnection,
-  normalizeGeneratorImageTargetHandles,
+  normalizeGeneratorTargetHandles,
 } from "~/lib/workflow/graph";
 import { formatNodeTitle } from "~/lib/workflow/node-definitions";
 import {
@@ -66,7 +66,7 @@ function syncEngineState(
 ): WorkflowEngineState {
   const normalizedDocument = {
     ...document,
-    edges: normalizeGeneratorImageTargetHandles(document.nodes, document.edges),
+    edges: normalizeGeneratorTargetHandles(document.nodes, document.edges),
   } satisfies WorkflowDocument;
 
   WorkflowGraphValidator.validateDocument(normalizedDocument);
@@ -173,8 +173,8 @@ export const WorkflowEngine = {
     return isValidWorkflowConnection(document, connection);
   },
 
-  getGeneratorImageInputs(document: WorkflowDocument, nodeId: string) {
-    return getGeneratorImageInputHandles(document.edges, nodeId);
+  getGeneratorInputs(document: WorkflowDocument, nodeId: string) {
+    return getGeneratorInputHandles(document, nodeId);
   },
 
   addNode(state: WorkflowEngineState, kind: WorkflowNodeKind) {

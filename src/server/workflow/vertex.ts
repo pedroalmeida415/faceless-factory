@@ -217,6 +217,8 @@ export class VertexAi extends Context.Tag("VertexAi")<
         }));
 
       const generateImagesWithNanoBananaPro = ({
+        model,
+        mode: _mode,
         prompt,
         referenceImages = [],
         aspectRatio = "1:1",
@@ -305,13 +307,14 @@ export class VertexAi extends Context.Tag("VertexAi")<
           return {
             assets,
             responseText: response.text || null,
-            model: NANO_BANANA_PRO_MODEL_ID,
+            model,
           } satisfies GenerateImageResponse;
         });
 
       const generateVideosWithVeo31 = ({
+        model,
+        mode: _mode,
         prompt,
-        referenceImage = null,
         referenceImages = [],
         aspectRatio = "16:9",
         durationSeconds = 4,
@@ -320,12 +323,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
       }: GenerateVideoRequest) =>
         Effect.gen(function* () {
           const promptText = prompt.trim();
-          const inputImages =
-            referenceImages.length > 0
-              ? referenceImages
-              : referenceImage
-                ? [referenceImage]
-                : [];
+          const inputImages = referenceImages;
 
           if (!promptText && !inputImages.length) {
             return yield* Effect.fail(
@@ -450,7 +448,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
 
           return {
             assets,
-            model: VEO_31_MODEL_ID,
+            model,
           } satisfies GenerateVideoResponse;
         });
 

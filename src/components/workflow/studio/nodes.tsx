@@ -2,8 +2,6 @@
 
 import { useEffect } from "react";
 import { type NodeProps, useUpdateNodeInternals } from "reactflow";
-
-import { Badge } from "~/components/ui/badge";
 import { Card, CardContent } from "~/components/ui/card";
 import {
   Select,
@@ -15,30 +13,45 @@ import {
 import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
 import {
-  IMAGE_ASPECT_RATIOS,
-  type ImageAspectRatio,
-  type ImageGeneratorNodeData,
-  type ImageIteratorNodeData,
-  type ImageNodeData,
-  type PromptNodeData,
-  VIDEO_ASPECT_RATIOS,
-  VIDEO_DURATIONS,
-  VIDEO_RESOLUTIONS,
-  type VideoAspectRatio,
-  type VideoDuration,
-  type VideoGeneratorNodeData,
-  type VideoNodeData,
-  type VideoResolution,
+  type GeneratorControlDefinition,
+  getImageGeneratorControlDefinitions,
+  getImageGeneratorModelOptions,
+  getImageGeneratorModeOptions,
+  getVideoGeneratorControlDefinitions,
+  getVideoGeneratorModelOptions,
+  getVideoGeneratorModeOptions,
+} from "~/lib/workflow/generator-models";
+import type {
+  AssetNodeData,
+  GeneratorConfigValue,
+  ImageGeneratorNodeData,
+  PromptNodeData,
+  VideoGeneratorNodeData,
 } from "~/lib/workflow/types";
 import { useStudioContext } from "./context";
-import { PROMPT_INPUT_HANDLE_ID } from "./graph";
 import {
-  AssetPreview,
   FilePickerButton,
+  NodeFieldCard,
+  NodeNotice,
   NodeShell,
   OutputGallery,
   ShellButton,
 } from "./shared";
+
+function capitalize(value: string) {
+  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
+}
+
+function coerceConfigValue(
+  currentValue: GeneratorConfigValue,
+  nextValue: string,
+): GeneratorConfigValue {
+  if (typeof currentValue === "number") {
+    return Number(nextValue);
+  }
+
+  return nextValue;
+}
 
 function PromptNode({ id, data, selected }: NodeProps<PromptNodeData>) {
   const { setPrompt } = useStudioContext();
@@ -60,142 +73,126 @@ function PromptNode({ id, data, selected }: NodeProps<PromptNodeData>) {
   );
 }
 
-function ImageUploadNode({ id, data, selected }: NodeProps<ImageNodeData>) {
+function AssetNode({ id, data, selected }: NodeProps<AssetNodeData>) {
   const { uploadFilesToNode, clearNodeAssets } = useStudioContext();
+  const assetKindLabel = data.assetKind ? capitalize(data.assetKind) : "Asset";
+  const outputColor =
+    data.assetKind === "image"
+      ? "#38bdf8"
+      : data.assetKind === "video"
+        ? "#818cf8"
+        : "#94a3b8";
+  const accept = data.assetKind ? `${data.assetKind}/*` : "image/*,video/*";
+  const uploadLabel = data.assets.length
+    ? `Add more ${data.assetKind ?? "assets"}`
+    : data.assetKind
+      ? `Upload ${data.assetKind}`
+      : "Upload media";
 
   return (
     <NodeShell
       data={data}
-      icon="IMG"
-      output={{ id: "image", label: "Image", color: "#38bdf8" }}
+      icon="AST"
+      output={{ id: "asset", label: assetKindLabel, color: outputColor }}
       selected={selected}
     >
-      <div className="space-y-3">
-        {data.asset ? (
-          <Card className="gap-0 overflow-hidden py-0">
-            <div className="aspect-[4/3]">
-              <AssetPreview asset={data.asset} />
-            </div>
-            <CardContent className="flex items-center justify-between border-t px-3 py-3 text-xs">
-              <span className="truncate">{data.asset.fileName}</span>
-              <ShellButton
-                className="px-2 py-1 text-xs"
-                onClick={() => clearNodeAssets(id)}
-              >
-                Clear
-              </ShellButton>
-            </CardContent>
-          </Card>
-        ) : (
-          <Card className="border-dashed py-0">
-            <CardContent className="py-8 text-muted-foreground text-sm">
-            Single image input. Connect into generators or feed your iterator
-            later.
-            </CardContent>
-          </Card>
-        )}
-        <FilePickerButton
-          accept="image/*"
-          label={data.asset ? "Replace image" : "Upload image"}
-          onFiles={(files) =>
-            void uploadFilesToNode(id, files, {
-              kind: "image",
-              multiple: false,
-            })
-          }
-        />
-      </div>
-    </NodeShell>
-  );
-}
-
-function VideoUploadNode({ id, data, selected }: NodeProps<VideoNodeData>) {
-  const { uploadFilesToNode, clearNodeAssets } = useStudioContext();
-
-  return (
-    <NodeShell
-      data={data}
-      icon="VID"
-      output={{ id: "video", label: "Video", color: "#818cf8" }}
-      selected={selected}
-    >
-      <div className="space-y-3">
-        {data.asset ? (
-          <Card className="gap-0 overflow-hidden py-0">
-            <div className="aspect-video">
-              <AssetPreview asset={data.asset} />
-            </div>
-            <CardContent className="flex items-center justify-between border-t px-3 py-3 text-xs">
-              <span className="truncate">{data.asset.fileName}</span>
-              <ShellButton
-                className="px-2 py-1 text-xs"
-                onClick={() => clearNodeAssets(id)}
-              >
-                Clear
-              </ShellButton>
-            </CardContent>
-          </Card>
-        ) : (
-          <Card className="border-dashed py-0">
-            <CardContent className="py-8 text-muted-foreground text-sm">
-            Local video node for uploads, references, or future downstream
-            processing.
-            </CardContent>
-          </Card>
-        )}
-        <FilePickerButton
-          accept="video/*"
-          label={data.asset ? "Replace video" : "Upload video"}
-          onFiles={(files) =>
-            void uploadFilesToNode(id, files, {
-              kind: "video",
-              multiple: false,
-            })
-          }
-        />
-      </div>
-    </NodeShell>
-  );
-}
-
-function ImageIteratorNode({
-  id,
-  data,
-  selected,
-}: NodeProps<ImageIteratorNodeData>) {
-  const { uploadFilesToNode, clearNodeAssets } = useStudioContext();
-
-  return (
-    <NodeShell
-      data={data}
-      icon="SET"
-      output={{ id: "images", label: "Images", color: "#38bdf8" }}
-      selected={selected}
-    >
-      <Card className="py-0">
-        <CardContent className="py-3 text-muted-foreground text-sm">
+      <NodeNotice>
         {data.assets.length
-          ? `${data.assets.length} queued reference image${data.assets.length === 1 ? "" : "s"}`
-          : "Upload multiple images. When this feeds a generator, the runner fans out one job per image."}
-        </CardContent>
-      </Card>
+          ? `${data.assets.length} ${data.assetKind} item${data.assets.length === 1 ? "" : "s"} queued.${data.assets.length > 1 ? " Connected generators will run once per item." : ""}`
+          : data.assetKind
+            ? `This node is locked to ${data.assetKind}s. Add more of the same type to build a batch.`
+            : "Upload images or videos. The first file locks the node type, and additional files must match it."}
+      </NodeNotice>
+
       {data.assets.length ? <OutputGallery assets={data.assets} /> : null}
+
+      {!data.assets.length && data.assetKind ? (
+        <Card className="border-dashed py-0">
+          <CardContent className="py-8 text-muted-foreground text-sm">
+            Type locked to {data.assetKind}. Upload more to reuse this node.
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {!data.assets.length && !data.assetKind ? (
+        <Card className="border-dashed py-0">
+          <CardContent className="py-8 text-muted-foreground text-sm">
+            One asset node now covers both static files and iterator batches.
+          </CardContent>
+        </Card>
+      ) : null}
+
       <div className="flex items-center gap-2">
         <FilePickerButton
-          accept="image/*"
-          label={data.assets.length ? "Add more images" : "Upload batch"}
+          accept={accept}
+          label={uploadLabel}
           multiple
-          onFiles={(files) =>
-            void uploadFilesToNode(id, files, { kind: "image", multiple: true })
-          }
+          onFiles={(files) => void uploadFilesToNode(id, files)}
         />
         {data.assets.length ? (
-          <ShellButton onClick={() => clearNodeAssets(id)}>
-            Clear batch
-          </ShellButton>
+          <ShellButton onClick={() => clearNodeAssets(id)}>Clear</ShellButton>
         ) : null}
       </div>
     </NodeShell>
+  );
+}
+
+function GeneratorControlGrid({
+  controls,
+  config,
+  onConfigChange,
+}: {
+  controls: readonly GeneratorControlDefinition[];
+  config: Record<string, GeneratorConfigValue>;
+  onConfigChange: (key: string, value: GeneratorConfigValue) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {controls.map((control) => {
+        if (control.type === "switch") {
+          return (
+            <NodeFieldCard key={control.key} label={control.label}>
+              <div className="flex items-center justify-between">
+                <span className="text-sm">{control.label}</span>
+                <Switch
+                  checked={Boolean(config[control.key])}
+                  onCheckedChange={(checked) =>
+                    onConfigChange(control.key, checked)
+                  }
+                />
+              </div>
+            </NodeFieldCard>
+          );
+        }
+
+        return (
+          <NodeFieldCard key={control.key} label={control.label}>
+            <Select
+              onValueChange={(value) =>
+                onConfigChange(
+                  control.key,
+                  coerceConfigValue(config[control.key] ?? null, value),
+                )
+              }
+              value={String(
+                config[control.key] ?? control.options[0]?.value ?? "",
+              )}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {control.options.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </NodeFieldCard>
+        );
+      })}
+    </div>
   );
 }
 
@@ -206,77 +203,90 @@ function ImageGeneratorNode({
 }: NodeProps<ImageGeneratorNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
   const {
-    getGeneratorImageInputs,
+    getGeneratorInputs,
     getGeneratorIterationInfo,
-    setImageGeneratorAspectRatio,
+    setImageGeneratorConfigValue,
+    setImageGeneratorMode,
+    setImageGeneratorModel,
     runNode,
   } = useStudioContext();
-  const imageInputs = getGeneratorImageInputs(id);
+  const inputs = getGeneratorInputs(id);
+  const inputHandleSignature = inputs.map((handle) => handle.id).join("|");
   const iterationInfo = getGeneratorIterationInfo(id);
+  const modelOptions = getImageGeneratorModelOptions();
+  const modeOptions = getImageGeneratorModeOptions(data.model);
+  const controls = getImageGeneratorControlDefinitions(data.model, data.mode);
 
   useEffect(() => {
-    if (!imageInputs.length) {
-      return;
-    }
-
+    inputHandleSignature;
     updateNodeInternals(id);
-  }, [id, imageInputs.length, updateNodeInternals]);
+  }, [id, inputHandleSignature, updateNodeInternals]);
 
   return (
     <NodeShell
       data={data}
       icon="GEN"
-      inputs={[
-        { id: PROMPT_INPUT_HANDLE_ID, label: "Prompt", color: "#f59e0b" },
-        ...imageInputs,
-      ]}
-      model="Gemini 3 Pro Image (Nano Banana)"
+      inputs={inputs}
+      model={
+        modelOptions.find((option) => option.value === data.model)?.label ??
+        data.model
+      }
       output={{ id: "images", label: "Images", color: "#22c55e" }}
       selected={selected}
     >
       <div className="grid grid-cols-2 gap-2">
-        <Card className="py-0">
-          <CardContent className="space-y-2 py-3 text-sm">
-            <div className="text-[11px] text-muted-foreground uppercase tracking-[0.24em]">
-            Aspect
-            </div>
+        <NodeFieldCard label="Model">
+          <Select
+            onValueChange={(value) =>
+              setImageGeneratorModel(id, value as typeof data.model)
+            }
+            value={data.model}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {modelOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </NodeFieldCard>
+        {modeOptions.length > 1 ? (
+          <NodeFieldCard label="Mode">
             <Select
-              onValueChange={(value) =>
-                setImageGeneratorAspectRatio(id, value as ImageAspectRatio)
-              }
-              value={data.aspectRatio}
+              onValueChange={(value) => setImageGeneratorMode(id, value)}
+              value={data.mode ?? modeOptions[0]?.value}
             >
               <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-            {IMAGE_ASPECT_RATIOS.map((ratio) => (
-                  <SelectItem key={ratio} value={ratio}>
-                {ratio}
+                {modeOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
                   </SelectItem>
-            ))}
+                ))}
               </SelectContent>
             </Select>
-          </CardContent>
-        </Card>
-        <Card className="py-0">
-          <CardContent className="space-y-2 py-3 text-sm">
-            <div className="text-[11px] text-muted-foreground uppercase tracking-[0.24em]">
-            Model
-            </div>
-            <Badge variant="outline">{data.model}</Badge>
-          </CardContent>
-        </Card>
+          </NodeFieldCard>
+        ) : null}
       </div>
 
+      <GeneratorControlGrid
+        config={data.config}
+        controls={controls}
+        onConfigChange={(key, value) =>
+          setImageGeneratorConfigValue(id, key, value)
+        }
+      />
+
       {iterationInfo.hasIterator ? (
-        <Card className="border-primary/30 bg-primary/10 py-0">
-          <CardContent className="py-3 text-sm">
-          {iterationInfo.mismatchedIterators
-            ? "Connected iterators disagree on batch size."
-            : `Will run ${iterationInfo.iterations} iteration${iterationInfo.iterations === 1 ? "" : "s"}. Other connected images are reused in every pass.`}
-          </CardContent>
-        </Card>
+        <NodeNotice tone="accent">
+          {`Will run ${iterationInfo.iterations} iteration${iterationInfo.iterations === 1 ? "" : "s"}. Click here to visualize combinations`}
+        </NodeNotice>
       ) : null}
 
       <ShellButton
@@ -287,25 +297,15 @@ function ImageGeneratorNode({
       </ShellButton>
 
       {data.lastPrompt ? (
-        <Card className="py-0">
-          <CardContent className="py-3 text-sm">
-            <div className="mb-2 text-[11px] text-muted-foreground uppercase tracking-[0.24em]">
-            Last prompt
-            </div>
+        <NodeFieldCard label="Last prompt">
           <p>{data.lastPrompt}</p>
-          </CardContent>
-        </Card>
+        </NodeFieldCard>
       ) : null}
 
       {data.responseText ? (
-        <Card className="py-0">
-          <CardContent className="py-3 text-sm">
-            <div className="mb-2 text-[11px] text-muted-foreground uppercase tracking-[0.24em]">
-            Model note
-            </div>
+        <NodeFieldCard label="Model note">
           <p>{data.responseText}</p>
-          </CardContent>
-        </Card>
+        </NodeFieldCard>
       ) : null}
 
       <OutputGallery assets={data.outputAssets} />
@@ -320,131 +320,90 @@ function VideoGeneratorNode({
 }: NodeProps<VideoGeneratorNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
   const {
-    getGeneratorImageInputs,
+    getGeneratorInputs,
     getGeneratorIterationInfo,
-    setVideoGeneratorAspectRatio,
-    setVideoGeneratorDuration,
-    setVideoGeneratorResolution,
-    setVideoGeneratorGenerateAudio,
+    setVideoGeneratorConfigValue,
+    setVideoGeneratorMode,
+    setVideoGeneratorModel,
     runNode,
   } = useStudioContext();
-  const imageInputs = getGeneratorImageInputs(id);
+  const inputs = getGeneratorInputs(id);
+  const inputHandleSignature = inputs.map((handle) => handle.id).join("|");
   const iterationInfo = getGeneratorIterationInfo(id);
+  const modelOptions = getVideoGeneratorModelOptions();
+  const modeOptions = getVideoGeneratorModeOptions(data.model);
+  const controls = getVideoGeneratorControlDefinitions(data.model, data.mode);
 
   useEffect(() => {
-    if (!imageInputs.length) {
-      return;
-    }
-
+    inputHandleSignature;
     updateNodeInternals(id);
-  }, [id, imageInputs.length, updateNodeInternals]);
+  }, [id, inputHandleSignature, updateNodeInternals]);
 
   return (
     <NodeShell
       data={data}
       icon="MOT"
-      inputs={[
-        { id: PROMPT_INPUT_HANDLE_ID, label: "Prompt", color: "#f59e0b" },
-        ...imageInputs,
-      ]}
-      model="Veo 3.1"
+      inputs={inputs}
+      model={
+        modelOptions.find((option) => option.value === data.model)?.label ??
+        data.model
+      }
       output={{ id: "videos", label: "Videos", color: "#a78bfa" }}
       selected={selected}
     >
       <div className="grid grid-cols-2 gap-2">
-        <Card className="py-0">
-          <CardContent className="space-y-2 py-3 text-sm">
-            <div className="text-[11px] text-muted-foreground uppercase tracking-[0.24em]">
-            Aspect
-            </div>
+        <NodeFieldCard label="Model">
+          <Select
+            onValueChange={(value) =>
+              setVideoGeneratorModel(id, value as typeof data.model)
+            }
+            value={data.model}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {modelOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </NodeFieldCard>
+        {modeOptions.length > 1 ? (
+          <NodeFieldCard label="Mode">
             <Select
-              onValueChange={(value) =>
-                setVideoGeneratorAspectRatio(id, value as VideoAspectRatio)
-              }
-              value={data.aspectRatio}
+              onValueChange={(value) => setVideoGeneratorMode(id, value)}
+              value={data.mode ?? modeOptions[0]?.value}
             >
               <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-            {VIDEO_ASPECT_RATIOS.map((ratio) => (
-                  <SelectItem key={ratio} value={ratio}>
-                {ratio}
+                {modeOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
                   </SelectItem>
-            ))}
+                ))}
               </SelectContent>
             </Select>
-          </CardContent>
-        </Card>
-        <Card className="py-0">
-          <CardContent className="space-y-2 py-3 text-sm">
-            <div className="text-[11px] text-muted-foreground uppercase tracking-[0.24em]">
-            Duration
-            </div>
-            <Select
-              onValueChange={(value) =>
-                setVideoGeneratorDuration(id, Number(value) as VideoDuration)
-              }
-              value={String(data.durationSeconds)}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-            {VIDEO_DURATIONS.map((duration) => (
-                  <SelectItem key={duration} value={String(duration)}>
-                {duration}s
-                  </SelectItem>
-            ))}
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
-        <Card className="py-0">
-          <CardContent className="space-y-2 py-3 text-sm">
-            <div className="text-[11px] text-muted-foreground uppercase tracking-[0.24em]">
-            Resolution
-            </div>
-            <Select
-              onValueChange={(value) =>
-                setVideoGeneratorResolution(id, value as VideoResolution)
-              }
-              value={data.resolution}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-            {VIDEO_RESOLUTIONS.map((resolution) => (
-                  <SelectItem key={resolution} value={resolution}>
-                {resolution}
-                  </SelectItem>
-            ))}
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
-        <Card className="py-0">
-          <CardContent className="flex items-center justify-between py-3 text-sm">
-            <span>Generate audio</span>
-            <Switch
-              checked={data.generateAudio}
-              onCheckedChange={(checked) =>
-                setVideoGeneratorGenerateAudio(id, checked)
-              }
-            />
-          </CardContent>
-        </Card>
+          </NodeFieldCard>
+        ) : null}
       </div>
 
+      <GeneratorControlGrid
+        config={data.config}
+        controls={controls}
+        onConfigChange={(key, value) =>
+          setVideoGeneratorConfigValue(id, key, value)
+        }
+      />
+
       {iterationInfo.hasIterator ? (
-        <Card className="border-primary/30 bg-primary/10 py-0">
-          <CardContent className="py-3 text-sm">
-          {iterationInfo.mismatchedIterators
-            ? "Connected iterators disagree on batch size."
-            : `Will run ${iterationInfo.iterations} iteration${iterationInfo.iterations === 1 ? "" : "s"}. Other connected images are reused in every pass.`}
-          </CardContent>
-        </Card>
+        <NodeNotice tone="accent">
+          {`Will run ${iterationInfo.iterations} iteration${iterationInfo.iterations === 1 ? "" : "s"}. Click here to visualize combinations`}
+        </NodeNotice>
       ) : null}
 
       <ShellButton
@@ -455,14 +414,9 @@ function VideoGeneratorNode({
       </ShellButton>
 
       {data.lastPrompt ? (
-        <Card className="py-0">
-          <CardContent className="py-3 text-sm">
-            <div className="mb-2 text-[11px] text-muted-foreground uppercase tracking-[0.24em]">
-            Last prompt
-            </div>
+        <NodeFieldCard label="Last prompt">
           <p>{data.lastPrompt}</p>
-          </CardContent>
-        </Card>
+        </NodeFieldCard>
       ) : null}
 
       <OutputGallery assets={data.outputAssets} />
@@ -472,9 +426,7 @@ function VideoGeneratorNode({
 
 export const nodeTypes = {
   prompt: PromptNode,
-  image: ImageUploadNode,
-  video: VideoUploadNode,
-  imageIterator: ImageIteratorNode,
+  asset: AssetNode,
   imageGenerator: ImageGeneratorNode,
   videoGenerator: VideoGeneratorNode,
 };
