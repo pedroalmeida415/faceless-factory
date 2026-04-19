@@ -1,5 +1,14 @@
 "use client";
 
+import { Badge } from "~/components/ui/badge";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "~/components/ui/card";
+import { Separator } from "~/components/ui/separator";
 import {
   NANO_BANANA_PRO_MODEL_ID,
   VEO_31_MODEL_ID,
@@ -28,25 +37,26 @@ export function WorkflowSidebar({
   canUndo: boolean;
 }) {
   return (
-    <aside className="w-[320px] shrink-0 rounded-[32px] border border-white/10 bg-black/20 p-5 shadow-[0_30px_90px_rgba(0,0,0,0.35)] backdrop-blur">
-      <div className="mb-8">
-        <div className="mb-2 text-[11px] text-slate-400 uppercase tracking-[0.32em]">
-          Faceless Factory
-        </div>
-        <h1 className="font-semibold text-3xl leading-tight">
-          Node-based AI workflow MVP
-        </h1>
-        <p className="mt-3 text-slate-300 text-sm leading-6">
+    <aside className="w-[320px] shrink-0">
+      <Card className="sticky top-5 gap-0">
+        <CardHeader>
+          <Badge className="w-fit" variant="outline">
+            Faceless Factory
+          </Badge>
+          <CardTitle className="text-3xl leading-tight">
+            Node-based AI workflow MVP
+          </CardTitle>
+          <CardDescription className="leading-6">
           Minimal Weavy-style canvas with local uploads, image iteration, Nano
           Banana Pro image generation, and Veo 3.1 video generation.
-        </p>
-      </div>
+          </CardDescription>
+        </CardHeader>
 
-      <div className="mb-8 space-y-3">
-        <div className="text-[11px] text-slate-400 uppercase tracking-[0.32em]">
+        <CardContent className="space-y-3">
+          <div className="text-muted-foreground text-[11px] uppercase tracking-[0.32em]">
           Add nodes
-        </div>
-        <div className="grid grid-cols-2 gap-2">
+          </div>
+          <div className="grid grid-cols-2 gap-2">
           {(
             [
               "prompt",
@@ -61,14 +71,14 @@ export function WorkflowSidebar({
               {formatNodeTitle(kind)}
             </ShellButton>
           ))}
-        </div>
-      </div>
+          </div>
+        </CardContent>
 
-      <div className="mb-8 space-y-3">
-        <div className="text-[11px] text-slate-400 uppercase tracking-[0.32em]">
+        <CardContent className="space-y-3">
+          <div className="text-muted-foreground text-[11px] uppercase tracking-[0.32em]">
           Run
-        </div>
-        <div className="grid grid-cols-1 gap-2">
+          </div>
+          <div className="grid grid-cols-1 gap-2">
           <ShellButton className="justify-center" onClick={onRun}>
             Run selected or all generators
           </ShellButton>
@@ -83,27 +93,30 @@ export function WorkflowSidebar({
           <ShellButton className="justify-center" onClick={onReset}>
             Reset starter graph
           </ShellButton>
-        </div>
-      </div>
+          </div>
+        </CardContent>
 
-      <div className="space-y-3">
-        <div className="text-[11px] text-slate-400 uppercase tracking-[0.32em]">
+        <CardContent className="space-y-3">
+          <div className="text-muted-foreground text-[11px] uppercase tracking-[0.32em]">
           Notes
-        </div>
-        <div className="rounded-[28px] border border-white/10 bg-black/20 p-4 text-slate-300 text-sm leading-6">
+          </div>
+          <Card className="py-4">
+            <CardContent className="space-y-4 text-sm leading-6">
           <p>{activity}</p>
-          <hr className="my-4 border-white/10" />
+              <Separator />
           <p>
             Image model locked to{" "}
-            <span className="text-white">{NANO_BANANA_PRO_MODEL_ID}</span>.
+                <span className="text-foreground">{NANO_BANANA_PRO_MODEL_ID}</span>.
           </p>
           <p>
             Video model locked to{" "}
-            <span className="text-white">{VEO_31_MODEL_ID}</span>.
+                <span className="text-foreground">{VEO_31_MODEL_ID}</span>.
           </p>
           <p>Uploads and generated assets persist in local server storage.</p>
-        </div>
-      </div>
+            </CardContent>
+          </Card>
+        </CardContent>
+      </Card>
     </aside>
   );
 }

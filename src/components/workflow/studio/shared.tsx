@@ -2,45 +2,50 @@
 
 import Image from "next/image";
 import {
-  type ButtonHTMLAttributes,
   type PropsWithChildren,
   useId,
 } from "react";
 import { Handle, Position } from "reactflow";
 
+import { Badge } from "~/components/ui/badge";
+import { Button } from "~/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "~/components/ui/card";
 import type {
   WorkflowAsset,
   WorkflowNodeData,
   WorkflowNodeStatus,
 } from "~/lib/workflow/types";
+import { cn } from "~/lib/utils";
 import { formatNodeTitle, type HandleDefinition } from "./graph";
 
-function statusBadgeClass(status: WorkflowNodeStatus) {
+function statusBadgeVariant(status: WorkflowNodeStatus) {
   switch (status) {
     case "running":
-      return "bg-amber-200/20 text-amber-100 ring-amber-100/30";
+      return "secondary";
     case "success":
-      return "bg-emerald-300/15 text-emerald-100 ring-emerald-200/25";
+      return "default";
     case "error":
-      return "bg-rose-300/15 text-rose-100 ring-rose-200/25";
+      return "destructive";
     default:
-      return "bg-white/8 text-slate-200 ring-white/10";
+      return "outline";
   }
 }
 
 export function ShellButton(
-  props: PropsWithChildren<ButtonHTMLAttributes<HTMLButtonElement>>,
+  props: PropsWithChildren<React.ComponentProps<typeof Button>>,
 ) {
   const { children, className, ...rest } = props;
 
   return (
-    <button
-      className={`rounded-full border border-white/12 bg-white/8 px-3 py-2 text-sm text-white transition hover:border-white/20 hover:bg-white/14 disabled:cursor-not-allowed disabled:opacity-40 ${className ?? ""}`}
-      type="button"
-      {...rest}
-    >
+    <Button className={className} type="button" variant="outline" {...rest}>
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -56,7 +61,7 @@ export function AssetPreview({
       <div className="relative h-full w-full">
         <Image
           alt={asset.fileName}
-          className={`rounded-2xl object-cover ${className}`}
+          className={cn("object-cover", className)}
           fill
           sizes="(max-width: 768px) 100vw, 320px"
           src={asset.url}
@@ -68,7 +73,7 @@ export function AssetPreview({
 
   return (
     <video
-      className={`h-full w-full rounded-2xl object-cover ${className}`}
+      className={cn("h-full w-full object-cover", className)}
       controls
       preload="metadata"
       src={asset.url}
@@ -86,32 +91,30 @@ export function AssetPreview({
 export function OutputGallery({ assets }: { assets: WorkflowAsset[] }) {
   if (!assets.length) {
     return (
-      <div className="rounded-2xl border border-white/12 border-dashed bg-black/15 px-3 py-4 text-slate-300 text-sm">
+      <Card className="border-dashed">
+        <CardContent className="py-4 text-muted-foreground">
         No outputs yet.
-      </div>
+        </CardContent>
+      </Card>
     );
   }
 
   return (
     <div className="grid grid-cols-2 gap-2">
       {assets.map((asset) => (
-        <a
-          className="group overflow-hidden rounded-2xl border border-white/10 bg-black/20"
-          href={asset.url}
-          key={asset.id}
-          rel="noreferrer"
-          target="_blank"
-        >
-          <div className="aspect-square bg-black/30">
+        <Card className="gap-0 py-0" key={asset.id}>
+          <a href={asset.url} rel="noreferrer" target="_blank">
+            <div className="aspect-square overflow-hidden">
             <AssetPreview asset={asset} />
-          </div>
-          <div className="border-white/10 border-t px-2 py-2 text-slate-200 text-xs">
+            </div>
+          </a>
+          <CardContent className="border-t px-2 py-2 text-xs">
             <div className="truncate">{asset.fileName}</div>
-            <div className="text-[10px] text-slate-400 uppercase tracking-[0.24em]">
+            <div className="text-muted-foreground text-[10px] uppercase tracking-[0.24em]">
               {asset.source}
             </div>
-          </div>
-        </a>
+          </CardContent>
+        </Card>
       ))}
     </div>
   );
@@ -132,12 +135,11 @@ export function FilePickerButton({
 
   return (
     <>
-      <label
-        className="inline-flex cursor-pointer items-center justify-center rounded-full border border-white/12 bg-white/10 px-3 py-2 text-sm text-white transition hover:border-white/25 hover:bg-white/16"
-        htmlFor={inputId}
-      >
+      <Button asChild type="button" variant="outline">
+        <label className="cursor-pointer" htmlFor={inputId}>
         {label}
-      </label>
+        </label>
+      </Button>
       <input
         accept={accept}
         className="hidden"
@@ -181,12 +183,12 @@ export function NodeShell({
   );
 
   return (
-    <div
-      className={`relative rounded-[28px] border bg-[linear-gradient(180deg,rgba(15,23,42,0.94),rgba(3,7,18,0.9))] p-4 text-white backdrop-blur transition-[border-color,box-shadow,transform] duration-150 ${
-        selected
-          ? "border-sky-300/80 shadow-[0_0_0_1px_rgba(125,211,252,0.4),0_0_0_10px_rgba(56,189,248,0.16),0_24px_80px_rgba(14,165,233,0.2)]"
-          : "border-white/12 shadow-[0_24px_80px_rgba(0,0,0,0.45)]"
-      }`}
+    <Card
+      className={cn(
+        "relative gap-4 overflow-visible py-4",
+        selected && "ring-2 ring-primary",
+      )}
+      size="sm"
     >
       {inputs.map((input, index) => (
         <Handle
@@ -221,36 +223,30 @@ export function NodeShell({
         />
       ) : null}
 
-      <div className="mb-4 flex items-start justify-between gap-4">
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-[10px] text-slate-400 uppercase tracking-[0.28em]">
+      <CardHeader className="gap-3">
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-[0.28em]">
             <span>{formatNodeTitle(data.kind)}</span>
             {selected ? (
-              <span className="rounded-full bg-sky-300/20 px-2 py-1 text-[10px] text-sky-100 ring-1 ring-sky-200/35">
-                selected
-              </span>
+              <Badge variant="secondary">selected</Badge>
             ) : null}
-            <span
-              className={`rounded-full px-2 py-1 ring-1 ${statusBadgeClass(data.status)}`}
-            >
+            <Badge variant={statusBadgeVariant(data.status)}>
               {data.status}
-            </span>
+            </Badge>
+        </div>
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1">
+            <CardTitle className="text-lg leading-tight">{data.label}</CardTitle>
+            {model ? <CardDescription className="text-xs">{model}</CardDescription> : null}
           </div>
-          <h3 className="font-semibold text-lg text-white leading-tight">
-            {data.label}
-          </h3>
-          {model ? <p className="text-slate-400 text-xs">{model}</p> : null}
+          <Badge variant="outline">{icon}</Badge>
         </div>
-        <div className="rounded-2xl border border-white/10 bg-white/8 px-3 py-2 font-medium text-slate-100 text-xs tracking-[0.24em]">
-          {icon}
-        </div>
-      </div>
+      </CardHeader>
 
       {inputLegend.length ? (
-        <div className="mb-4 space-y-2">
+        <CardContent className="space-y-2">
           {inputLegend.map((input) => (
             <div
-              className="flex items-center gap-2 text-[11px] text-slate-400 uppercase tracking-[0.22em]"
+              className="flex items-center gap-2 text-[11px] text-muted-foreground uppercase tracking-[0.22em]"
               key={input.id}
             >
               <span
@@ -260,16 +256,18 @@ export function NodeShell({
               <span>{input.label}</span>
             </div>
           ))}
-        </div>
+        </CardContent>
       ) : null}
 
-      <div className="space-y-3">{children}</div>
+      <CardContent className="space-y-3">{children}</CardContent>
 
       {data.error ? (
-        <div className="mt-4 rounded-2xl border border-rose-200/20 bg-rose-300/10 px-3 py-3 text-rose-100 text-sm">
-          {data.error}
-        </div>
+        <CardContent>
+          <Card className="border-destructive/40 bg-destructive/10 py-3 text-destructive">
+            <CardContent>{data.error}</CardContent>
+          </Card>
+        </CardContent>
       ) : null}
-    </div>
+    </Card>
   );
 }

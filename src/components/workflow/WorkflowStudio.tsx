@@ -10,6 +10,8 @@ import {
   type ReactFlowInstance,
 } from "reactflow";
 
+import { Badge } from "~/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { StudioContext } from "./studio/context";
 import { isEditableTarget } from "./studio/graph";
 import { nodeTypes } from "./studio/nodes";
@@ -94,8 +96,8 @@ export function WorkflowStudio() {
 
   return (
     <StudioContext.Provider value={contextValue}>
-      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#18324d,transparent_40%),radial-gradient(circle_at_top_right,#3f2335,transparent_30%),linear-gradient(180deg,#050816,#0b1022)] text-white">
-        <div className="mx-auto flex min-h-screen max-w-[1800px] gap-6 px-5 py-5">
+      <div className="min-h-screen bg-background">
+        <div className="mx-auto flex min-h-screen max-w-[1800px] gap-6 p-5">
           <WorkflowSidebar
             activity={activity}
             onAddNode={addNodeToCanvas}
@@ -107,27 +109,23 @@ export function WorkflowStudio() {
             canUndo={canUndo}
           />
 
-          <main className="min-w-0 flex-1 overflow-hidden rounded-[36px] border border-white/10 bg-black/15 shadow-[0_40px_120px_rgba(0,0,0,0.45)] backdrop-blur">
-            <div className="flex items-center justify-between border-white/10 border-b px-6 py-5">
+          <Card className="min-w-0 flex-1 gap-0 overflow-hidden py-0">
+            <CardHeader className="flex flex-row items-center justify-between border-b py-5">
               <div>
-                <div className="text-[11px] text-slate-400 uppercase tracking-[0.32em]">
+                <div className="text-muted-foreground text-[11px] uppercase tracking-[0.32em]">
                   Canvas
                 </div>
-                <h2 className="mt-1 font-semibold text-2xl">
+                <CardTitle className="mt-1 text-2xl">
                   Prompt to image/video workflow graph
-                </h2>
+                </CardTitle>
               </div>
-              <div className="flex items-center gap-2 text-slate-300 text-xs">
-                <span className="rounded-full border border-white/10 bg-white/6 px-3 py-2">
-                  Local graph autosave
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/6 px-3 py-2">
-                  Vertex-backed generators
-                </span>
+              <div className="flex items-center gap-2 text-xs">
+                <Badge variant="outline">Local graph autosave</Badge>
+                <Badge variant="outline">Vertex-backed generators</Badge>
               </div>
-            </div>
+            </CardHeader>
 
-            <div className="h-[calc(100vh-4rem)] min-h-[780px]">
+            <CardContent className="h-[calc(100vh-4rem)] min-h-[780px] p-0">
               <ReactFlow
                 connectionLineType={ConnectionLineType.SmoothStep}
                 defaultEdgeOptions={{
@@ -171,8 +169,8 @@ export function WorkflowStudio() {
                   }}
                 />
               </ReactFlow>
-            </div>
-          </main>
+            </CardContent>
+          </Card>
         </div>
       </div>
     </StudioContext.Provider>

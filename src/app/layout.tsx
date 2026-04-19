@@ -1,11 +1,11 @@
 import "~/styles/globals.css";
 
 import type { Metadata } from "next";
-import { TRPCReactProvider } from "~/trpc/react";
 import { Oxanium } from "next/font/google";
 import { cn } from "~/lib/utils";
+import { TRPCReactProvider } from "~/trpc/react";
 
-const oxanium = Oxanium({subsets:['latin'],variable:'--font-sans'});
+const oxanium = Oxanium({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: "Faceless Factory",
@@ -18,7 +18,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={cn("font-sans", oxanium.variable)}>
+    <html lang="en" className={cn("font-sans", oxanium.variable, "dark")}>
       <body>
         <TRPCReactProvider>{children}</TRPCReactProvider>
       </body>
