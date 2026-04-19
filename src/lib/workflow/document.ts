@@ -17,6 +17,7 @@ import type {
 
 export const WORKFLOW_DOCUMENT_VERSION = 4;
 export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v4";
+export const WORKFLOW_GRID_STEP = 20;
 
 export type WorkflowPosition = {
   x: number;
@@ -84,9 +85,18 @@ function nextNodePosition(index: number): WorkflowPosition {
   const column = index % 3;
   const row = Math.floor(index / 3);
 
-  return {
+  return snapWorkflowPositionToGrid({
     x: 80 + column * 360,
     y: 80 + row * 290,
+  });
+}
+
+export function snapWorkflowPositionToGrid(
+  position: WorkflowPosition,
+): WorkflowPosition {
+  return {
+    x: Math.round(position.x / WORKFLOW_GRID_STEP) * WORKFLOW_GRID_STEP,
+    y: Math.round(position.y / WORKFLOW_GRID_STEP) * WORKFLOW_GRID_STEP,
   };
 }
 
@@ -242,7 +252,7 @@ function normalizeWorkflowNode(
 
   const id = asString(value.id, createWorkflowNodeId());
   const position = isWorkflowPosition(value.position)
-    ? value.position
+    ? snapWorkflowPositionToGrid(value.position)
     : nextNodePosition(index);
 
   switch (value.kind) {
