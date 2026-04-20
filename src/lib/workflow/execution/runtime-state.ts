@@ -1,5 +1,6 @@
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import type {
+  WorkflowCreditsSummary,
   WorkflowExecutionNodeRuntimeState,
   WorkflowExecutionRuntimeState,
   WorkflowExecutionStatusResponse,
@@ -58,13 +59,14 @@ export function buildWorkflowExecutionStatusResponse(params: {
   document: WorkflowDocument;
   runtime: WorkflowExecutionRuntimeState;
   status: WorkflowRunStatus;
+  credits?: WorkflowCreditsSummary | null;
 }): WorkflowExecutionStatusResponse {
   return {
     runId: params.runId,
     document: params.document,
     runtime: params.runtime,
     activity: params.runtime.activity,
-    credits: null,
+    credits: params.credits ?? null,
     status: params.status,
   };
 }

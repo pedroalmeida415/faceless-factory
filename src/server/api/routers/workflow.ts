@@ -17,7 +17,12 @@ import {
   VIDEO_RESOLUTIONS,
 } from "~/lib/workflow/types";
 import { toTRPCError } from "~/server/api/errors";
-import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
+import {
+  createTRPCRouter,
+  protectedProcedure,
+  publicProcedure,
+} from "~/server/api/trpc";
+import { WorkflowCreditsService } from "~/server/workflow/credits";
 import { WorkflowExecutionService } from "~/server/workflow/execution-service";
 import { WorkflowStorage } from "~/server/workflow/storage";
 import { VertexAi } from "~/server/workflow/vertex";
@@ -85,15 +90,19 @@ const workflowExecutionRequestSchema = z.object({
 });
 
 export const workflowRouter = createTRPCRouter({
-  startExecution: publicProcedure
+  startExecution: protectedProcedure
     .input(workflowExecutionRequestSchema)
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const request = input as StartWorkflowExecutionRequest;
+      const userId = ctx.session.user.id;
 
       return ServerRuntime.runPromise(
         Effect.gen(function* () {
           const workflowExecutionService = yield* WorkflowExecutionService;
-          const run = yield* workflowExecutionService.createRun(request);
+          const run = yield* workflowExecutionService.createRun(
+            userId,
+            request,
+          );
 
           void ServerRuntime.runPromise(
             Effect.gen(function* () {
@@ -101,6 +110,7 @@ export const workflowRouter = createTRPCRouter({
                 yield* WorkflowExecutionService;
               yield* backgroundWorkflowExecutionService.executeRun(
                 run.runId,
+                userId,
                 request,
               );
             }),
@@ -114,6 +124,19 @@ export const workflowRouter = createTRPCRouter({
         throw toTRPCError(error);
       });
     }),
+
+  getCredits: protectedProcedure.query(async ({ ctx }) =>
+    ServerRuntime.runPromise(
+      Effect.gen(function* () {
+        const workflowCreditsService = yield* WorkflowCreditsService;
+        return yield* workflowCreditsService.getBalanceSummary(
+          ctx.session.user.id,
+        );
+      }),
+    ).catch((error) => {
+      throw toTRPCError(error);
+    }),
+  ),
 
   generateImage: publicProcedure
     .input(

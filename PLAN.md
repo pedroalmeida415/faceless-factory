@@ -29,30 +29,28 @@ Completed:
 5. Client execution path switched away from per-generation tRPC mutations.
 6. Client store now hydrates authoritative server runtime/document state.
 7. SSE transport added at `src/app/api/workflow-runs/[runId]/events/route.ts` and is now the primary runtime update path.
+8. Initial server-side pricing and in-memory credits services added in `src/server/workflow/pricing.ts` and `src/server/workflow/credits.ts`.
+9. `startExecution`, `getCredits`, and SSE run access now require authenticated user ownership.
 
 Partially completed:
 
 1. Phase 4 is functionally in place for run/start and runtime hydration, but cleanup/docs/tests are still pending.
+2. Phase 3 is functionally in place with in-memory pricing/credits enforcement, but durable balances, persistence, and test coverage are still pending.
 
 Not completed:
 
-1. credits/pricing
-2. auth hardening for execution endpoints
-3. cancellation
-4. durable run persistence
-5. server-backed workflow persistence
-6. dedicated tests for the new server execution path
+1. cancellation
+2. durable run persistence
+3. server-backed workflow persistence
+4. dedicated tests for the new server execution path
 
 ## New Session Pickup
 
 If a future session continues this work, start here:
 
-1. implement `src/server/workflow/pricing.ts`
-2. implement `src/server/workflow/credits.ts`
-3. switch `startExecution` and SSE access to `protectedProcedure` or equivalent route auth
-4. add cancellation support to the run store, execution service, and SSE stream
-5. add integration tests for shared execution, async run status, and SSE delivery
-6. update `WORKFLOW_ARCHITECTURE.md` to describe the new server-driven path and SSE transport
+1. add cancellation support to the run store, execution service, and SSE stream
+2. add integration tests for shared execution, async run status, and SSE delivery
+3. update `WORKFLOW_ARCHITECTURE.md` to describe the new server-driven path, SSE transport, and credit enforcement
 
 Current authoritative execution flow:
 

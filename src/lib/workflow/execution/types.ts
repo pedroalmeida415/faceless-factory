@@ -3,6 +3,7 @@ import type { Effect } from "effect";
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import type {
   WorkflowConfigError,
+  WorkflowCreditsError,
   WorkflowExecutionError,
   WorkflowGenerationError,
   WorkflowStorageError,
@@ -65,6 +66,7 @@ export type WorkflowExecutionStatusResponse = {
 };
 
 export type WorkflowExecutionPortError =
+  | WorkflowCreditsError
   | WorkflowConfigError
   | WorkflowExecutionError
   | WorkflowGenerationError

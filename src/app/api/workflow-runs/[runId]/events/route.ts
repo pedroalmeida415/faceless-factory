@@ -1,8 +1,13 @@
 import { Effect } from "effect";
 
 import { ServerRuntime } from "~/effect/server/runtime";
-import { getErrorMessage } from "~/lib/workflow/errors";
+import {
+  getErrorMessage,
+  WorkflowAuthorizationError,
+  WorkflowRunNotFoundError,
+} from "~/lib/workflow/errors";
 import type { WorkflowExecutionStatusResponse } from "~/lib/workflow/execution/types";
+import { auth } from "~/server/better-auth";
 import { WorkflowRunStore } from "~/server/workflow/run-store";
 
 export const runtime = "nodejs";
@@ -30,7 +35,18 @@ export async function GET(
   const encoder = new TextEncoder();
 
   try {
+    const session = await auth.api.getSession({ headers: request.headers });
+    if (!session?.user) {
+      return Response.json(
+        { error: "Unauthorized" },
+        {
+          status: 401,
+        },
+      );
+    }
+
     const { runId } = await context.params;
+    const userId = session.user.id;
 
     let cancel = () => {};
 
@@ -69,7 +85,7 @@ export async function GET(
         const subscription = await ServerRuntime.runPromise(
           Effect.gen(function* () {
             const workflowRunStore = yield* WorkflowRunStore;
-            return yield* workflowRunStore.subscribe(runId, (run) => {
+            return yield* workflowRunStore.subscribe(runId, userId, (run) => {
               push("status", run);
               if (isTerminalStatus(run.status)) {
                 close();
@@ -107,10 +123,17 @@ export async function GET(
       headers: SSE_HEADERS,
     });
   } catch (error) {
+    const status =
+      error instanceof WorkflowAuthorizationError
+        ? 403
+        : error instanceof WorkflowRunNotFoundError
+          ? 404
+          : 500;
+
     return Response.json(
       { error: getErrorMessage(error) },
       {
-        status: 404,
+        status,
       },
     );
   }

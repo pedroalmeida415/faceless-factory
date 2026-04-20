@@ -3,6 +3,12 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { Context, Effect, Layer } from "effect";
+import type {
+  WorkflowAuthorizationError,
+  WorkflowCreditsError,
+  WorkflowRunNotFoundError,
+  WorkflowValidationError,
+} from "~/lib/workflow/errors";
 import { executeWorkflow } from "~/lib/workflow/execution/core";
 import {
   buildWorkflowExecutionStatusResponse,
@@ -13,6 +19,12 @@ import type {
   WorkflowExecutionPortError,
   WorkflowExecutionStatusResponse,
 } from "~/lib/workflow/execution/types";
+import { WorkflowCreditsService } from "~/server/workflow/credits";
+import {
+  priceImageGeneration,
+  priceVideoGeneration,
+  quoteWorkflowExecution,
+} from "~/server/workflow/pricing";
 import { WorkflowRunStore } from "~/server/workflow/run-store";
 import { VertexAi } from "~/server/workflow/vertex";
 
@@ -22,14 +34,22 @@ export class WorkflowExecutionService extends Context.Tag(
   WorkflowExecutionService,
   {
     readonly createRun: (
-      request: StartWorkflowExecutionRequest,
-    ) => Effect.Effect<WorkflowExecutionStatusResponse>;
-    readonly executeRun: (
-      runId: string,
+      userId: string,
       request: StartWorkflowExecutionRequest,
     ) => Effect.Effect<
       WorkflowExecutionStatusResponse,
-      WorkflowExecutionPortError
+      WorkflowCreditsError | WorkflowValidationError
+    >;
+    readonly executeRun: (
+      runId: string,
+      userId: string,
+      request: StartWorkflowExecutionRequest,
+    ) => Effect.Effect<
+      WorkflowExecutionStatusResponse,
+      | WorkflowAuthorizationError
+      | WorkflowCreditsError
+      | WorkflowExecutionPortError
+      | WorkflowRunNotFoundError
     >;
   }
 >() {
@@ -39,11 +59,21 @@ export class WorkflowExecutionService extends Context.Tag(
     this,
     Effect.gen(function* () {
       const vertexAi = yield* VertexAi;
+      const workflowCreditsService = yield* WorkflowCreditsService;
       const workflowRunStore = yield* WorkflowRunStore;
 
-      const createRun = (request: StartWorkflowExecutionRequest) =>
+      const createRun = (
+        userId: string,
+        request: StartWorkflowExecutionRequest,
+      ) =>
         Effect.gen(function* () {
           const runId = randomUUID();
+          const priceQuote = quoteWorkflowExecution(request);
+          const credits = yield* workflowCreditsService.reserveCredits({
+            runId,
+            userId,
+            totalCost: priceQuote.totalCost,
+          });
           const initialRun = buildWorkflowExecutionStatusResponse({
             runId,
             document: request.document,
@@ -51,28 +81,93 @@ export class WorkflowExecutionService extends Context.Tag(
               request.document,
               "Queued workflow run.",
             ),
+            credits,
             status: "queued",
           });
 
-          return yield* workflowRunStore.createRun(initialRun);
+          return yield* workflowRunStore.createRun({
+            ownerUserId: userId,
+            run: initialRun,
+          });
         });
 
       const executeRun = (
         runId: string,
+        userId: string,
         request: StartWorkflowExecutionRequest,
       ) =>
         executeWorkflow({
           request,
           runId,
           ports: {
-            generateImage: vertexAi.generateImagesWithNanoBananaPro,
-            generateVideo: vertexAi.generateVideosWithVeo31,
+            generateImage: (imageRequest) =>
+              vertexAi.generateImagesWithNanoBananaPro(imageRequest).pipe(
+                Effect.tap(() =>
+                  workflowCreditsService.consumeReservedCredits({
+                    runId,
+                    userId,
+                    cost: priceImageGeneration(imageRequest),
+                  }),
+                ),
+              ),
+            generateVideo: (videoRequest) =>
+              vertexAi.generateVideosWithVeo31(videoRequest).pipe(
+                Effect.tap(() =>
+                  workflowCreditsService.consumeReservedCredits({
+                    runId,
+                    userId,
+                    cost: priceVideoGeneration(videoRequest),
+                  }),
+                ),
+              ),
             onStateChange: (state) =>
-              workflowRunStore
-                .updateRun(state)
-                .pipe(Effect.orDie, Effect.asVoid),
+              Effect.gen(function* () {
+                const credits = yield* workflowCreditsService.getRunSummary({
+                  runId,
+                  userId,
+                });
+                yield* workflowRunStore
+                  .updateRun({
+                    ...state,
+                    credits,
+                  })
+                  .pipe(Effect.orDie, Effect.asVoid);
+              }).pipe(Effect.orDie),
           },
-        });
+        }).pipe(
+          Effect.tap((state) =>
+            Effect.gen(function* () {
+              const credits = yield* workflowCreditsService.finalizeReservation(
+                {
+                  runId,
+                  userId,
+                },
+              );
+              return yield* workflowRunStore.updateRun({
+                ...state,
+                credits,
+              });
+            }),
+          ),
+          Effect.catchAll((error) =>
+            Effect.gen(function* () {
+              const credits =
+                yield* workflowCreditsService.refundRemainingCredits({
+                  runId,
+                  userId,
+                });
+              const currentRun = yield* workflowRunStore.getRun({
+                runId,
+                userId,
+              });
+              yield* workflowRunStore.updateRun({
+                ...currentRun,
+                credits,
+              });
+              return yield* Effect.fail(error);
+            }),
+          ),
+        );
 
       return WorkflowExecutionService.of({
         createRun,

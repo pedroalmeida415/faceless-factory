@@ -2,72 +2,123 @@ import "server-only";
 
 import { Context, Effect, Layer } from "effect";
 
-import { WorkflowRunNotFoundError } from "~/lib/workflow/errors";
+import {
+  WorkflowAuthorizationError,
+  WorkflowRunNotFoundError,
+} from "~/lib/workflow/errors";
 import type { WorkflowExecutionStatusResponse } from "~/lib/workflow/execution/types";
 
-const runs = new Map<string, WorkflowExecutionStatusResponse>();
+type WorkflowRunRecord = {
+  ownerUserId: string;
+  run: WorkflowExecutionStatusResponse;
+};
+
+const runs = new Map<string, WorkflowRunRecord>();
 const listenersByRunId = new Map<
   string,
   Set<(run: WorkflowExecutionStatusResponse) => void>
 >();
 
+function cloneRunRecord(runRecord: WorkflowRunRecord) {
+  return JSON.parse(JSON.stringify(runRecord)) as WorkflowRunRecord;
+}
+
 function cloneRun(run: WorkflowExecutionStatusResponse) {
-  return JSON.parse(JSON.stringify(run)) as WorkflowExecutionStatusResponse;
+  return cloneRunRecord({ ownerUserId: "", run }).run;
+}
+
+function getAuthorizedRunRecord(runId: string, userId: string) {
+  const runRecord = runs.get(runId);
+  if (!runRecord) {
+    throw new WorkflowRunNotFoundError({
+      message: `Workflow run ${runId} was not found.`,
+    });
+  }
+
+  if (runRecord.ownerUserId !== userId) {
+    throw new WorkflowAuthorizationError({
+      message: `You are not authorized to access workflow run ${runId}.`,
+    });
+  }
+
+  return runRecord;
 }
 
 export class WorkflowRunStore extends Context.Tag("WorkflowRunStore")<
   WorkflowRunStore,
   {
-    readonly createRun: (
-      run: WorkflowExecutionStatusResponse,
-    ) => Effect.Effect<WorkflowExecutionStatusResponse>;
+    readonly createRun: (params: {
+      ownerUserId: string;
+      run: WorkflowExecutionStatusResponse;
+    }) => Effect.Effect<WorkflowExecutionStatusResponse>;
+    readonly getRun: (params: {
+      runId: string;
+      userId: string;
+    }) => Effect.Effect<
+      WorkflowExecutionStatusResponse,
+      WorkflowAuthorizationError | WorkflowRunNotFoundError
+    >;
     readonly updateRun: (
       run: WorkflowExecutionStatusResponse,
-    ) => Effect.Effect<WorkflowExecutionStatusResponse>;
+    ) => Effect.Effect<
+      WorkflowExecutionStatusResponse,
+      WorkflowRunNotFoundError
+    >;
     readonly subscribe: (
       runId: string,
+      userId: string,
       listener: (run: WorkflowExecutionStatusResponse) => void,
     ) => Effect.Effect<
       {
         initialRun: WorkflowExecutionStatusResponse;
         unsubscribe: () => void;
       },
-      WorkflowRunNotFoundError
+      WorkflowAuthorizationError | WorkflowRunNotFoundError
     >;
   }
 >() {
   static readonly functions = Effect.serviceFunctions(this);
 
   static readonly Live = Layer.succeed(this, {
-    createRun: (run) =>
+    createRun: ({ ownerUserId, run }) =>
       Effect.sync(() => {
-        const nextRun = cloneRun(run);
-        runs.set(nextRun.runId, nextRun);
-        return cloneRun(nextRun);
+        const nextRunRecord = cloneRunRecord({
+          ownerUserId,
+          run,
+        });
+        runs.set(nextRunRecord.run.runId, nextRunRecord);
+        return cloneRun(nextRunRecord.run);
+      }),
+    getRun: ({ runId, userId }) =>
+      Effect.sync(() => {
+        const runRecord = getAuthorizedRunRecord(runId, userId);
+        return cloneRun(runRecord.run);
       }),
     updateRun: (run) =>
       Effect.sync(() => {
-        const nextRun = cloneRun(run);
-        runs.set(nextRun.runId, nextRun);
-        for (const listener of listenersByRunId.get(nextRun.runId) ?? []) {
-          listener(cloneRun(nextRun));
+        const existingRunRecord = runs.get(run.runId);
+        if (!existingRunRecord) {
+          throw new WorkflowRunNotFoundError({
+            message: `Workflow run ${run.runId} was not found.`,
+          });
         }
-        return cloneRun(nextRun);
-      }),
-    subscribe: (runId, listener) =>
-      Effect.gen(function* () {
-        const run = yield* Effect.gen(function* () {
-          const currentRun = runs.get(runId);
-          if (!currentRun) {
-            return yield* Effect.fail(
-              new WorkflowRunNotFoundError({
-                message: `Workflow run ${runId} was not found.`,
-              }),
-            );
-          }
 
-          return currentRun;
+        const nextRunRecord = cloneRunRecord({
+          ownerUserId: existingRunRecord.ownerUserId,
+          run,
         });
+        runs.set(nextRunRecord.run.runId, nextRunRecord);
+        for (const listener of listenersByRunId.get(nextRunRecord.run.runId) ??
+          []) {
+          listener(cloneRun(nextRunRecord.run));
+        }
+        return cloneRun(nextRunRecord.run);
+      }),
+    subscribe: (runId, userId, listener) =>
+      Effect.gen(function* () {
+        const run = yield* Effect.sync(() =>
+          cloneRun(getAuthorizedRunRecord(runId, userId).run),
+        );
 
         const nextListeners = listenersByRunId.get(runId) ?? new Set();
         nextListeners.add(listener);
