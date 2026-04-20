@@ -59,7 +59,7 @@ function PromptNode({ id, data, selected }: NodeProps<PromptNodeData>) {
   return (
     <NodeShell
       data={data}
-      icon="TXT"
+      id={id}
       output={{ id: "text", label: "Text", color: "#f59e0b" }}
       selected={selected}
     >
@@ -92,18 +92,10 @@ function AssetNode({ id, data, selected }: NodeProps<AssetNodeData>) {
   return (
     <NodeShell
       data={data}
-      icon="AST"
+      id={id}
       output={{ id: "asset", label: assetKindLabel, color: outputColor }}
       selected={selected}
     >
-      <NodeNotice>
-        {data.assets.length
-          ? `${data.assets.length} ${data.assetKind} item${data.assets.length === 1 ? "" : "s"} queued.${data.assets.length > 1 ? " Connected generators will run once per item." : ""}`
-          : data.assetKind
-            ? `This node is locked to ${data.assetKind}s. Add more of the same type to build a batch.`
-            : "Upload images or videos. The first file locks the node type, and additional files must match it."}
-      </NodeNotice>
-
       {data.assets.length ? <OutputGallery assets={data.assets} /> : null}
 
       {!data.assets.length && data.assetKind ? (
@@ -225,16 +217,12 @@ function ImageGeneratorNode({
   return (
     <NodeShell
       data={data}
-      icon="GEN"
+      id={id}
       inputs={inputs}
-      model={
-        modelOptions.find((option) => option.value === data.model)?.label ??
-        data.model
-      }
       output={{ id: "images", label: "Images", color: "#22c55e" }}
       selected={selected}
     >
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid gap-2">
         <NodeFieldCard label="Model">
           <Select
             onValueChange={(value) =>
@@ -296,12 +284,6 @@ function ImageGeneratorNode({
         Run image generation
       </ShellButton>
 
-      {data.lastPrompt ? (
-        <NodeFieldCard label="Last prompt">
-          <p>{data.lastPrompt}</p>
-        </NodeFieldCard>
-      ) : null}
-
       {data.responseText ? (
         <NodeFieldCard label="Model note">
           <p>{data.responseText}</p>
@@ -342,16 +324,12 @@ function VideoGeneratorNode({
   return (
     <NodeShell
       data={data}
-      icon="MOT"
+      id={id}
       inputs={inputs}
-      model={
-        modelOptions.find((option) => option.value === data.model)?.label ??
-        data.model
-      }
       output={{ id: "videos", label: "Videos", color: "#a78bfa" }}
       selected={selected}
     >
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid gap-2">
         <NodeFieldCard label="Model">
           <Select
             onValueChange={(value) =>
@@ -412,12 +390,6 @@ function VideoGeneratorNode({
       >
         Run video generation
       </ShellButton>
-
-      {data.lastPrompt ? (
-        <NodeFieldCard label="Last prompt">
-          <p>{data.lastPrompt}</p>
-        </NodeFieldCard>
-      ) : null}
 
       <OutputGallery assets={data.outputAssets} />
     </NodeShell>

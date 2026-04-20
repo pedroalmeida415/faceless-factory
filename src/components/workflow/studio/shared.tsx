@@ -1,15 +1,13 @@
 "use client";
 
 import Image from "next/image";
-import { type PropsWithChildren, useId } from "react";
+import { Fragment, type PropsWithChildren, useId } from "react";
 import { Handle, Position } from "reactflow";
 
-import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "~/components/ui/card";
@@ -17,22 +15,9 @@ import { cn } from "~/lib/utils";
 import type {
   WorkflowAsset,
   WorkflowNodeData,
-  WorkflowNodeStatus,
 } from "~/lib/workflow/types";
-import { formatNodeTitle, type HandleDefinition } from "./graph";
-
-function statusBadgeVariant(status: WorkflowNodeStatus) {
-  switch (status) {
-    case "running":
-      return "secondary";
-    case "success":
-      return "default";
-    case "error":
-      return "destructive";
-    default:
-      return "outline";
-  }
-}
+import { type HandleDefinition } from "./graph";
+import { useWorkflowStudioStore } from "./store";
 
 export function ShellButton(
   props: PropsWithChildren<React.ComponentProps<typeof Button>>,
@@ -199,103 +184,96 @@ export function FilePickerButton({
 export function NodeShell({
   children,
   data,
-  icon,
+  id,
   inputs = [],
   output = null,
-  model = null,
   selected = false,
 }: PropsWithChildren<{
   data: WorkflowNodeData;
-  icon: string;
+  id: string;
   inputs?: HandleDefinition[];
   output?: HandleDefinition | null;
-  model?: string | null;
   selected?: boolean;
 }>) {
-  const inputLegend = inputs.filter(
-    (input, index, list) =>
-      list.findIndex(
-        (candidate) =>
-          candidate.label === input.label && candidate.color === input.color,
-      ) === index,
-  );
+  const edges = useWorkflowStudioStore((state) => state.edges);
+  const outputConnected = output
+    ? edges.some((edge) => edge.source === id && edge.sourceHandle === output.id)
+    : false;
+  const socketTop = 64;
+  const socketGap = 32;
 
   return (
     <Card
       className={cn(
-        "relative gap-4 overflow-visible py-4",
+        "group relative gap-4 overflow-visible pb-4 pt-2",
         selected && "ring-2 ring-primary",
       )}
       size="sm"
     >
-      {inputs.map((input, index) => (
-        <Handle
-          id={input.id}
-          key={input.id}
-          position={Position.Left}
-          style={{
-            background: input.color,
-            border: "2px solid rgba(255,255,255,0.9)",
-            height: 14,
-            left: -8,
-            top: 92 + index * 30,
-            width: 14,
-          }}
-          type="target"
-        />
-      ))}
+      {inputs.map((input, index) => {
+        const top = socketTop + index * socketGap;
+        const isConnected = edges.some(
+          (edge) => edge.target === id && edge.targetHandle === input.id,
+        );
+
+        return (
+          <Fragment key={input.id}>
+            <div
+              className="pointer-events-none absolute right-full z-10 -translate-y-4 whitespace-nowrap pr-3 text-[9px] opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+              style={{ color: input.color, top }}
+            >
+              <span>{input.label}</span>
+            </div>
+            <Handle
+              id={input.id}
+              position={Position.Left}
+              style={{
+                background: isConnected ? input.color : "transparent",
+                border: "2px solid rgba(255,255,255,0.9)",
+                boxShadow: isConnected
+                  ? undefined
+                  : `inset 0 0 0 2px ${input.color}`,
+                height: 14,
+                left: -8,
+                top,
+                width: 14,
+              }}
+              type="target"
+            />
+          </Fragment>
+        );
+      })}
       {output ? (
         <Handle
           id={output.id}
           position={Position.Right}
           style={{
-            background: output.color,
+            background: outputConnected ? output.color : "transparent",
             border: "2px solid rgba(255,255,255,0.9)",
+            boxShadow: outputConnected
+              ? undefined
+              : `inset 0 0 0 2px ${output.color}`,
             height: 14,
             right: -8,
-            top: "50%",
-            transform: "translateY(-50%)",
+            top: socketTop,
             width: 14,
           }}
           type="source"
         />
       ) : null}
 
-      <CardHeader className="gap-3">
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-[0.28em]">
-          <span>{formatNodeTitle(data.kind)}</span>
-          {selected ? <Badge variant="secondary">selected</Badge> : null}
-          <Badge variant={statusBadgeVariant(data.status)}>{data.status}</Badge>
-        </div>
+      <CardHeader>
         <div className="flex items-start justify-between gap-4">
-          <div className="space-y-1">
-            <CardTitle className="text-lg leading-tight">
-              {data.label}
-            </CardTitle>
-            {model ? (
-              <CardDescription className="text-xs">{model}</CardDescription>
-            ) : null}
-          </div>
-          <Badge variant="outline">{icon}</Badge>
+          <CardTitle className="text-lg leading-tight">{data.label}</CardTitle>
+          {data.status === "running" ? (
+            <div
+              aria-label="Running"
+              className="mt-1 h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-muted border-t-foreground"
+              role="status"
+            />
+          ) : null}
         </div>
       </CardHeader>
-
-      {inputLegend.length ? (
-        <CardContent className="space-y-2">
-          {inputLegend.map((input) => (
-            <div
-              className="flex items-center gap-2 text-[11px] text-muted-foreground uppercase tracking-[0.22em]"
-              key={input.id}
-            >
-              <span
-                className="inline-block h-2 w-2 rounded-full"
-                style={{ background: input.color }}
-              />
-              <span>{input.label}</span>
-            </div>
-          ))}
-        </CardContent>
-      ) : null}
 
       <CardContent className="space-y-3">{children}</CardContent>
 

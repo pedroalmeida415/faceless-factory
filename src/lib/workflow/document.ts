@@ -138,7 +138,7 @@ function makeWorkflowNode(
       return {
         id,
         kind,
-        label: "Gemini 3 Pro Image",
+        label,
         position,
         ...createDefaultImageGeneratorSettings(),
         ...createWorkflowGeneratorResult(),
@@ -147,7 +147,7 @@ function makeWorkflowNode(
       return {
         id,
         kind,
-        label: "Veo 3.1",
+        label,
         position,
         ...createDefaultVideoGeneratorSettings(),
         ...createWorkflowGeneratorResult(),
