@@ -6,6 +6,7 @@ import { Context, Effect, Layer } from "effect";
 import type {
   WorkflowAuthorizationError,
   WorkflowCreditsError,
+  WorkflowInfrastructureError,
   WorkflowRunNotFoundError,
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
@@ -38,7 +39,9 @@ export class WorkflowExecutionService extends Context.Tag(
       request: StartWorkflowExecutionRequest,
     ) => Effect.Effect<
       WorkflowExecutionStatusResponse,
-      WorkflowCreditsError | WorkflowValidationError
+      | WorkflowCreditsError
+      | WorkflowInfrastructureError
+      | WorkflowValidationError
     >;
     readonly executeRun: (
       runId: string,
@@ -49,6 +52,7 @@ export class WorkflowExecutionService extends Context.Tag(
       | WorkflowAuthorizationError
       | WorkflowCreditsError
       | WorkflowExecutionPortError
+      | WorkflowInfrastructureError
       | WorkflowRunNotFoundError
     >;
   }

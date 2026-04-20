@@ -6,6 +6,7 @@ import type {
   WorkflowCreditsError,
   WorkflowExecutionError,
   WorkflowGenerationError,
+  WorkflowInfrastructureError,
   WorkflowStorageError,
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
@@ -70,6 +71,7 @@ export type WorkflowExecutionPortError =
   | WorkflowConfigError
   | WorkflowExecutionError
   | WorkflowGenerationError
+  | WorkflowInfrastructureError
   | WorkflowStorageError
   | WorkflowValidationError;
 

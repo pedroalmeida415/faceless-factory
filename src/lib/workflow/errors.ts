@@ -28,6 +28,13 @@ export class WorkflowRequestError extends Data.TaggedError(
   readonly cause?: unknown;
 }> {}
 
+export class WorkflowInfrastructureError extends Data.TaggedError(
+  "WorkflowInfrastructureError",
+)<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
 export class WorkflowStorageError extends Data.TaggedError(
   "WorkflowStorageError",
 )<{
