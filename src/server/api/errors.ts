@@ -2,10 +2,13 @@ import { TRPCError } from "@trpc/server";
 
 import {
   getErrorMessage,
+  WorkflowAuthorizationError,
   WorkflowConfigError,
+  WorkflowCreditsError,
   WorkflowExecutionError,
   WorkflowGenerationError,
   WorkflowRequestError,
+  WorkflowRunNotFoundError,
   WorkflowStorageError,
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
@@ -17,10 +20,25 @@ export function toTRPCError(error: unknown) {
 
   if (
     error instanceof WorkflowValidationError ||
-    error instanceof WorkflowRequestError
+    error instanceof WorkflowRequestError ||
+    error instanceof WorkflowCreditsError
   ) {
     return new TRPCError({
       code: "BAD_REQUEST",
+      message: error.message,
+    });
+  }
+
+  if (error instanceof WorkflowRunNotFoundError) {
+    return new TRPCError({
+      code: "NOT_FOUND",
+      message: error.message,
+    });
+  }
+
+  if (error instanceof WorkflowAuthorizationError) {
+    return new TRPCError({
+      code: "UNAUTHORIZED",
       message: error.message,
     });
   }

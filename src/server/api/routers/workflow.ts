@@ -2,7 +2,12 @@ import { Effect } from "effect";
 import { z } from "zod";
 
 import { ServerRuntime } from "~/effect/server/runtime";
+import {
+  deserializeStoredWorkflowDocument,
+  type WorkflowDocument,
+} from "~/lib/workflow/document";
 import { WorkflowValidationError } from "~/lib/workflow/errors";
+import type { StartWorkflowExecutionRequest } from "~/lib/workflow/execution/types";
 import {
   IMAGE_ASPECT_RATIOS,
   IMAGE_MODEL_IDS,
@@ -13,6 +18,7 @@ import {
 } from "~/lib/workflow/types";
 import { toTRPCError } from "~/server/api/errors";
 import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
+import { WorkflowExecutionService } from "~/server/workflow/execution-service";
 import { WorkflowStorage } from "~/server/workflow/storage";
 import { VertexAi } from "~/server/workflow/vertex";
 
@@ -42,7 +48,73 @@ const videoDurationSchema = z.custom<(typeof VIDEO_DURATIONS)[number]>(
   "Invalid video duration.",
 );
 
+const workflowDocumentSchema = z
+  .custom<WorkflowDocument>(
+    (value) => Boolean(deserializeStoredWorkflowDocument(value)),
+    "Invalid workflow document.",
+  )
+  .transform(
+    (value) =>
+      deserializeStoredWorkflowDocument(value) as NonNullable<
+        ReturnType<typeof deserializeStoredWorkflowDocument>
+      >,
+  );
+
+const workflowExecutionTargetSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("selected-or-all"),
+  }),
+  z.object({
+    type: z.literal("node"),
+    nodeId: z.string(),
+  }),
+]);
+
+const workflowExecutionRequestSchema = z.object({
+  document: workflowDocumentSchema,
+  target: workflowExecutionTargetSchema,
+  clientRunId: z.string().nullable().optional(),
+  documentVersion: z.number().nullable().optional(),
+  idempotencyKey: z.string().nullable().optional(),
+  selection: z
+    .object({
+      nodeIds: z.array(z.string()),
+    })
+    .nullable()
+    .optional(),
+});
+
 export const workflowRouter = createTRPCRouter({
+  startExecution: publicProcedure
+    .input(workflowExecutionRequestSchema)
+    .mutation(async ({ input }) => {
+      const request = input as StartWorkflowExecutionRequest;
+
+      return ServerRuntime.runPromise(
+        Effect.gen(function* () {
+          const workflowExecutionService = yield* WorkflowExecutionService;
+          const run = yield* workflowExecutionService.createRun(request);
+
+          void ServerRuntime.runPromise(
+            Effect.gen(function* () {
+              const backgroundWorkflowExecutionService =
+                yield* WorkflowExecutionService;
+              yield* backgroundWorkflowExecutionService.executeRun(
+                run.runId,
+                request,
+              );
+            }),
+          ).catch((error) => {
+            console.error("Workflow execution failed", error);
+          });
+
+          return run;
+        }),
+      ).catch((error) => {
+        throw toTRPCError(error);
+      });
+    }),
+
   generateImage: publicProcedure
     .input(
       z.object({

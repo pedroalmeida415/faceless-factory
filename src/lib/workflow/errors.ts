@@ -35,6 +35,27 @@ export class WorkflowStorageError extends Data.TaggedError(
   readonly cause?: unknown;
 }> {}
 
+export class WorkflowRunNotFoundError extends Data.TaggedError(
+  "WorkflowRunNotFoundError",
+)<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+export class WorkflowAuthorizationError extends Data.TaggedError(
+  "WorkflowAuthorizationError",
+)<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+export class WorkflowCreditsError extends Data.TaggedError(
+  "WorkflowCreditsError",
+)<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
 export class WorkflowValidationError extends Data.TaggedError(
   "WorkflowValidationError",
 )<{
