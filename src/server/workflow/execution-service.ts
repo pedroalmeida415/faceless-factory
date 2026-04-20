@@ -1,14 +1,13 @@
-import "server-only";
-
 import { randomUUID } from "node:crypto";
 
 import { Context, Effect, Layer } from "effect";
-import type {
-  WorkflowAuthorizationError,
-  WorkflowCreditsError,
+import {
+  getErrorMessage,
+  type WorkflowAuthorizationError,
+  type WorkflowCreditsError,
   WorkflowInfrastructureError,
-  WorkflowRunNotFoundError,
-  WorkflowValidationError,
+  type WorkflowRunNotFoundError,
+  type WorkflowValidationError,
 } from "~/lib/workflow/errors";
 import { executeWorkflow } from "~/lib/workflow/execution/core";
 import {
@@ -26,6 +25,7 @@ import {
   priceVideoGeneration,
   quoteWorkflowExecution,
 } from "~/server/workflow/pricing";
+import { enqueueWorkflowExecutionJob } from "~/server/workflow/queue";
 import { WorkflowRunStore } from "~/server/workflow/run-store";
 import { VertexAi } from "~/server/workflow/vertex";
 
@@ -34,7 +34,7 @@ export class WorkflowExecutionService extends Context.Tag(
 )<
   WorkflowExecutionService,
   {
-    readonly createRun: (
+    readonly startRun: (
       userId: string,
       request: StartWorkflowExecutionRequest,
     ) => Effect.Effect<
@@ -42,6 +42,17 @@ export class WorkflowExecutionService extends Context.Tag(
       | WorkflowCreditsError
       | WorkflowInfrastructureError
       | WorkflowValidationError
+    >;
+    readonly failRun: (params: {
+      message: string;
+      runId: string;
+      userId: string;
+    }) => Effect.Effect<
+      WorkflowExecutionStatusResponse,
+      | WorkflowAuthorizationError
+      | WorkflowCreditsError
+      | WorkflowInfrastructureError
+      | WorkflowRunNotFoundError
     >;
     readonly executeRun: (
       runId: string,
@@ -66,7 +77,45 @@ export class WorkflowExecutionService extends Context.Tag(
       const workflowCreditsService = yield* WorkflowCreditsService;
       const workflowRunStore = yield* WorkflowRunStore;
 
-      const createRun = (
+      const failRun = (params: {
+        message: string;
+        runId: string;
+        userId: string;
+      }) =>
+        Effect.gen(function* () {
+          const currentRun = yield* workflowRunStore.getRun({
+            runId: params.runId,
+            userId: params.userId,
+          });
+
+          if (
+            currentRun.status === "error" ||
+            currentRun.status === "success"
+          ) {
+            return currentRun;
+          }
+
+          const credits = yield* workflowCreditsService.refundRemainingCredits({
+            runId: params.runId,
+            userId: params.userId,
+          });
+
+          return yield* workflowRunStore.updateRun({
+            ...currentRun,
+            activity: params.message,
+            credits,
+            runtime: {
+              ...currentRun.runtime,
+              activity: params.message,
+              error: params.message,
+              finishedAt:
+                currentRun.runtime.finishedAt ?? new Date().toISOString(),
+            },
+            status: "error",
+          });
+        });
+
+      const startRun = (
         userId: string,
         request: StartWorkflowExecutionRequest,
       ) =>
@@ -89,10 +138,43 @@ export class WorkflowExecutionService extends Context.Tag(
             status: "queued",
           });
 
-          return yield* workflowRunStore.createRun({
+          const run = yield* workflowRunStore.createRun({
             ownerUserId: userId,
             run: initialRun,
           });
+
+          yield* Effect.tryPromise({
+            try: () =>
+              enqueueWorkflowExecutionJob({
+                request,
+                runId,
+                userId,
+              }),
+            catch: (cause) =>
+              new WorkflowInfrastructureError({
+                message: getErrorMessage(cause),
+                cause,
+              }),
+          }).pipe(
+            Effect.catchAll((error) =>
+              failRun({
+                message: "Failed to queue workflow run.",
+                runId,
+                userId,
+              }).pipe(
+                Effect.catchAll((cleanupError) => {
+                  console.error(
+                    "Failed to mark workflow run as errored after queue failure",
+                    cleanupError,
+                  );
+                  return Effect.void;
+                }),
+                Effect.zipRight(Effect.fail(error)),
+              ),
+            ),
+          );
+
+          return run;
         });
 
       const executeRun = (
@@ -174,8 +256,9 @@ export class WorkflowExecutionService extends Context.Tag(
         );
 
       return WorkflowExecutionService.of({
-        createRun,
         executeRun,
+        failRun,
+        startRun,
       });
     }),
   );

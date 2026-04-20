@@ -112,26 +112,7 @@ export const workflowRouter = createTRPCRouter({
       return ServerRuntime.runPromise(
         Effect.gen(function* () {
           const workflowExecutionService = yield* WorkflowExecutionService;
-          const run = yield* workflowExecutionService.createRun(
-            userId,
-            request,
-          );
-
-          void ServerRuntime.runPromise(
-            Effect.gen(function* () {
-              const backgroundWorkflowExecutionService =
-                yield* WorkflowExecutionService;
-              yield* backgroundWorkflowExecutionService.executeRun(
-                run.runId,
-                userId,
-                request,
-              );
-            }),
-          ).catch((error) => {
-            console.error("Workflow execution failed", error);
-          });
-
-          return run;
+          return yield* workflowExecutionService.startRun(userId, request);
         }),
       ).catch((error) => {
         throw toTRPCError(error);

@@ -1,5 +1,3 @@
-import "server-only";
-
 import { createClient } from "redis";
 
 import { env } from "~/env";
