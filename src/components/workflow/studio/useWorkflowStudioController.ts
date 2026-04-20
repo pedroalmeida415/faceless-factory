@@ -3,7 +3,6 @@
 import { useCallback, useMemo } from "react";
 
 import {
-  runSelectedOrAll as runAllWorkflowNodes,
   runNode as runWorkflowNode,
   uploadFilesToNode as uploadWorkflowFilesToNode,
 } from "~/components/workflow/studio/runner";
@@ -60,10 +59,6 @@ export function useWorkflowStudioController() {
     await ClientRuntime.runPromise(runWorkflowNode(nodeId));
   }, []);
 
-  const runSelectedOrAll = useCallback(async () => {
-    await ClientRuntime.runPromise(runAllWorkflowNodes());
-  }, []);
-
   const contextValue = useMemo<StudioContextValue>(
     () => ({
       setPrompt,
@@ -97,6 +92,5 @@ export function useWorkflowStudioController() {
 
   return {
     contextValue,
-    runSelectedOrAll,
   };
 }

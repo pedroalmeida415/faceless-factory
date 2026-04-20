@@ -4,8 +4,6 @@ import {
   RiArrowGoBackLine,
   RiArrowGoForwardLine,
   RiFullscreenFill,
-  RiRefreshLine,
-  RiSparklingLine,
 } from "@remixicon/react";
 import { useCallback, useEffect, useRef } from "react";
 import {
@@ -16,6 +14,7 @@ import {
   useReactFlow,
 } from "reactflow";
 import { Card, CardContent } from "~/components/ui/card";
+import { WORKFLOW_GRID_STEP } from "~/lib/workflow/document";
 import { StudioContext } from "./studio/context";
 import { isEditableTarget } from "./studio/graph";
 import { nodeTypes } from "./studio/nodes";
@@ -29,15 +28,11 @@ import { useWorkflowStudioController } from "./studio/useWorkflowStudioControlle
 
 function WorkflowCanvasControls({
   onRedo,
-  onReset,
-  onRun,
   onUndo,
   canRedo,
   canUndo,
 }: {
   onRedo: () => void;
-  onReset: () => void;
-  onRun: () => void;
   onUndo: () => void;
   canRedo: boolean;
   canUndo: boolean;
@@ -78,15 +73,6 @@ function WorkflowCanvasControls({
             <RiFullscreenFill className="size-4" />
           </ShellButton>
           <ShellButton
-            aria-label="Run generators"
-            className="size-9 rounded-full border-border/60 bg-background/70 p-0 text-foreground"
-            onClick={onRun}
-            size="icon"
-            title="Run generators"
-          >
-            <RiSparklingLine className="size-4" />
-          </ShellButton>
-          <ShellButton
             aria-label="Undo"
             className="size-9 rounded-full border-border/60 bg-background/70 p-0 text-foreground"
             disabled={!canUndo}
@@ -105,15 +91,6 @@ function WorkflowCanvasControls({
             title="Redo"
           >
             <RiArrowGoForwardLine className="size-4" />
-          </ShellButton>
-          <ShellButton
-            aria-label="Reset graph"
-            className="size-9 rounded-full border-border/60 bg-background/70 p-0 text-foreground"
-            onClick={onReset}
-            size="icon"
-            title="Reset graph"
-          >
-            <RiRefreshLine className="size-4" />
           </ShellButton>
         </CardContent>
       </Card>
@@ -139,12 +116,11 @@ export function WorkflowStudio() {
   const deleteSelection = useWorkflowStudioStore(
     (state) => state.deleteSelection,
   );
-  const resetGraph = useWorkflowStudioStore((state) => state.resetGraph);
   const undo = useWorkflowStudioStore((state) => state.undo);
   const redo = useWorkflowStudioStore((state) => state.redo);
   const canUndo = useWorkflowStudioStore((state) => state.canUndo);
   const canRedo = useWorkflowStudioStore((state) => state.canRedo);
-  const { contextValue, runSelectedOrAll } = useWorkflowStudioController();
+  const { contextValue } = useWorkflowStudioController();
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -187,11 +163,6 @@ export function WorkflowStudio() {
     [addNode],
   );
 
-  const handleReset = useCallback(() => {
-    resetGraph();
-    requestAnimationFrame(() => flowRef.current?.fitView({ padding: 0.18 }));
-  }, [resetGraph]);
-
   return (
     <StudioContext.Provider value={contextValue}>
       <div className="relative h-screen p-2">
@@ -224,14 +195,17 @@ export function WorkflowStudio() {
               }}
               onNodesChange={applyNodeChanges}
               proOptions={{ hideAttribution: true }}
+              snapGrid={[WORKFLOW_GRID_STEP, WORKFLOW_GRID_STEP]}
+              snapToGrid
             >
-              <Background color="rgba(148, 163, 184, 0.16)" gap={22} />
+              <Background
+                color="rgba(148, 163, 184, 0.16)"
+                gap={WORKFLOW_GRID_STEP}
+              />
               <WorkflowCanvasControls
                 canRedo={canRedo}
                 canUndo={canUndo}
                 onRedo={redo}
-                onReset={handleReset}
-                onRun={() => void runSelectedOrAll()}
                 onUndo={undo}
               />
             </ReactFlow>

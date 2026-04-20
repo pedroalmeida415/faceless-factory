@@ -4,10 +4,7 @@ import {
   normalizeImageGeneratorSettings,
   normalizeVideoGeneratorSettings,
 } from "~/lib/workflow/generator-models";
-import {
-  formatNodeTitle,
-  getNodeOutputHandleId,
-} from "~/lib/workflow/node-definitions";
+import { formatNodeTitle } from "~/lib/workflow/node-definitions";
 import type {
   AssetNodeFields,
   ImageGeneratorSettings,
@@ -20,6 +17,7 @@ import type {
 
 export const WORKFLOW_DOCUMENT_VERSION = 4;
 export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v4";
+export const WORKFLOW_GRID_STEP = 20;
 
 export type WorkflowPosition = {
   x: number;
@@ -75,13 +73,30 @@ export type WorkflowDocument = {
   edges: WorkflowDocumentEdge[];
 };
 
+export function createEmptyWorkflowDocument(): WorkflowDocument {
+  return {
+    version: WORKFLOW_DOCUMENT_VERSION,
+    nodes: [],
+    edges: [],
+  };
+}
+
 function nextNodePosition(index: number): WorkflowPosition {
   const column = index % 3;
   const row = Math.floor(index / 3);
 
-  return {
+  return snapWorkflowPositionToGrid({
     x: 80 + column * 360,
     y: 80 + row * 290,
+  });
+}
+
+export function snapWorkflowPositionToGrid(
+  position: WorkflowPosition,
+): WorkflowPosition {
+  return {
+    x: Math.round(position.x / WORKFLOW_GRID_STEP) * WORKFLOW_GRID_STEP,
+    y: Math.round(position.y / WORKFLOW_GRID_STEP) * WORKFLOW_GRID_STEP,
   };
 }
 
@@ -123,7 +138,7 @@ function makeWorkflowNode(
       return {
         id,
         kind,
-        label: "Gemini 3 Pro Image",
+        label,
         position,
         ...createDefaultImageGeneratorSettings(),
         ...createWorkflowGeneratorResult(),
@@ -132,7 +147,7 @@ function makeWorkflowNode(
       return {
         id,
         kind,
-        label: "Veo 3.1",
+        label,
         position,
         ...createDefaultVideoGeneratorSettings(),
         ...createWorkflowGeneratorResult(),
@@ -237,7 +252,7 @@ function normalizeWorkflowNode(
 
   const id = asString(value.id, createWorkflowNodeId());
   const position = isWorkflowPosition(value.position)
-    ? value.position
+    ? snapWorkflowPositionToGrid(value.position)
     : nextNodePosition(index);
 
   switch (value.kind) {
@@ -398,43 +413,10 @@ export function createWorkflowNode(kind: WorkflowNodeKind, index: number) {
   );
 }
 
-export function createDefaultWorkflowDocument(): WorkflowDocument {
-  const prompt = createWorkflowNode("prompt", 0);
-  const imageGenerator = createWorkflowNode("imageGenerator", 1);
-  const asset = createWorkflowNode("asset", 2);
-  const videoGenerator = createWorkflowNode("videoGenerator", 3);
-
-  prompt.position = { x: 70, y: 70 };
-  imageGenerator.position = { x: 470, y: 70 };
-  asset.position = { x: 70, y: 350 };
-  videoGenerator.position = { x: 470, y: 380 };
-
-  return {
-    version: WORKFLOW_DOCUMENT_VERSION,
-    nodes: [prompt, imageGenerator, asset, videoGenerator],
-    edges: [
-      {
-        id: createWorkflowNodeId(),
-        source: prompt.id,
-        sourceHandle: getNodeOutputHandleId(prompt.kind),
-        target: imageGenerator.id,
-        targetHandle: "prompt",
-      },
-      {
-        id: createWorkflowNodeId(),
-        source: prompt.id,
-        sourceHandle: getNodeOutputHandleId(prompt.kind),
-        target: videoGenerator.id,
-        targetHandle: "prompt",
-      },
-    ],
-  };
-}
-
 export function deserializeStoredWorkflowDocument(raw: unknown) {
   if (isWorkflowDocument(raw)) {
     const normalized = normalizeWorkflowDocument(raw);
-    return normalized.nodes.length ? normalized : null;
+    return normalized;
   }
 
   return null;

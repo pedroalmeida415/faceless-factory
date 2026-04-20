@@ -7,7 +7,7 @@ import {
 } from "reactflow";
 
 import {
-  createDefaultWorkflowDocument,
+  createEmptyWorkflowDocument,
   createWorkflowNode,
   createWorkflowNodeId,
   type WorkflowDocument,
@@ -153,7 +153,7 @@ function updateDocumentFromCanvasEdges(nextCanvasEdges: WorkflowCanvasEdge[]): {
 
 export const WorkflowEngine = {
   createInitialState(
-    document = createDefaultWorkflowDocument(),
+    document = createEmptyWorkflowDocument(),
     activity = DEFAULT_WORKFLOW_ACTIVITY,
   ): WorkflowEngineState {
     const editor = createWorkflowEditorState();
@@ -330,15 +330,6 @@ export const WorkflowEngine = {
       selectedNodeIds.size,
       edgeIdsToRemove.size,
     );
-    return nextState;
-  },
-
-  resetGraph() {
-    const nextState = this.createInitialState(
-      createDefaultWorkflowDocument(),
-      "Workflow reset to the starter graph.",
-    );
-
     return nextState;
   },
 };
