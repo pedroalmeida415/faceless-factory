@@ -138,10 +138,30 @@ export class WorkflowExecutionService extends Context.Tag(
             status: "queued",
           });
 
-          const run = yield* workflowRunStore.createRun({
-            ownerUserId: userId,
-            run: initialRun,
-          });
+          const run = yield* workflowRunStore
+            .createRun({
+              ownerUserId: userId,
+              run: initialRun,
+            })
+            .pipe(
+              Effect.catchAll((error) =>
+                workflowCreditsService
+                  .refundRemainingCredits({
+                    runId,
+                    userId,
+                  })
+                  .pipe(
+                    Effect.catchAll((cleanupError) => {
+                      console.error(
+                        "Failed to refund credits after run creation failure",
+                        cleanupError,
+                      );
+                      return Effect.void;
+                    }),
+                    Effect.zipRight(Effect.fail(error)),
+                  ),
+              ),
+            );
 
           yield* Effect.tryPromise({
             try: () =>
