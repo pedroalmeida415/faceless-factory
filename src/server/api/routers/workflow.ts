@@ -2,7 +2,15 @@ import { Effect } from "effect";
 import { z } from "zod";
 
 import { ServerRuntime } from "~/effect/server/runtime";
+import {
+  deserializeStoredWorkflowDocument,
+  type WorkflowDocument,
+} from "~/lib/workflow/document";
 import { WorkflowValidationError } from "~/lib/workflow/errors";
+import type {
+  StartWorkflowExecutionRequest,
+  WorkflowExecutionStatusResponse,
+} from "~/lib/workflow/execution/types";
 import {
   IMAGE_ASPECT_RATIOS,
   IMAGE_MODEL_IDS,
@@ -12,7 +20,14 @@ import {
   VIDEO_RESOLUTIONS,
 } from "~/lib/workflow/types";
 import { toTRPCError } from "~/server/api/errors";
-import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
+import {
+  createTRPCRouter,
+  protectedProcedure,
+  publicProcedure,
+} from "~/server/api/trpc";
+import { WorkflowCreditsService } from "~/server/workflow/credits";
+import { WorkflowExecutionService } from "~/server/workflow/execution-service";
+import { WorkflowRunStore } from "~/server/workflow/run-store";
 import { WorkflowStorage } from "~/server/workflow/storage";
 import { VertexAi } from "~/server/workflow/vertex";
 
@@ -42,7 +57,143 @@ const videoDurationSchema = z.custom<(typeof VIDEO_DURATIONS)[number]>(
   "Invalid video duration.",
 );
 
+const workflowDocumentSchema = z
+  .custom<WorkflowDocument>(
+    (value) => Boolean(deserializeStoredWorkflowDocument(value)),
+    "Invalid workflow document.",
+  )
+  .transform(
+    (value) =>
+      deserializeStoredWorkflowDocument(value) as NonNullable<
+        ReturnType<typeof deserializeStoredWorkflowDocument>
+      >,
+  );
+
+const workflowExecutionTargetSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("selected-or-all"),
+  }),
+  z.object({
+    type: z.literal("node"),
+    nodeId: z.string(),
+  }),
+]);
+
+const workflowExecutionRequestSchema = z.object({
+  document: workflowDocumentSchema,
+  target: workflowExecutionTargetSchema,
+  clientRunId: z.string().nullable().optional(),
+  documentVersion: z.number().nullable().optional(),
+  idempotencyKey: z.string().nullable().optional(),
+  selection: z
+    .object({
+      nodeIds: z.array(z.string()),
+    })
+    .nullable()
+    .optional(),
+});
+
+const workflowExecutionEventsSchema = z.object({
+  lastEventId: z.string().nullish(),
+  runId: z.string(),
+});
+
+function isTerminalStatus(status: "queued" | "running" | "success" | "error") {
+  return status === "success" || status === "error";
+}
+
 export const workflowRouter = createTRPCRouter({
+  startExecution: protectedProcedure
+    .input(workflowExecutionRequestSchema)
+    .mutation(async ({ ctx, input }) => {
+      const request = input as StartWorkflowExecutionRequest;
+      const userId = ctx.session.user.id;
+
+      return ServerRuntime.runPromise(
+        Effect.gen(function* () {
+          const workflowExecutionService = yield* WorkflowExecutionService;
+          return yield* workflowExecutionService.startRun(userId, request);
+        }),
+      ).catch((error) => {
+        throw toTRPCError(error);
+      });
+    }),
+
+  executionEvents: protectedProcedure
+    .input(workflowExecutionEventsSchema)
+    .subscription(async function* ({ ctx, input, signal }) {
+      const pendingRuns: WorkflowExecutionStatusResponse[] = [];
+      let resolveNextRun: (() => void) | undefined;
+
+      const subscription = await ServerRuntime.runPromise(
+        Effect.gen(function* () {
+          const workflowRunStore = yield* WorkflowRunStore;
+          return yield* workflowRunStore.subscribe(
+            input.runId,
+            ctx.session.user.id,
+            (run) => {
+              pendingRuns.push(run);
+              resolveNextRun?.();
+            },
+          );
+        }),
+      ).catch((error) => {
+        throw toTRPCError(error);
+      });
+
+      try {
+        yield subscription.initialRun;
+
+        if (isTerminalStatus(subscription.initialRun.status)) {
+          return;
+        }
+
+        while (!signal?.aborted) {
+          const nextRun = pendingRuns.shift();
+          if (nextRun) {
+            yield nextRun;
+
+            if (isTerminalStatus(nextRun.status)) {
+              return;
+            }
+
+            continue;
+          }
+
+          await new Promise<void>((resolve) => {
+            const abortHandler = () => {
+              signal?.removeEventListener("abort", abortHandler);
+              resolveNextRun = undefined;
+              resolve();
+            };
+
+            resolveNextRun = () => {
+              signal?.removeEventListener("abort", abortHandler);
+              resolveNextRun = undefined;
+              resolve();
+            };
+
+            signal?.addEventListener("abort", abortHandler, { once: true });
+          });
+        }
+      } finally {
+        subscription.unsubscribe();
+      }
+    }),
+
+  getCredits: protectedProcedure.query(async ({ ctx }) =>
+    ServerRuntime.runPromise(
+      Effect.gen(function* () {
+        const workflowCreditsService = yield* WorkflowCreditsService;
+        return yield* workflowCreditsService.getBalanceSummary(
+          ctx.session.user.id,
+        );
+      }),
+    ).catch((error) => {
+      throw toTRPCError(error);
+    }),
+  ),
+
   generateImage: publicProcedure
     .input(
       z.object({

@@ -112,6 +112,7 @@ type VideoGeneratorModeDefinition = {
 type ImageGeneratorModelDefinition = {
   id: ImageGeneratorModelId;
   label: string;
+  creditCost: number;
   defaultMode: string;
   modes: readonly ImageGeneratorModeDefinition[];
 };
@@ -119,6 +120,7 @@ type ImageGeneratorModelDefinition = {
 type VideoGeneratorModelDefinition = {
   id: VideoGeneratorModelId;
   label: string;
+  creditCost: number;
   defaultMode: string;
   modes: readonly VideoGeneratorModeDefinition[];
 };
@@ -178,6 +180,7 @@ const IMAGE_GENERATOR_MODELS: Record<
   [NANO_BANANA_PRO_MODEL_ID]: {
     id: NANO_BANANA_PRO_MODEL_ID,
     label: "Gemini 3 Pro Image (Nano Banana)",
+    creditCost: 10,
     defaultMode: "default",
     modes: [
       {
@@ -234,6 +237,7 @@ const VIDEO_GENERATOR_MODELS: Record<
   [VEO_31_MODEL_ID]: {
     id: VEO_31_MODEL_ID,
     label: "Veo 3.1",
+    creditCost: 40,
     defaultMode: "default",
     modes: [
       {
@@ -470,6 +474,7 @@ function normalizeVideoGeneratorConfig(
 
 export function getImageGeneratorModelOptions() {
   return IMAGE_MODEL_IDS.map((model) => ({
+    creditCost: getImageGeneratorModelDefinition(model).creditCost,
     label: getImageGeneratorModelDefinition(model).label,
     value: model,
   }));
@@ -477,9 +482,18 @@ export function getImageGeneratorModelOptions() {
 
 export function getVideoGeneratorModelOptions() {
   return VIDEO_MODEL_IDS.map((model) => ({
+    creditCost: getVideoGeneratorModelDefinition(model).creditCost,
     label: getVideoGeneratorModelDefinition(model).label,
     value: model,
   }));
+}
+
+export function getImageGeneratorModelCreditCost(model: ImageGeneratorModelId) {
+  return getImageGeneratorModelDefinition(model).creditCost;
+}
+
+export function getVideoGeneratorModelCreditCost(model: VideoGeneratorModelId) {
+  return getVideoGeneratorModelDefinition(model).creditCost;
 }
 
 export function getImageGeneratorModeOptions(model: ImageGeneratorModelId) {

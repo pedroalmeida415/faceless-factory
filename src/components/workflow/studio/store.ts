@@ -11,6 +11,11 @@ import {
   type WorkflowDocumentNode,
 } from "~/lib/workflow/document";
 import { getErrorMessage } from "~/lib/workflow/errors";
+import { toWorkflowStudioRuntimeState } from "~/lib/workflow/execution/runtime-state";
+import type {
+  WorkflowExecutionRuntimeState,
+  WorkflowExecutionStatusResponse,
+} from "~/lib/workflow/execution/types";
 import {
   ImageGeneratorService,
   PromptNodeService,
@@ -210,6 +215,10 @@ type WorkflowStudioState = {
   document: WorkflowDocument;
   editor: WorkflowEditorState;
   runtime: WorkflowRuntimeState;
+  activeRunId: string | null;
+  isStreamingExecutionStatus: boolean;
+  lastExecutionFinishedAt: string | null;
+  lastServerRuntime: WorkflowExecutionRuntimeState | null;
   nodes: WorkflowCanvasNode[];
   edges: WorkflowCanvasEdge[];
   history: WorkflowHistoryState;
@@ -218,7 +227,13 @@ type WorkflowStudioState = {
   canRedo: boolean;
   ready: boolean;
   hydrate: () => void;
+  applyServerExecutionState: (
+    executionState: WorkflowExecutionStatusResponse,
+  ) => void;
+  clearActiveRunId: () => void;
   setActivity: (activity: string) => void;
+  setActiveRunId: (runId: string) => void;
+  setExecutionStreaming: (isStreaming: boolean) => void;
   setNodeRuntimeState: (
     nodeId: string,
     status: WorkflowNodeStatus,
@@ -265,6 +280,10 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     document: initialSnapshot.document,
     editor: initialSnapshot.editor,
     runtime: initialSnapshot.runtime,
+    activeRunId: null,
+    isStreamingExecutionStatus: false,
+    lastExecutionFinishedAt: null,
+    lastServerRuntime: null,
     nodes: initialCanvas.nodes,
     edges: initialCanvas.edges,
     history: createHistoryState(),
@@ -283,9 +302,17 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           );
 
           applySnapshotToState(state, nextSnapshot);
+          state.activeRunId = null;
+          state.isStreamingExecutionStatus = false;
+          state.lastExecutionFinishedAt = null;
+          state.lastServerRuntime = null;
           resetHistory(state);
           state.ready = true;
         } catch (error) {
+          state.activeRunId = null;
+          state.isStreamingExecutionStatus = false;
+          state.lastExecutionFinishedAt = null;
+          state.lastServerRuntime = null;
           applySnapshotToState(state, WorkflowEngine.createInitialState());
           resetHistory(state);
           state.ready = true;
@@ -294,9 +321,56 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       });
     },
 
+    applyServerExecutionState: (executionState) => {
+      set((state) => {
+        const currentSnapshot = snapshotFromState(state);
+
+        runSnapshotMutation(
+          state,
+          () =>
+            WorkflowEngine.syncState({
+              document: executionState.document,
+              editor: currentSnapshot.editor,
+              runtime: toWorkflowStudioRuntimeState(executionState.runtime),
+            }),
+          { recordHistory: false },
+        );
+
+        state.activeRunId =
+          executionState.status === "queued" ||
+          executionState.status === "running"
+            ? executionState.runId
+            : null;
+        state.isStreamingExecutionStatus =
+          executionState.status === "queued" ||
+          executionState.status === "running";
+        state.lastExecutionFinishedAt = executionState.runtime.finishedAt;
+        state.lastServerRuntime = executionState.runtime;
+      });
+    },
+
+    clearActiveRunId: () => {
+      set((state) => {
+        state.activeRunId = null;
+        state.isStreamingExecutionStatus = false;
+      });
+    },
+
     setActivity: (activity) => {
       set((state) => {
         state.runtime.activity = activity;
+      });
+    },
+
+    setActiveRunId: (runId) => {
+      set((state) => {
+        state.activeRunId = runId;
+      });
+    },
+
+    setExecutionStreaming: (isStreaming) => {
+      set((state) => {
+        state.isStreamingExecutionStatus = isStreaming;
       });
     },
 
