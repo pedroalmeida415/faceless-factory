@@ -38,7 +38,7 @@ export const WorkflowExecutionService = {
       yield* Effect.async<void, WorkflowRequestError>((resume) => {
         let settled = false;
 
-        const eventSource = WorkflowClientService.openExecutionEvents(
+        const subscription = WorkflowClientService.openExecutionEvents(
           executionState.runId,
           {
             onExecutionState: (nextExecutionState) => {
@@ -53,7 +53,7 @@ export const WorkflowExecutionService = {
                   }
 
                   settled = true;
-                  eventSource.close();
+                  subscription.unsubscribe();
 
                   void Effect.runPromise(
                     workflowStudioStore.clearActiveRunId(),
@@ -67,7 +67,7 @@ export const WorkflowExecutionService = {
                   }
 
                   settled = true;
-                  eventSource.close();
+                  subscription.unsubscribe();
                   resume(
                     Effect.fail(
                       new WorkflowRequestError({
@@ -84,14 +84,14 @@ export const WorkflowExecutionService = {
               }
 
               settled = true;
-              eventSource.close();
+              subscription.unsubscribe();
               resume(Effect.fail(error));
             },
           },
         );
 
         return Effect.sync(() => {
-          eventSource.close();
+          subscription.unsubscribe();
         });
       });
     }).pipe(

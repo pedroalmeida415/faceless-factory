@@ -4,6 +4,7 @@ import { type QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   httpBatchStreamLink,
   httpLink,
+  httpSubscriptionLink,
   isNonJsonSerializable,
   loggerLink,
   splitLink,
@@ -47,21 +48,28 @@ const createTrpcClient = () =>
             (op.direction === "down" && op.result instanceof Error),
         }),
         splitLink({
-          condition: (op) => isNonJsonSerializable(op.input),
-          false: httpBatchStreamLink({
+          condition: (op) => op.type === "subscription",
+          true: httpSubscriptionLink({
             transformer: SuperJSON,
             url,
-            headers,
           }),
-          true: httpLink({
-            transformer: {
-              // request - convert data before sending to the tRPC server
-              serialize: (data) => data,
-              // response - convert the tRPC response before using it in client
-              deserialize: (data) => SuperJSON.deserialize(data),
-            },
-            url,
-            headers,
+          false: splitLink({
+            condition: (op) => isNonJsonSerializable(op.input),
+            false: httpBatchStreamLink({
+              transformer: SuperJSON,
+              url,
+              headers,
+            }),
+            true: httpLink({
+              transformer: {
+                // request - convert data before sending to the tRPC server
+                serialize: (data) => data,
+                // response - convert the tRPC response before using it in client
+                deserialize: (data) => SuperJSON.deserialize(data),
+              },
+              url,
+              headers,
+            }),
           }),
         }),
       ];

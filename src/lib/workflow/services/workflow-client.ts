@@ -1,5 +1,6 @@
 "use client";
 
+import type { Unsubscribable } from "@trpc/server/observable";
 import { Effect } from "effect";
 
 import { getErrorMessage, WorkflowRequestError } from "~/lib/workflow/errors";
@@ -17,10 +18,6 @@ import type {
 import { getTrpcClient } from "~/trpc/react";
 
 const trpcClient = getTrpcClient();
-
-function buildWorkflowExecutionEventsUrl(runId: string) {
-  return `/api/workflow-runs/${encodeURIComponent(runId)}/events`;
-}
 
 export const WorkflowClientService = {
   startExecution(input: StartWorkflowExecutionRequest) {
@@ -41,38 +38,42 @@ export const WorkflowClientService = {
       onError: (error: WorkflowRequestError) => void;
     },
   ) {
-    const eventSource = new EventSource(buildWorkflowExecutionEventsUrl(runId));
+    let isClosed = false;
+    let hasErrored = false;
 
-    eventSource.addEventListener("status", (event) => {
-      try {
-        handlers.onExecutionState(
-          JSON.parse(
-            (event as MessageEvent<string>).data,
-          ) as WorkflowExecutionStatusResponse,
-        );
-      } catch (cause) {
-        handlers.onError(
-          new WorkflowRequestError({
-            message: getErrorMessage(cause),
-            cause,
-          }),
-        );
-      }
-    });
-
-    eventSource.addEventListener("error", () => {
-      if (eventSource.readyState !== EventSource.CLOSED) {
+    const reportError = (cause: unknown) => {
+      if (isClosed || hasErrored) {
         return;
       }
 
+      hasErrored = true;
       handlers.onError(
         new WorkflowRequestError({
-          message: "Workflow event stream closed unexpectedly.",
+          message: getErrorMessage(cause),
+          cause,
         }),
       );
-    });
+    };
 
-    return eventSource;
+    const subscription = trpcClient.workflow.executionEvents.subscribe(
+      { runId },
+      {
+        onData: handlers.onExecutionState,
+        onConnectionStateChange: (state) => {
+          if (state.error) {
+            reportError(state.error);
+          }
+        },
+        onError: reportError,
+      },
+    );
+
+    return {
+      unsubscribe() {
+        isClosed = true;
+        subscription.unsubscribe();
+      },
+    } satisfies Unsubscribable;
   },
 
   generateImage(input: GenerateImageRequest) {

@@ -7,7 +7,10 @@ import {
   type WorkflowDocument,
 } from "~/lib/workflow/document";
 import { WorkflowValidationError } from "~/lib/workflow/errors";
-import type { StartWorkflowExecutionRequest } from "~/lib/workflow/execution/types";
+import type {
+  StartWorkflowExecutionRequest,
+  WorkflowExecutionStatusResponse,
+} from "~/lib/workflow/execution/types";
 import {
   IMAGE_ASPECT_RATIOS,
   IMAGE_MODEL_IDS,
@@ -24,6 +27,7 @@ import {
 } from "~/server/api/trpc";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
 import { WorkflowExecutionService } from "~/server/workflow/execution-service";
+import { WorkflowRunStore } from "~/server/workflow/run-store";
 import { WorkflowStorage } from "~/server/workflow/storage";
 import { VertexAi } from "~/server/workflow/vertex";
 
@@ -89,6 +93,15 @@ const workflowExecutionRequestSchema = z.object({
     .optional(),
 });
 
+const workflowExecutionEventsSchema = z.object({
+  lastEventId: z.string().nullish(),
+  runId: z.string(),
+});
+
+function isTerminalStatus(status: "queued" | "running" | "success" | "error") {
+  return status === "success" || status === "error";
+}
+
 export const workflowRouter = createTRPCRouter({
   startExecution: protectedProcedure
     .input(workflowExecutionRequestSchema)
@@ -123,6 +136,68 @@ export const workflowRouter = createTRPCRouter({
       ).catch((error) => {
         throw toTRPCError(error);
       });
+    }),
+
+  executionEvents: protectedProcedure
+    .input(workflowExecutionEventsSchema)
+    .subscription(async function* ({ ctx, input, signal }) {
+      const pendingRuns: WorkflowExecutionStatusResponse[] = [];
+      let resolveNextRun: (() => void) | undefined;
+
+      const subscription = await ServerRuntime.runPromise(
+        Effect.gen(function* () {
+          const workflowRunStore = yield* WorkflowRunStore;
+          return yield* workflowRunStore.subscribe(
+            input.runId,
+            ctx.session.user.id,
+            (run) => {
+              pendingRuns.push(run);
+              resolveNextRun?.();
+            },
+          );
+        }),
+      ).catch((error) => {
+        throw toTRPCError(error);
+      });
+
+      try {
+        yield subscription.initialRun;
+
+        if (isTerminalStatus(subscription.initialRun.status)) {
+          return;
+        }
+
+        while (!signal?.aborted) {
+          const nextRun = pendingRuns.shift();
+          if (nextRun) {
+            yield nextRun;
+
+            if (isTerminalStatus(nextRun.status)) {
+              return;
+            }
+
+            continue;
+          }
+
+          await new Promise<void>((resolve) => {
+            const abortHandler = () => {
+              signal?.removeEventListener("abort", abortHandler);
+              resolveNextRun = undefined;
+              resolve();
+            };
+
+            resolveNextRun = () => {
+              signal?.removeEventListener("abort", abortHandler);
+              resolveNextRun = undefined;
+              resolve();
+            };
+
+            signal?.addEventListener("abort", abortHandler, { once: true });
+          });
+        }
+      } finally {
+        subscription.unsubscribe();
+      }
     }),
 
   getCredits: protectedProcedure.query(async ({ ctx }) =>
