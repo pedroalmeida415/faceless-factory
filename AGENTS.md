@@ -1,5 +1,3 @@
-- Architecture guide: `WORKFLOW_ARCHITECTURE.md`
-
 ## Package manager
 
 Use Bun as package manager.

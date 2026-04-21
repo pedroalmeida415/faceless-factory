@@ -7,11 +7,13 @@
 - Node config drawer upon selection (instead of displaying all options in the node itself, display only minimal relevant info, tuck configs away into a drawer that opens automatically on node selection)
 - Output visualization toggle (focused 1 at a time carousel/gallery grid list)
 - Uploaded & generated assets visualizer with drag and drop to asset node
-- Left-click selection box (select multiple nodes at once, default normal arrow cursor, grab cursor only on middle-click for drag)
-- 
+- Left-click selection box (select multiple nodes at once, default normal arrow cursor, grab cursor only on middle-click/node hover for drag)
+- UI for user credits
+- Generation state feedback
+
 
 # Application
-- Database design
+- Database design (tables, credits, etc...)
 - Any LLM node for text-related functionality.
 - Human-in-the-loop nodes or something to  that require approval before moving forward.
 - Plans Stripe integration
@@ -19,6 +21,7 @@
 # Infra
 - How to deploy to prod?
 - Posthog analytics
+- Observabilty
 
 # Testing
 - tests tests tests, integration, E2E?
