@@ -1,22 +1,14 @@
 "use client";
 
 import Image from "next/image";
-import { Fragment, type PropsWithChildren, useId } from "react";
+import { Fragment, type PropsWithChildren, type ReactNode, useId } from "react";
 import { Handle, Position } from "reactflow";
 
 import { Button } from "~/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "~/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { cn } from "~/lib/utils";
-import type {
-  WorkflowAsset,
-  WorkflowNodeData,
-} from "~/lib/workflow/types";
-import { type HandleDefinition } from "./graph";
+import type { WorkflowAsset, WorkflowNodeData } from "~/lib/workflow/types";
+import type { HandleDefinition } from "./graph";
 import { useWorkflowStudioStore } from "./store";
 
 export function ShellButton(
@@ -184,12 +176,14 @@ export function FilePickerButton({
 export function NodeShell({
   children,
   data,
+  headerDetail,
   id,
   inputs = [],
   output = null,
   selected = false,
 }: PropsWithChildren<{
   data: WorkflowNodeData;
+  headerDetail?: ReactNode;
   id: string;
   inputs?: HandleDefinition[];
   output?: HandleDefinition | null;
@@ -197,7 +191,9 @@ export function NodeShell({
 }>) {
   const edges = useWorkflowStudioStore((state) => state.edges);
   const outputConnected = output
-    ? edges.some((edge) => edge.source === id && edge.sourceHandle === output.id)
+    ? edges.some(
+        (edge) => edge.source === id && edge.sourceHandle === output.id,
+      )
     : false;
   const socketTop = 64;
   const socketGap = 32;
@@ -205,7 +201,7 @@ export function NodeShell({
   return (
     <Card
       className={cn(
-        "group relative gap-4 overflow-visible pb-4 pt-2",
+        "group relative gap-4 overflow-visible pt-2 pb-4",
         selected && "ring-2 ring-primary",
       )}
       size="sm"
@@ -265,12 +261,17 @@ export function NodeShell({
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <CardTitle className="text-lg leading-tight">{data.label}</CardTitle>
-          {data.status === "running" ? (
-            <div
-              aria-label="Running"
-              className="mt-1 h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-muted border-t-foreground"
-              role="status"
-            />
+          {headerDetail || data.status === "running" ? (
+            <div className="flex items-center gap-2">
+              {headerDetail}
+              {data.status === "running" ? (
+                <div
+                  aria-label="Running"
+                  className="mt-1 h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-muted border-t-foreground"
+                  role="status"
+                />
+              ) : null}
+            </div>
           ) : null}
         </div>
       </CardHeader>

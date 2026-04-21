@@ -7,6 +7,7 @@ import {
   uploadFilesToNode as uploadWorkflowFilesToNode,
 } from "~/components/workflow/studio/runner";
 import { ClientRuntime } from "~/effect/client/runtime";
+import { estimateWorkflowExecution } from "~/lib/workflow/pricing";
 import type { StudioContextValue } from "./context";
 import {
   getGeneratorInputHandles,
@@ -48,6 +49,19 @@ export function useWorkflowStudioController() {
     return getGeneratorInputHandles(document, nodeId);
   }, []);
 
+  const getGeneratorRunCost = useCallback((nodeId: string) => {
+    const { document } = useWorkflowStudioStore.getState();
+
+    try {
+      return estimateWorkflowExecution({
+        document,
+        target: { type: "node", nodeId },
+      });
+    } catch {
+      return null;
+    }
+  }, []);
+
   const uploadFilesToNode = useCallback(
     async (nodeId: string, files: File[]) => {
       await ClientRuntime.runPromise(uploadWorkflowFilesToNode(nodeId, files));
@@ -66,6 +80,7 @@ export function useWorkflowStudioController() {
       clearNodeAssets,
       getGeneratorInputs,
       getGeneratorIterationInfo,
+      getGeneratorRunCost,
       setImageGeneratorModel,
       setVideoGeneratorModel,
       setImageGeneratorMode,
@@ -78,6 +93,7 @@ export function useWorkflowStudioController() {
       clearNodeAssets,
       getGeneratorInputs,
       getGeneratorIterationInfo,
+      getGeneratorRunCost,
       runNode,
       setImageGeneratorConfigValue,
       setImageGeneratorMode,

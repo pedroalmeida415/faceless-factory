@@ -15,6 +15,7 @@ import {
 } from "reactflow";
 import { Card, CardContent } from "~/components/ui/card";
 import { WORKFLOW_GRID_STEP } from "~/lib/workflow/document";
+import { WorkflowCreditsBadge } from "./studio/CreditsBadge";
 import { StudioContext } from "./studio/context";
 import { isEditableTarget } from "./studio/graph";
 import { nodeTypes } from "./studio/nodes";
@@ -166,6 +167,7 @@ export function WorkflowStudio() {
   return (
     <StudioContext.Provider value={contextValue}>
       <div className="relative h-screen p-2">
+        <WorkflowCreditsBadge />
         <WorkflowSidebar onAddNode={addNodeToCanvas} />
 
         <Card className="h-full min-w-0 overflow-hidden rounded-[28px] border-border/60 py-0 md:min-h-[calc(100vh-2.5rem)]">

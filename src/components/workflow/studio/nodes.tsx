@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { type NodeProps, useUpdateNodeInternals } from "reactflow";
+import { Badge } from "~/components/ui/badge";
 import { Card, CardContent } from "~/components/ui/card";
 import {
   Select,
@@ -51,6 +52,33 @@ function coerceConfigValue(
   }
 
   return nextValue;
+}
+
+function formatCredits(value: number) {
+  return `${value} credit${value === 1 ? "" : "s"}`;
+}
+
+function GeneratorRunCostBadge({ nodeId }: { nodeId: string }) {
+  const { getGeneratorRunCost } = useStudioContext();
+  const priceQuote = getGeneratorRunCost(nodeId);
+
+  if (!priceQuote || priceQuote.totalCost <= 0) {
+    return null;
+  }
+
+  return (
+    <Badge
+      className="border-primary/20 bg-primary/10 text-primary"
+      title={
+        priceQuote.lineItems.length > 1
+          ? "Includes upstream generator costs."
+          : undefined
+      }
+      variant="outline"
+    >
+      {`${formatCredits(priceQuote.totalCost)} / run`}
+    </Badge>
+  );
 }
 
 function PromptNode({ id, data, selected }: NodeProps<PromptNodeData>) {
@@ -217,6 +245,7 @@ function ImageGeneratorNode({
   return (
     <NodeShell
       data={data}
+      headerDetail={<GeneratorRunCostBadge nodeId={id} />}
       id={id}
       inputs={inputs}
       output={{ id: "images", label: "Images", color: "#22c55e" }}
@@ -324,6 +353,7 @@ function VideoGeneratorNode({
   return (
     <NodeShell
       data={data}
+      headerDetail={<GeneratorRunCostBadge nodeId={id} />}
       id={id}
       inputs={inputs}
       output={{ id: "videos", label: "Videos", color: "#a78bfa" }}

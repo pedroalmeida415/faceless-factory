@@ -13,6 +13,7 @@ import {
 import { getErrorMessage } from "~/lib/workflow/errors";
 import { toWorkflowStudioRuntimeState } from "~/lib/workflow/execution/runtime-state";
 import type {
+  WorkflowCreditsSummary,
   WorkflowExecutionRuntimeState,
   WorkflowExecutionStatusResponse,
 } from "~/lib/workflow/execution/types";
@@ -218,6 +219,7 @@ type WorkflowStudioState = {
   activeRunId: string | null;
   isStreamingExecutionStatus: boolean;
   lastExecutionFinishedAt: string | null;
+  lastKnownCredits: WorkflowCreditsSummary | null;
   lastServerRuntime: WorkflowExecutionRuntimeState | null;
   nodes: WorkflowCanvasNode[];
   edges: WorkflowCanvasEdge[];
@@ -283,6 +285,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     activeRunId: null,
     isStreamingExecutionStatus: false,
     lastExecutionFinishedAt: null,
+    lastKnownCredits: null,
     lastServerRuntime: null,
     nodes: initialCanvas.nodes,
     edges: initialCanvas.edges,
@@ -305,6 +308,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           state.activeRunId = null;
           state.isStreamingExecutionStatus = false;
           state.lastExecutionFinishedAt = null;
+          state.lastKnownCredits = null;
           state.lastServerRuntime = null;
           resetHistory(state);
           state.ready = true;
@@ -312,6 +316,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           state.activeRunId = null;
           state.isStreamingExecutionStatus = false;
           state.lastExecutionFinishedAt = null;
+          state.lastKnownCredits = null;
           state.lastServerRuntime = null;
           applySnapshotToState(state, WorkflowEngine.createInitialState());
           resetHistory(state);
@@ -345,6 +350,8 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           executionState.status === "queued" ||
           executionState.status === "running";
         state.lastExecutionFinishedAt = executionState.runtime.finishedAt;
+        state.lastKnownCredits =
+          executionState.credits ?? state.lastKnownCredits;
         state.lastServerRuntime = executionState.runtime;
       });
     },
