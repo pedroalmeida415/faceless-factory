@@ -97,8 +97,11 @@ function PromptNode({ id, data, selected }: NodeProps<PromptNodeData>) {
       selected={selected}
     >
       <Textarea
-        className="min-h-40"
+        className="nodrag nopan nowheel min-h-40"
         onChange={(event) => setPrompt(id, event.target.value)}
+        onKeyDown={(event) => event.stopPropagation()}
+        onPaste={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
         placeholder="Describe the shot, mood, framing, lens, motion."
         value={data.prompt}
       />
