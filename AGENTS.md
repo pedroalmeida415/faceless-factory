@@ -145,3 +145,9 @@ Overall average: **60-90% token reduction** on common development operations.
 The Effect v3 repository is cloned to `~/.local/share/effect-solutions/effect` for reference.
 Use this to explore APIs, find usage examples, and understand implementation
 details when the documentation isn't enough.
+
+## IMPORTANT
+
+Take the current implementations, patterns, architecture and designs in the code base with a grain of salt. We are iterating fast and nothing is set in stone just yet. We should be always thinking about the most optimal approach, not so much as to what is already implemented.
+
+Think about the industry standard approach to systems like this. We should replicate consolidated industry approaches in favor of building fast and achieving a functioning, robust, and reliable MVP.
