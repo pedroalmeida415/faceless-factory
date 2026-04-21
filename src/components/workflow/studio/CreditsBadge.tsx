@@ -17,11 +17,12 @@ export function WorkflowCreditsBadge() {
     staleTime: 30_000,
   });
   const credits = lastKnownCredits ?? creditsQuery.data ?? null;
-  const label = credits
-    ? `${formatCreditsLabel(credits.available)} left`
-    : creditsQuery.isLoading
-      ? "Checking credits"
-      : "Credits unavailable";
+  const label =
+    credits !== null
+      ? `${formatCreditsLabel(credits.available)} left`
+      : creditsQuery.isLoading
+        ? "Checking credits"
+        : "Credits unavailable";
 
   return (
     <div className="pointer-events-none absolute top-4 right-4 z-20">

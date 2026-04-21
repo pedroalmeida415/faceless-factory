@@ -8,6 +8,11 @@ import type { WorkflowExecutionStatusResponse } from "~/lib/workflow/execution/t
 import type { WorkflowStudioSnapshot } from "~/lib/workflow/studio-state";
 import type { WorkflowNodeStatus } from "~/lib/workflow/types";
 
+type WorkflowStudioStoreSnapshot = WorkflowStudioSnapshot & {
+  documentRevision: number | null;
+  projectId: string | null;
+};
+
 export class WorkflowStudioStoreService extends Context.Tag(
   "WorkflowStudioStoreService",
 )<
@@ -17,7 +22,7 @@ export class WorkflowStudioStoreService extends Context.Tag(
       executionState: WorkflowExecutionStatusResponse,
     ) => Effect.Effect<void>;
     readonly clearActiveRunId: () => Effect.Effect<void>;
-    readonly getWorkflowSnapshot: () => Effect.Effect<WorkflowStudioSnapshot>;
+    readonly getWorkflowSnapshot: () => Effect.Effect<WorkflowStudioStoreSnapshot>;
     readonly setActivity: (activity: string) => Effect.Effect<void>;
     readonly setActiveRunId: (runId: string) => Effect.Effect<void>;
     readonly setExecutionStreaming: (
@@ -49,8 +54,9 @@ export class WorkflowStudioStoreService extends Context.Tag(
       }),
     getWorkflowSnapshot: () =>
       Effect.sync(() => {
-        const { document, editor, runtime } = useWorkflowStudioStore.getState();
-        return { document, editor, runtime };
+        const { document, documentRevision, editor, projectId, runtime } =
+          useWorkflowStudioStore.getState();
+        return { document, documentRevision, editor, projectId, runtime };
       }),
     setActivity: (activity) =>
       Effect.sync(() => {

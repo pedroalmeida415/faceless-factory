@@ -11,6 +11,7 @@ import { createRedisSubscriber, getRedisClient } from "~/server/redis";
 
 type WorkflowRunRecord = {
   ownerUserId: string;
+  projectId: string;
   run: WorkflowExecutionStatusResponse;
 };
 
@@ -24,12 +25,16 @@ function getWorkflowRunChannel(runId: string) {
   return `workflow:run-events:${runId}`;
 }
 
+function getWorkflowProjectRunsKey(projectId: string) {
+  return `workflow:project-runs:${projectId}`;
+}
+
 function cloneRunRecord(runRecord: WorkflowRunRecord) {
   return JSON.parse(JSON.stringify(runRecord)) as WorkflowRunRecord;
 }
 
 function cloneRun(run: WorkflowExecutionStatusResponse) {
-  return cloneRunRecord({ ownerUserId: "", run }).run;
+  return cloneRunRecord({ ownerUserId: "", projectId: "", run }).run;
 }
 
 async function getAuthorizedRunRecord(runId: string, userId: string) {
@@ -63,11 +68,16 @@ export class WorkflowRunStore extends Context.Tag("WorkflowRunStore")<
   {
     readonly createRun: (params: {
       ownerUserId: string;
+      projectId: string;
       run: WorkflowExecutionStatusResponse;
     }) => Effect.Effect<
       WorkflowExecutionStatusResponse,
       WorkflowInfrastructureError
     >;
+    readonly getProjectLockedNodeIds: (params: {
+      projectId: string;
+      userId: string;
+    }) => Effect.Effect<string[], WorkflowInfrastructureError>;
     readonly getRun: (params: {
       runId: string;
       userId: string;
@@ -141,12 +151,13 @@ export class WorkflowRunStore extends Context.Tag("WorkflowRunStore")<
   };
 
   static readonly Live = Layer.succeed(this, {
-    createRun: ({ ownerUserId, run }) =>
+    createRun: ({ ownerUserId, projectId, run }) =>
       Effect.tryPromise({
         try: async () => {
           const client = await getRedisClient();
           const nextRunRecord = cloneRunRecord({
             ownerUserId,
+            projectId,
             run,
           });
 
@@ -160,8 +171,64 @@ export class WorkflowRunStore extends Context.Tag("WorkflowRunStore")<
               },
             },
           );
+          await client.sAdd(
+            getWorkflowProjectRunsKey(nextRunRecord.projectId),
+            nextRunRecord.run.runId,
+          );
 
           return cloneRun(nextRunRecord.run);
+        },
+        catch: WorkflowRunStore.toRunStoreInfraError,
+      }),
+    getProjectLockedNodeIds: ({ projectId, userId }) =>
+      Effect.tryPromise({
+        try: async () => {
+          const client = await getRedisClient();
+          const runIds = await client.sMembers(
+            getWorkflowProjectRunsKey(projectId),
+          );
+          const lockedNodeIds = new Set<string>();
+          const staleRunIds: string[] = [];
+
+          for (const runId of runIds) {
+            const storedRunRecord = await client.get(getWorkflowRunKey(runId));
+            if (!storedRunRecord) {
+              staleRunIds.push(runId);
+              continue;
+            }
+
+            try {
+              const runRecord = JSON.parse(
+                storedRunRecord,
+              ) as WorkflowRunRecord;
+              if (runRecord.ownerUserId !== userId) {
+                continue;
+              }
+
+              if (
+                runRecord.run.status !== "queued" &&
+                runRecord.run.status !== "running"
+              ) {
+                staleRunIds.push(runId);
+                continue;
+              }
+
+              for (const nodeId of runRecord.run.targetNodeIds) {
+                lockedNodeIds.add(nodeId);
+              }
+            } catch {
+              staleRunIds.push(runId);
+            }
+          }
+
+          if (staleRunIds.length) {
+            await client.sRem(
+              getWorkflowProjectRunsKey(projectId),
+              staleRunIds,
+            );
+          }
+
+          return [...lockedNodeIds];
         },
         catch: WorkflowRunStore.toRunStoreInfraError,
       }),
@@ -198,6 +265,7 @@ export class WorkflowRunStore extends Context.Tag("WorkflowRunStore")<
 
           const nextRunRecord = cloneRunRecord({
             ownerUserId: existingRunRecord.ownerUserId,
+            projectId: existingRunRecord.projectId,
             run,
           });
 
@@ -215,6 +283,16 @@ export class WorkflowRunStore extends Context.Tag("WorkflowRunStore")<
             getWorkflowRunChannel(nextRunRecord.run.runId),
             JSON.stringify(nextRunRecord.run),
           );
+
+          if (
+            nextRunRecord.run.status === "success" ||
+            nextRunRecord.run.status === "error"
+          ) {
+            await client.sRem(
+              getWorkflowProjectRunsKey(nextRunRecord.projectId),
+              nextRunRecord.run.runId,
+            );
+          }
 
           return cloneRun(nextRunRecord.run);
         },

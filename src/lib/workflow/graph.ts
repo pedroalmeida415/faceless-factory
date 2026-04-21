@@ -129,8 +129,9 @@ export function normalizeGeneratorTargetHandles(
 ) {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   const nextIndexByTargetPrefix = new Map<string, number>();
+  let didChange = false;
 
-  return edges.map((edge) => {
+  const normalizedEdges = edges.map((edge) => {
     const targetNode = nodeMap.get(edge.target);
     if (!targetNode || !isGeneratorNodeKind(targetNode.kind)) {
       return edge;
@@ -153,10 +154,15 @@ export function normalizeGeneratorTargetHandles(
     nextIndexByTargetPrefix.set(key, nextIndex + 1);
 
     const targetHandle = `${matchedPrefix}${nextIndex}`;
-    return edge.targetHandle === targetHandle
-      ? edge
-      : { ...edge, targetHandle };
+    if (edge.targetHandle === targetHandle) {
+      return edge;
+    }
+
+    didChange = true;
+    return { ...edge, targetHandle };
   });
+
+  return didChange ? normalizedEdges : edges;
 }
 
 function getNodeOutputValueType(

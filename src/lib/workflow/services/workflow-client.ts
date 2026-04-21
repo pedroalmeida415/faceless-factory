@@ -9,6 +9,10 @@ import type {
   WorkflowExecutionStatusResponse,
 } from "~/lib/workflow/execution/types";
 import type {
+  WorkflowProjectSaveRequest,
+  WorkflowProjectSaveResponse,
+} from "~/lib/workflow/project";
+import type {
   GenerateImageRequest,
   GenerateImageResponse,
   GenerateVideoRequest,
@@ -20,7 +24,18 @@ import { getTrpcClient } from "~/trpc/react";
 const trpcClient = getTrpcClient();
 
 export const WorkflowClientService = {
-  startExecution(input: StartWorkflowExecutionRequest) {
+  saveProject(input: WorkflowProjectSaveRequest) {
+    return Effect.tryPromise({
+      try: () => trpcClient.workflow.saveProject.mutate(input),
+      catch: (cause) =>
+        new WorkflowRequestError({
+          message: getErrorMessage(cause),
+          cause,
+        }),
+    }) as Effect.Effect<WorkflowProjectSaveResponse, WorkflowRequestError>;
+  },
+
+  startExecution(input: StartWorkflowExecutionRequest & { projectId: string }) {
     return Effect.tryPromise({
       try: () => trpcClient.workflow.startExecution.mutate(input),
       catch: (cause) =>
@@ -98,12 +113,32 @@ export const WorkflowClientService = {
     }) as Effect.Effect<GenerateVideoResponse, WorkflowRequestError>;
   },
 
-  uploadAsset(file: File) {
+  uploadAsset(file: File, projectId: string) {
     return Effect.tryPromise({
-      try: () => {
+      try: async () => {
         const formData = new FormData();
         formData.append("file", file);
-        return trpcClient.workflow.uploadAsset.mutate(formData);
+        formData.append("projectId", projectId);
+
+        const response = await fetch("/api/workflow/assets", {
+          body: formData,
+          method: "POST",
+        });
+
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as {
+            error?: unknown;
+          } | null;
+
+          throw new WorkflowRequestError({
+            message:
+              typeof payload?.error === "string"
+                ? payload.error
+                : "Asset upload failed.",
+          });
+        }
+
+        return (await response.json()) as UploadAssetResponse;
       },
       catch: (cause) =>
         new WorkflowRequestError({

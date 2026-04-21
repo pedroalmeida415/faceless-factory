@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { Connection, EdgeChange, NodeChange } from "reactflow";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
@@ -11,12 +11,13 @@ import {
   type WorkflowDocumentNode,
 } from "~/lib/workflow/document";
 import { getErrorMessage } from "~/lib/workflow/errors";
-import { toWorkflowStudioRuntimeState } from "~/lib/workflow/execution/runtime-state";
+import { collectWorkflowExecutionNodeIds } from "~/lib/workflow/execution/subgraph";
 import type {
   WorkflowCreditsSummary,
   WorkflowExecutionRuntimeState,
   WorkflowExecutionStatusResponse,
 } from "~/lib/workflow/execution/types";
+import type { WorkflowProject } from "~/lib/workflow/project";
 import {
   ImageGeneratorService,
   PromptNodeService,
@@ -81,6 +82,8 @@ type WorkflowHistoryState = {
 };
 
 const WORKFLOW_HISTORY_LIMIT = 100;
+const LOCKED_WORKFLOW_ACTIVITY =
+  "Cannot edit nodes that are participating in a running workflow.";
 
 function createHistoryState(): WorkflowHistoryState {
   return {
@@ -152,6 +155,15 @@ function updateRuntimeNodeState(
   };
 }
 
+function getLockedExecutionNodeIds(
+  document: WorkflowDocument,
+  lockedTargetNodeIds: string[],
+) {
+  return lockedTargetNodeIds.length
+    ? collectWorkflowExecutionNodeIds(document, lockedTargetNodeIds)
+    : new Set<string>();
+}
+
 function commitSnapshot(
   state: WorkflowStudioState,
   nextSnapshot: WorkflowStudioSnapshot,
@@ -209,15 +221,85 @@ function restoreHistoryEntry(
   );
 }
 
+function mergeExecutionTargetResults(
+  currentDocument: WorkflowDocument,
+  executionState: WorkflowExecutionStatusResponse,
+) {
+  if (executionState.status !== "success") {
+    return currentDocument;
+  }
+
+  const executionNodeById = new Map(
+    executionState.document.nodes.map((node) => [node.id, node]),
+  );
+  const targetNodeIds = new Set(executionState.targetNodeIds);
+
+  return {
+    ...currentDocument,
+    nodes: currentDocument.nodes.map((node) => {
+      if (!targetNodeIds.has(node.id)) {
+        return node;
+      }
+
+      const executionNode = executionNodeById.get(node.id);
+      if (!executionNode || executionNode.kind !== node.kind) {
+        return node;
+      }
+
+      if (
+        node.kind === "imageGenerator" &&
+        executionNode.kind === "imageGenerator"
+      ) {
+        return {
+          ...node,
+          lastPrompt: executionNode.lastPrompt,
+          outputAssets: executionNode.outputAssets,
+          responseText: executionNode.responseText,
+        };
+      }
+
+      if (
+        node.kind === "videoGenerator" &&
+        executionNode.kind === "videoGenerator"
+      ) {
+        return {
+          ...node,
+          lastPrompt: executionNode.lastPrompt,
+          outputAssets: executionNode.outputAssets,
+          responseText: executionNode.responseText,
+        };
+      }
+
+      return node;
+    }),
+  } satisfies WorkflowDocument;
+}
+
+function mergeExecutionRuntimeState(
+  currentRuntime: WorkflowRuntimeState,
+  executionState: WorkflowExecutionStatusResponse,
+): WorkflowRuntimeState {
+  return {
+    activity: executionState.runtime.activity,
+    nodeStateById: {
+      ...currentRuntime.nodeStateById,
+      ...executionState.runtime.nodeStateById,
+    },
+  };
+}
+
 const initialSnapshot = WorkflowEngine.createInitialState();
 const initialCanvas = buildWorkflowCanvas(initialSnapshot);
 
 type WorkflowStudioState = {
   document: WorkflowDocument;
+  documentRevision: number | null;
   editor: WorkflowEditorState;
+  projectId: string | null;
   runtime: WorkflowRuntimeState;
   activeRunId: string | null;
   isStreamingExecutionStatus: boolean;
+  lockedNodeIds: string[];
   lastExecutionFinishedAt: string | null;
   lastKnownCredits: WorkflowCreditsSummary | null;
   lastServerRuntime: WorkflowExecutionRuntimeState | null;
@@ -228,11 +310,12 @@ type WorkflowStudioState = {
   canUndo: boolean;
   canRedo: boolean;
   ready: boolean;
-  hydrate: () => void;
+  hydrate: (project: WorkflowProject) => void;
   applyServerExecutionState: (
     executionState: WorkflowExecutionStatusResponse,
   ) => void;
   clearActiveRunId: () => void;
+  setProjectPersistence: (documentRevision: number) => void;
   setActivity: (activity: string) => void;
   setActiveRunId: (runId: string) => void;
   setExecutionStreaming: (isStreaming: boolean) => void;
@@ -280,10 +363,13 @@ type WorkflowStudioState = {
 export const useWorkflowStudioStore = create<WorkflowStudioState>()(
   immer((set, get) => ({
     document: initialSnapshot.document,
+    documentRevision: null,
     editor: initialSnapshot.editor,
+    projectId: null,
     runtime: initialSnapshot.runtime,
     activeRunId: null,
     isStreamingExecutionStatus: false,
+    lockedNodeIds: [],
     lastExecutionFinishedAt: null,
     lastKnownCredits: null,
     lastServerRuntime: null,
@@ -295,30 +381,35 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     canRedo: false,
     ready: false,
 
-    hydrate: () => {
+    hydrate: (project) => {
       set((state) => {
         try {
-          const loadResult = WorkflowPersistenceService.loadDocument();
           const nextSnapshot = WorkflowEngine.hydrate(
-            loadResult.document,
-            loadResult.activity ?? DEFAULT_WORKFLOW_ACTIVITY,
+            project.document,
+            DEFAULT_WORKFLOW_ACTIVITY,
           );
 
           applySnapshotToState(state, nextSnapshot);
           state.activeRunId = null;
+          state.documentRevision = project.documentRevision;
           state.isStreamingExecutionStatus = false;
+          state.lockedNodeIds = [];
           state.lastExecutionFinishedAt = null;
           state.lastKnownCredits = null;
           state.lastServerRuntime = null;
+          state.projectId = project.id;
           resetHistory(state);
           state.ready = true;
         } catch (error) {
           state.activeRunId = null;
+          state.documentRevision = null;
           state.isStreamingExecutionStatus = false;
+          state.lockedNodeIds = [];
           state.lastExecutionFinishedAt = null;
           state.lastKnownCredits = null;
           state.lastServerRuntime = null;
           applySnapshotToState(state, WorkflowEngine.createInitialState());
+          state.projectId = null;
           resetHistory(state);
           state.ready = true;
           state.runtime.activity = getErrorMessage(error);
@@ -334,9 +425,15 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           state,
           () =>
             WorkflowEngine.syncState({
-              document: executionState.document,
+              document: mergeExecutionTargetResults(
+                currentSnapshot.document,
+                executionState,
+              ),
               editor: currentSnapshot.editor,
-              runtime: toWorkflowStudioRuntimeState(executionState.runtime),
+              runtime: mergeExecutionRuntimeState(
+                currentSnapshot.runtime,
+                executionState,
+              ),
             }),
           { recordHistory: false },
         );
@@ -346,9 +443,16 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           executionState.status === "running"
             ? executionState.runId
             : null;
+        state.lockedNodeIds =
+          executionState.status === "queued" ||
+          executionState.status === "running"
+            ? executionState.targetNodeIds
+            : [];
         state.isStreamingExecutionStatus =
           executionState.status === "queued" ||
           executionState.status === "running";
+        state.documentRevision =
+          executionState.projectDocumentRevision ?? state.documentRevision;
         state.lastExecutionFinishedAt = executionState.runtime.finishedAt;
         state.lastKnownCredits =
           executionState.credits ?? state.lastKnownCredits;
@@ -360,6 +464,13 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       set((state) => {
         state.activeRunId = null;
         state.isStreamingExecutionStatus = false;
+        state.lockedNodeIds = [];
+      });
+    },
+
+    setProjectPersistence: (documentRevision) => {
+      set((state) => {
+        state.documentRevision = documentRevision;
       });
     },
 
@@ -406,6 +517,15 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
 
     updateDocumentNode: (nodeId, updater) => {
       set((state) => {
+        if (
+          getLockedExecutionNodeIds(state.document, state.lockedNodeIds).has(
+            nodeId,
+          )
+        ) {
+          state.runtime.activity = LOCKED_WORKFLOW_ACTIVITY;
+          return;
+        }
+
         const currentSnapshot = snapshotFromState(state);
         runSnapshotMutation(state, () =>
           WorkflowEngine.syncState({
@@ -499,11 +619,35 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
 
     applyNodeChanges: (changes) => {
       set((state) => {
+        const relevantChanges = changes.filter(
+          (change) => change.type !== "dimensions",
+        );
+        if (!relevantChanges.length) {
+          return;
+        }
+
         const currentSnapshot = snapshotFromState(state);
-        const hasDraggingPositionChange = changes.some(
+        const lockedExecutionNodeIds = getLockedExecutionNodeIds(
+          currentSnapshot.document,
+          state.lockedNodeIds,
+        );
+
+        if (
+          relevantChanges.some(
+            (change) =>
+              "id" in change &&
+              change.type !== "select" &&
+              lockedExecutionNodeIds.has(change.id),
+          )
+        ) {
+          state.runtime.activity = LOCKED_WORKFLOW_ACTIVITY;
+          return;
+        }
+
+        const hasDraggingPositionChange = relevantChanges.some(
           (change) => change.type === "position" && change.dragging === true,
         );
-        const hasDragStopPositionChange = changes.some(
+        const hasDragStopPositionChange = relevantChanges.some(
           (change) => change.type === "position" && change.dragging === false,
         );
 
@@ -516,7 +660,8 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
 
         runSnapshotMutation(
           state,
-          () => WorkflowEngine.applyNodeChanges(currentSnapshot, changes),
+          () =>
+            WorkflowEngine.applyNodeChanges(currentSnapshot, relevantChanges),
           hasDraggingPositionChange || hasDragStopPositionChange
             ? {
                 historyEntry: hasDragStopPositionChange
@@ -540,6 +685,32 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     applyEdgeChanges: (changes) => {
       set((state) => {
         const currentSnapshot = snapshotFromState(state);
+        const lockedExecutionNodeIds = getLockedExecutionNodeIds(
+          currentSnapshot.document,
+          state.lockedNodeIds,
+        );
+        const edgeById = new Map(
+          currentSnapshot.document.edges.map((edge) => [edge.id, edge]),
+        );
+
+        if (
+          changes.some((change) => {
+            if (change.type === "select" || !("id" in change)) {
+              return false;
+            }
+
+            const edge = edgeById.get(change.id);
+            return Boolean(
+              edge &&
+                (lockedExecutionNodeIds.has(edge.source) ||
+                  lockedExecutionNodeIds.has(edge.target)),
+            );
+          })
+        ) {
+          state.runtime.activity = LOCKED_WORKFLOW_ACTIVITY;
+          return;
+        }
+
         runSnapshotMutation(state, () =>
           WorkflowEngine.applyEdgeChanges(currentSnapshot, changes),
         );
@@ -548,6 +719,20 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
 
     connect: (connection) => {
       set((state) => {
+        const lockedExecutionNodeIds = getLockedExecutionNodeIds(
+          state.document,
+          state.lockedNodeIds,
+        );
+
+        if (
+          (connection.source &&
+            lockedExecutionNodeIds.has(connection.source)) ||
+          (connection.target && lockedExecutionNodeIds.has(connection.target))
+        ) {
+          state.runtime.activity = LOCKED_WORKFLOW_ACTIVITY;
+          return;
+        }
+
         const currentSnapshot = snapshotFromState(state);
         runSnapshotMutation(state, () =>
           WorkflowEngine.connect(currentSnapshot, connection),
@@ -569,6 +754,26 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
 
     deleteSelection: () => {
       set((state) => {
+        const lockedExecutionNodeIds = getLockedExecutionNodeIds(
+          state.document,
+          state.lockedNodeIds,
+        );
+
+        if (
+          state.editor.selectedNodeIds.some((nodeId) =>
+            lockedExecutionNodeIds.has(nodeId),
+          ) ||
+          state.document.edges.some(
+            (edge) =>
+              state.editor.selectedEdgeIds.includes(edge.id) &&
+              (lockedExecutionNodeIds.has(edge.source) ||
+                lockedExecutionNodeIds.has(edge.target)),
+          )
+        ) {
+          state.runtime.activity = LOCKED_WORKFLOW_ACTIVITY;
+          return;
+        }
+
         const currentSnapshot = snapshotFromState(state);
         runSnapshotMutation(state, () =>
           WorkflowEngine.deleteSelection(currentSnapshot),
@@ -626,24 +831,93 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
   })),
 );
 
-export function useWorkflowStudioPersistence() {
+export function useWorkflowStudioPersistence(project: WorkflowProject) {
   const hydrate = useWorkflowStudioStore((state) => state.hydrate);
+  const projectId = useWorkflowStudioStore((state) => state.projectId);
   const ready = useWorkflowStudioStore((state) => state.ready);
-  const document = useWorkflowStudioStore((state) => state.document);
+  const workflowDocument = useWorkflowStudioStore((state) => state.document);
+  const hasHydratedProject = useRef(false);
 
   useEffect(() => {
-    hydrate();
-  }, [hydrate]);
+    hasHydratedProject.current = false;
+    hydrate(project);
+
+    WorkflowPersistenceService.configure({
+      getSnapshot: () => {
+        const state = useWorkflowStudioStore.getState();
+        if (
+          !state.ready ||
+          !state.projectId ||
+          state.documentRevision === null
+        ) {
+          return null;
+        }
+
+        return {
+          document: state.document,
+          documentRevision: state.documentRevision,
+          projectId: state.projectId,
+        };
+      },
+      onError: (error) => {
+        useWorkflowStudioStore.getState().setActivity(getErrorMessage(error));
+      },
+      onSaved: (result) => {
+        useWorkflowStudioStore
+          .getState()
+          .setProjectPersistence(result.documentRevision);
+      },
+    });
+
+    return () => {
+      WorkflowPersistenceService.reset();
+    };
+  }, [hydrate, project]);
+
+  useEffect(() => {
+    void workflowDocument;
+
+    if (!ready || !projectId) {
+      return;
+    }
+
+    if (!hasHydratedProject.current) {
+      hasHydratedProject.current = true;
+      return;
+    }
+
+    WorkflowPersistenceService.scheduleSave();
+  }, [projectId, ready, workflowDocument]);
 
   useEffect(() => {
     if (!ready) {
       return;
     }
 
-    try {
-      WorkflowPersistenceService.saveDocument(document);
-    } catch (error) {
-      useWorkflowStudioStore.getState().setActivity(getErrorMessage(error));
-    }
-  }, [document, ready]);
+    const flushPendingSave = () => {
+      void WorkflowPersistenceService.flushSave().catch((error) => {
+        useWorkflowStudioStore.getState().setActivity(getErrorMessage(error));
+      });
+    };
+
+    const handleVisibilityChange = () => {
+      if (globalThis.document.visibilityState === "hidden") {
+        flushPendingSave();
+      }
+    };
+
+    window.addEventListener("pagehide", flushPendingSave);
+    globalThis.document.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange,
+    );
+
+    return () => {
+      window.removeEventListener("pagehide", flushPendingSave);
+      globalThis.document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange,
+      );
+    };
+  }, [ready]);
 }

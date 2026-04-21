@@ -56,6 +56,8 @@ export function toWorkflowStudioRuntimeState(
 
 export function buildWorkflowExecutionStatusResponse(params: {
   runId: string;
+  targetNodeIds: string[];
+  projectDocumentRevision?: number | null;
   document: WorkflowDocument;
   runtime: WorkflowExecutionRuntimeState;
   status: WorkflowRunStatus;
@@ -63,6 +65,8 @@ export function buildWorkflowExecutionStatusResponse(params: {
 }): WorkflowExecutionStatusResponse {
   return {
     runId: params.runId,
+    targetNodeIds: params.targetNodeIds,
+    projectDocumentRevision: params.projectDocumentRevision ?? null,
     document: params.document,
     runtime: params.runtime,
     activity: params.runtime.activity,

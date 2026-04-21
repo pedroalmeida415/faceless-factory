@@ -1,86 +1,104 @@
 "use client";
 
-import {
-  createEmptyWorkflowDocument,
-  deserializeStoredWorkflowDocument,
-  WORKFLOW_STORAGE_KEY,
-  type WorkflowDocument,
-} from "~/lib/workflow/document";
-import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
+import { Effect } from "effect";
 
-export type WorkflowPersistenceLoadResult = {
-  activity: string | null;
-  document: WorkflowDocument;
+import type {
+  WorkflowProjectSaveRequest,
+  WorkflowProjectSaveResponse,
+} from "~/lib/workflow/project";
+import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
+
+const WORKFLOW_SAVE_DEBOUNCE_MS = 800;
+
+type WorkflowPersistenceSnapshot = WorkflowProjectSaveRequest;
+
+type WorkflowPersistenceConfig = {
+  getSnapshot: () => WorkflowPersistenceSnapshot | null;
+  onError: (error: unknown) => void;
+  onSaved: (result: WorkflowProjectSaveResponse) => void;
 };
 
-function parseStoredDocument(raw: string) {
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
+let debounceTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+let config: WorkflowPersistenceConfig | null = null;
+let inFlightSave: Promise<WorkflowProjectSaveResponse> | null = null;
+let isDirty = false;
+
+function clearDebounceTimer() {
+  if (debounceTimer === null) {
+    return;
+  }
+
+  globalThis.clearTimeout(debounceTimer);
+  debounceTimer = null;
+}
+
+async function drainPendingSave(): Promise<WorkflowProjectSaveResponse | null> {
+  if (!config) {
     return null;
+  }
+
+  if (inFlightSave) {
+    const result = await inFlightSave;
+    return isDirty ? ((await drainPendingSave()) ?? result) : result;
+  }
+
+  if (!isDirty) {
+    return null;
+  }
+
+  const snapshot = config.getSnapshot();
+  if (!snapshot) {
+    isDirty = false;
+    return null;
+  }
+
+  isDirty = false;
+  inFlightSave = Effect.runPromise(WorkflowClientService.saveProject(snapshot));
+
+  try {
+    const result = await inFlightSave;
+    config?.onSaved(result);
+    return isDirty ? ((await drainPendingSave()) ?? result) : result;
+  } catch (error) {
+    config?.onError(error);
+    throw error;
+  } finally {
+    inFlightSave = null;
   }
 }
 
-function validateStoredDocument(document: WorkflowDocument) {
-  WorkflowGraphValidator.validateDocument(document);
-  return document;
-}
-
 export const WorkflowPersistenceService = {
-  loadDocument(): WorkflowPersistenceLoadResult {
-    if (typeof window === "undefined") {
-      return {
-        activity: null,
-        document: createEmptyWorkflowDocument(),
-      };
-    }
-
-    const raw = window.localStorage.getItem(WORKFLOW_STORAGE_KEY);
-    if (!raw) {
-      return {
-        activity: null,
-        document: createEmptyWorkflowDocument(),
-      };
-    }
-
-    try {
-      const parsed = parseStoredDocument(raw);
-      const document = parsed
-        ? deserializeStoredWorkflowDocument(parsed)
-        : null;
-
-      if (!document) {
-        throw new Error("Saved workflow graph is incompatible.");
-      }
-
-      return {
-        activity: null,
-        document: validateStoredDocument(document),
-      };
-    } catch {
-      window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
-
-      return {
-        activity: "Saved graph was incompatible and has been reset.",
-        document: createEmptyWorkflowDocument(),
-      };
-    }
+  configure(nextConfig: WorkflowPersistenceConfig) {
+    config = nextConfig;
   },
 
-  saveDocument(document: WorkflowDocument) {
-    if (typeof window === "undefined") {
+  scheduleSave() {
+    if (!config) {
       return;
     }
 
-    validateStoredDocument(document);
-    window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(document));
+    isDirty = true;
+    clearDebounceTimer();
+    debounceTimer = globalThis.setTimeout(() => {
+      void drainPendingSave().catch(() => {
+        return undefined;
+      });
+    }, WORKFLOW_SAVE_DEBOUNCE_MS);
   },
 
-  clearDocument() {
-    if (typeof window === "undefined") {
-      return;
+  async flushSave() {
+    if (!config) {
+      return null;
     }
 
-    window.localStorage.removeItem(WORKFLOW_STORAGE_KEY);
+    clearDebounceTimer();
+    return drainPendingSave();
+  },
+
+  reset() {
+    clearDebounceTimer();
+    config = null;
+    inFlightSave = null;
+    isDirty = false;
   },
 };

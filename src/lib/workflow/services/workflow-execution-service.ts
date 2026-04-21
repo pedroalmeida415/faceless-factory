@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { getErrorMessage, WorkflowRequestError } from "~/lib/workflow/errors";
 import type { WorkflowExecutionTarget } from "~/lib/workflow/execution/types";
 import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
+import { WorkflowPersistenceService } from "~/lib/workflow/services/workflow-persistence-service";
 import { WorkflowStudioStoreService } from "~/lib/workflow/services/workflow-studio-store-service";
 
 function isActiveRunStatus(status: "queued" | "running" | "success" | "error") {
@@ -13,14 +14,31 @@ export const WorkflowExecutionService = {
   run(target: WorkflowExecutionTarget) {
     return Effect.gen(function* () {
       const workflowStudioStore = yield* WorkflowStudioStoreService;
+      yield* Effect.tryPromise({
+        try: () => WorkflowPersistenceService.flushSave(),
+        catch: (cause) =>
+          new WorkflowRequestError({
+            message: getErrorMessage(cause),
+            cause,
+          }),
+      });
+
       const snapshot = yield* workflowStudioStore.getWorkflowSnapshot();
+      if (!snapshot.projectId || snapshot.documentRevision === null) {
+        return yield* Effect.fail(
+          new WorkflowRequestError({
+            message: "Workflow project is not ready yet.",
+          }),
+        );
+      }
 
       yield* workflowStudioStore.setExecutionStreaming(true);
 
       const executionState = yield* WorkflowClientService.startExecution({
         clientRunId: crypto.randomUUID(),
         document: snapshot.document,
-        documentVersion: snapshot.document.version,
+        documentRevision: snapshot.documentRevision,
+        projectId: snapshot.projectId,
         selection: {
           nodeIds: snapshot.editor.selectedNodeIds,
         },

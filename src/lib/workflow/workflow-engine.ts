@@ -33,7 +33,7 @@ import type { WorkflowNodeKind } from "~/lib/workflow/types";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 
 export const DEFAULT_WORKFLOW_ACTIVITY =
-  "Connect prompt and media nodes into the generators. Local graph state auto-saves in your browser.";
+  "Connect prompt and media nodes into the generators. Workflow changes auto-save to your project.";
 
 export type WorkflowEngineState = WorkflowStudioSnapshot;
 
@@ -64,10 +64,17 @@ function syncEngineState(
   editor: WorkflowEditorState,
   runtime: WorkflowRuntimeState,
 ): WorkflowEngineState {
-  const normalizedDocument = {
-    ...document,
-    edges: normalizeGeneratorTargetHandles(document.nodes, document.edges),
-  } satisfies WorkflowDocument;
+  const normalizedEdges = normalizeGeneratorTargetHandles(
+    document.nodes,
+    document.edges,
+  );
+  const normalizedDocument =
+    normalizedEdges === document.edges
+      ? document
+      : ({
+          ...document,
+          edges: normalizedEdges,
+        } satisfies WorkflowDocument);
 
   WorkflowGraphValidator.validateDocument(normalizedDocument);
 

@@ -6,7 +6,6 @@ import {
   deserializeStoredWorkflowDocument,
   type WorkflowDocument,
 } from "~/lib/workflow/document";
-import { WorkflowValidationError } from "~/lib/workflow/errors";
 import type {
   StartWorkflowExecutionRequest,
   WorkflowExecutionStatusResponse,
@@ -20,15 +19,11 @@ import {
   VIDEO_RESOLUTIONS,
 } from "~/lib/workflow/types";
 import { toTRPCError } from "~/server/api/errors";
-import {
-  createTRPCRouter,
-  protectedProcedure,
-  publicProcedure,
-} from "~/server/api/trpc";
+import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
 import { WorkflowExecutionService } from "~/server/workflow/execution-service";
+import { saveWorkflowProjectDocument } from "~/server/workflow/projects";
 import { WorkflowRunStore } from "~/server/workflow/run-store";
-import { WorkflowStorage } from "~/server/workflow/storage";
 import { VertexAi } from "~/server/workflow/vertex";
 
 const workflowAssetSchema = z.object({
@@ -44,11 +39,6 @@ const workflowAssetSchema = z.object({
   externalUri: z.string().nullable(),
   model: z.string().nullable(),
 });
-
-const formDataSchema = z.custom<FormData>(
-  (value) => value instanceof FormData,
-  "Expected FormData input.",
-);
 
 const videoDurationSchema = z.custom<(typeof VIDEO_DURATIONS)[number]>(
   (value) =>
@@ -81,9 +71,10 @@ const workflowExecutionTargetSchema = z.discriminatedUnion("type", [
 
 const workflowExecutionRequestSchema = z.object({
   document: workflowDocumentSchema,
+  projectId: z.string(),
   target: workflowExecutionTargetSchema,
   clientRunId: z.string().nullable().optional(),
-  documentVersion: z.number().nullable().optional(),
+  documentRevision: z.number().nullable().optional(),
   idempotencyKey: z.string().nullable().optional(),
   selection: z
     .object({
@@ -98,11 +89,43 @@ const workflowExecutionEventsSchema = z.object({
   runId: z.string(),
 });
 
+const saveWorkflowProjectSchema = z.object({
+  document: workflowDocumentSchema,
+  documentRevision: z.number().int().nonnegative(),
+  projectId: z.string(),
+});
+
 function isTerminalStatus(status: "queued" | "running" | "success" | "error") {
   return status === "success" || status === "error";
 }
 
 export const workflowRouter = createTRPCRouter({
+  saveProject: protectedProcedure
+    .input(saveWorkflowProjectSchema)
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const lockedNodeIds = await ServerRuntime.runPromise(
+          Effect.gen(function* () {
+            const workflowRunStore = yield* WorkflowRunStore;
+            return yield* workflowRunStore.getProjectLockedNodeIds({
+              projectId: input.projectId,
+              userId: ctx.session.user.id,
+            });
+          }),
+        );
+
+        return await saveWorkflowProjectDocument({
+          document: input.document,
+          documentRevision: input.documentRevision,
+          lockedNodeIds,
+          ownerUserId: ctx.session.user.id,
+          projectId: input.projectId,
+        });
+      } catch (error) {
+        throw toTRPCError(error);
+      }
+    }),
+
   startExecution: protectedProcedure
     .input(workflowExecutionRequestSchema)
     .mutation(async ({ ctx, input }) => {
@@ -194,7 +217,7 @@ export const workflowRouter = createTRPCRouter({
     }),
   ),
 
-  generateImage: publicProcedure
+  generateImage: protectedProcedure
     .input(
       z.object({
         model: z.enum(IMAGE_MODEL_IDS),
@@ -204,18 +227,21 @@ export const workflowRouter = createTRPCRouter({
         aspectRatio: z.enum(IMAGE_ASPECT_RATIOS).optional(),
       }),
     )
-    .mutation(async ({ input }) =>
+    .mutation(async ({ ctx, input }) =>
       ServerRuntime.runPromise(
         Effect.gen(function* () {
           const vertexAi = yield* VertexAi;
-          return yield* vertexAi.generateImagesWithNanoBananaPro(input);
+          return yield* vertexAi.generateImagesWithNanoBananaPro({
+            ownerUserId: ctx.session.user.id,
+            request: input,
+          });
         }),
       ).catch((error) => {
         throw toTRPCError(error);
       }),
     ),
 
-  generateVideo: publicProcedure
+  generateVideo: protectedProcedure
     .input(
       z.object({
         model: z.enum(VIDEO_MODEL_IDS),
@@ -228,52 +254,14 @@ export const workflowRouter = createTRPCRouter({
         resolution: z.enum(VIDEO_RESOLUTIONS).optional(),
       }),
     )
-    .mutation(async ({ input }) =>
+    .mutation(async ({ ctx, input }) =>
       ServerRuntime.runPromise(
         Effect.gen(function* () {
           const vertexAi = yield* VertexAi;
-          return yield* vertexAi.generateVideosWithVeo31(input);
-        }),
-      ).catch((error) => {
-        throw toTRPCError(error);
-      }),
-    ),
-
-  uploadAsset: publicProcedure
-    .input(formDataSchema)
-    .mutation(async ({ input }) =>
-      ServerRuntime.runPromise(
-        Effect.gen(function* () {
-          const workflowStorage = yield* WorkflowStorage;
-          const file = input.get("file");
-
-          if (!(file instanceof File)) {
-            return yield* Effect.fail(
-              new WorkflowValidationError({ message: "Missing file upload." }),
-            );
-          }
-
-          const kind = file.type.startsWith("image/")
-            ? "image"
-            : file.type.startsWith("video/")
-              ? "video"
-              : null;
-
-          if (!kind) {
-            return yield* Effect.fail(
-              new WorkflowValidationError({
-                message: "Only image and video uploads are supported.",
-              }),
-            );
-          }
-
-          const asset = yield* workflowStorage.saveFormFileAsAsset({
-            file,
-            kind,
-            source: "upload",
+          return yield* vertexAi.generateVideosWithVeo31({
+            ownerUserId: ctx.session.user.id,
+            request: input,
           });
-
-          return { asset };
         }),
       ).catch((error) => {
         throw toTRPCError(error);

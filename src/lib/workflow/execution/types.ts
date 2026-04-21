@@ -2,6 +2,7 @@ import type { Effect } from "effect";
 
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import type {
+  WorkflowAuthorizationError,
   WorkflowConfigError,
   WorkflowCreditsError,
   WorkflowExecutionError,
@@ -28,10 +29,11 @@ export type WorkflowExecutionSelection = {
 
 export type StartWorkflowExecutionRequest = {
   document: WorkflowDocument;
+  projectId?: string | null;
   target: WorkflowExecutionTarget;
   selection?: WorkflowExecutionSelection | null;
   clientRunId?: string | null;
-  documentVersion?: number | null;
+  documentRevision?: number | null;
   idempotencyKey?: string | null;
 };
 
@@ -59,6 +61,8 @@ export type WorkflowCreditsSummary = {
 
 export type WorkflowExecutionStatusResponse = {
   runId: string;
+  targetNodeIds: string[];
+  projectDocumentRevision: number | null;
   document: WorkflowDocument;
   runtime: WorkflowExecutionRuntimeState;
   activity: string;
@@ -67,6 +71,7 @@ export type WorkflowExecutionStatusResponse = {
 };
 
 export type WorkflowExecutionPortError =
+  | WorkflowAuthorizationError
   | WorkflowCreditsError
   | WorkflowConfigError
   | WorkflowExecutionError
@@ -82,6 +87,12 @@ export type WorkflowExecutionPorts = {
   readonly generateVideo: (
     request: GenerateVideoRequest,
   ) => Effect.Effect<GenerateVideoResponse, WorkflowExecutionPortError>;
+  readonly onCompleted?: (params: {
+    document: WorkflowDocument;
+    request: StartWorkflowExecutionRequest;
+    runId: string;
+    targetNodeIds: string[];
+  }) => Effect.Effect<number | null, WorkflowExecutionPortError>;
   readonly onStateChange?: (
     state: WorkflowExecutionStatusResponse,
   ) => Effect.Effect<void, never>;

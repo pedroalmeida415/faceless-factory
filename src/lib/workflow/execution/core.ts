@@ -77,6 +77,12 @@ export function executeWorkflow(params: {
   runId: string;
   ports: WorkflowExecutionPorts;
 }) {
+  const targetNodeIds = resolveWorkflowExecutionTargets(
+    params.request.document,
+    params.request.selection?.nodeIds ?? [],
+    params.request.target,
+  );
+
   const state: ExecutionState = {
     document: params.request.document,
     runtime: createWorkflowExecutionRuntimeState(
@@ -85,10 +91,13 @@ export function executeWorkflow(params: {
     ),
     status: "queued",
   };
+  let projectDocumentRevision = params.request.documentRevision ?? null;
 
   const publish = () => {
     const response = buildWorkflowExecutionStatusResponse({
       runId: params.runId,
+      targetNodeIds,
+      projectDocumentRevision,
       document: state.document,
       runtime: syncWorkflowExecutionRuntimeState(state.document, state.runtime),
       status: state.status,
@@ -381,13 +390,7 @@ export function executeWorkflow(params: {
   return Effect.gen(function* () {
     yield* publish();
 
-    const targetIds = resolveWorkflowExecutionTargets(
-      state.document,
-      params.request.selection?.nodeIds ?? [],
-      params.request.target,
-    );
-
-    if (!targetIds.length) {
+    if (!targetNodeIds.length) {
       return yield* Effect.fail(
         new WorkflowValidationError({
           message: "Add an image or video generator first.",
@@ -395,7 +398,10 @@ export function executeWorkflow(params: {
       );
     }
 
-    WorkflowGraphValidator.validateExecutionTargets(state.document, targetIds);
+    WorkflowGraphValidator.validateExecutionTargets(
+      state.document,
+      targetNodeIds,
+    );
 
     state.status = "running";
     state.runtime = {
@@ -412,7 +418,7 @@ export function executeWorkflow(params: {
     const pending: PendingMap = new Map();
 
     yield* Effect.forEach(
-      targetIds,
+      targetNodeIds,
       (nodeId) =>
         evaluateNode(nodeId, new Set(), nodeMap, incomingByTarget, pending),
       {
@@ -420,6 +426,16 @@ export function executeWorkflow(params: {
         discard: true,
       },
     );
+
+    projectDocumentRevision =
+      (yield* params.ports.onCompleted
+        ? params.ports.onCompleted({
+            document: state.document,
+            request: params.request,
+            runId: params.runId,
+            targetNodeIds,
+          })
+        : Effect.succeed(projectDocumentRevision)) ?? projectDocumentRevision;
 
     state.runtime = {
       ...state.runtime,
@@ -431,6 +447,8 @@ export function executeWorkflow(params: {
 
     return buildWorkflowExecutionStatusResponse({
       runId: params.runId,
+      targetNodeIds,
+      projectDocumentRevision,
       document: state.document,
       runtime: syncWorkflowExecutionRuntimeState(state.document, state.runtime),
       status: state.status,

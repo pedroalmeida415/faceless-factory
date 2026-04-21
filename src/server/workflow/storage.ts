@@ -2,14 +2,21 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { and, eq, isNull } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
-import { WorkflowStorageError } from "~/lib/workflow/errors";
+import {
+  WorkflowAuthorizationError,
+  WorkflowStorageError,
+} from "~/lib/workflow/errors";
 import type {
   AssetKind,
   AssetSource,
   WorkflowAsset,
 } from "~/lib/workflow/types";
+import { db } from "~/server/db";
+import { assets } from "~/server/db/schema";
+import { assertWorkflowProjectAccess } from "~/server/workflow/projects";
 
 const STORAGE_ROOT = path.join(process.cwd(), ".data", "workflow-assets");
 
@@ -34,7 +41,12 @@ const EXTENSION_TO_MIME: Record<string, string> = {
   ".webp": "image/webp",
 };
 
-type SaveBufferAsAssetOptions = {
+type AssetOwner = {
+  ownerUserId: string;
+  projectId?: string | null;
+};
+
+type SaveBufferAsAssetOptions = AssetOwner & {
   buffer: Buffer;
   kind: AssetKind;
   source: AssetSource;
@@ -43,14 +55,23 @@ type SaveBufferAsAssetOptions = {
   model?: string | null;
 };
 
-type CreateExternalAssetOptions = {
+type SaveExternalAssetOptions = AssetOwner & {
   kind: AssetKind;
   source: AssetSource;
   mimeType: string;
   fileName: string;
-  url: string;
   model?: string | null;
+  url: string;
 };
+
+function toAssetWriteError(message: string, cause: unknown) {
+  return cause instanceof WorkflowAuthorizationError
+    ? cause
+    : new WorkflowStorageError({
+        message,
+        cause,
+      });
+}
 
 function sanitizeBaseName(input: string) {
   return (
@@ -75,11 +96,8 @@ function guessMimeType(fileName: string) {
   return EXTENSION_TO_MIME[ext] ?? "application/octet-stream";
 }
 
-function buildAssetUrl(storagePath: string) {
-  return `/api/assets/${storagePath
-    .split("/")
-    .map((part) => encodeURIComponent(part))
-    .join("/")}`;
+function buildAssetUrl(assetId: string) {
+  return `/api/assets/${encodeURIComponent(assetId)}`;
 }
 
 function resolveAssetAbsolutePath(storagePath: string) {
@@ -94,6 +112,67 @@ function resolveAssetAbsolutePath(storagePath: string) {
   return absolutePath;
 }
 
+async function insertAssetRecord(params: {
+  externalUri: string | null;
+  fileName: string;
+  id: string;
+  kind: AssetKind;
+  mimeType: string;
+  model: string | null;
+  ownerUserId: string;
+  projectId: string | null;
+  sizeBytes: number;
+  source: AssetSource;
+  storageKey: string | null;
+  storageProvider: string;
+}) {
+  if (params.projectId) {
+    await assertWorkflowProjectAccess({
+      ownerUserId: params.ownerUserId,
+      projectId: params.projectId,
+    });
+  }
+
+  const [asset] = await db
+    .insert(assets)
+    .values({
+      createdAt: new Date(),
+      externalUri: params.externalUri,
+      fileName: params.fileName,
+      id: params.id,
+      kind: params.kind,
+      mimeType: params.mimeType,
+      model: params.model,
+      ownerUserId: params.ownerUserId,
+      projectId: params.projectId,
+      sizeBytes: params.sizeBytes,
+      source: params.source,
+      storageKey: params.storageKey,
+      storageProvider: params.storageProvider,
+    })
+    .returning();
+
+  if (!asset) {
+    throw new WorkflowStorageError({
+      message: "Failed to persist asset metadata.",
+    });
+  }
+
+  return {
+    createdAt: asset.createdAt.toISOString(),
+    externalUri: asset.externalUri,
+    fileName: asset.fileName,
+    id: asset.id,
+    kind: asset.kind,
+    mimeType: asset.mimeType,
+    model: asset.model,
+    size: asset.sizeBytes,
+    source: asset.source,
+    storagePath: asset.storageKey,
+    url: buildAssetUrl(asset.id),
+  } satisfies WorkflowAsset;
+}
+
 function saveBufferAsAssetEffect({
   buffer,
   kind,
@@ -101,19 +180,33 @@ function saveBufferAsAssetEffect({
   mimeType,
   fileName,
   model = null,
+  ownerUserId,
+  projectId = null,
 }: SaveBufferAsAssetOptions) {
   return Effect.gen(function* () {
+    if (projectId) {
+      yield* Effect.tryPromise({
+        try: () =>
+          assertWorkflowProjectAccess({
+            ownerUserId,
+            projectId,
+          }),
+        catch: (cause) =>
+          toAssetWriteError("Failed to persist asset metadata.", cause),
+      });
+    }
+
     const extension = inferExtension(fileName, mimeType);
     const baseName = sanitizeBaseName(path.basename(fileName, extension));
     const dateFolder = new Date().toISOString().slice(0, 10);
-    const relativePath = path.posix.join(
+    const storageKey = path.posix.join(
       source,
       kind,
       dateFolder,
       `${randomUUID()}-${baseName}${extension}`,
     );
     const absolutePath = yield* Effect.try({
-      try: () => resolveAssetAbsolutePath(relativePath),
+      try: () => resolveAssetAbsolutePath(storageKey),
       catch: (cause) =>
         new WorkflowStorageError({
           message: "Invalid asset path.",
@@ -138,19 +231,55 @@ function saveBufferAsAssetEffect({
         }),
     });
 
-    return {
-      id: randomUUID(),
-      kind,
-      source,
-      fileName: `${baseName}${extension}`,
-      mimeType,
-      size: buffer.byteLength,
-      createdAt: new Date().toISOString(),
-      url: buildAssetUrl(relativePath),
-      storagePath: relativePath,
-      externalUri: null,
-      model,
-    } satisfies WorkflowAsset;
+    return yield* Effect.tryPromise({
+      try: () =>
+        insertAssetRecord({
+          externalUri: null,
+          fileName: `${baseName}${extension}`,
+          id: randomUUID(),
+          kind,
+          mimeType,
+          model,
+          ownerUserId,
+          projectId,
+          sizeBytes: buffer.byteLength,
+          source,
+          storageKey,
+          storageProvider: "local",
+        }),
+      catch: (cause) => toAssetWriteError("Failed to persist asset metadata.", cause),
+    });
+  });
+}
+
+function saveExternalAssetEffect({
+  fileName,
+  kind,
+  mimeType,
+  model = null,
+  ownerUserId,
+  projectId = null,
+  source,
+  url,
+}: SaveExternalAssetOptions) {
+  return Effect.tryPromise({
+    try: () =>
+      insertAssetRecord({
+        externalUri: url,
+        fileName,
+        id: randomUUID(),
+        kind,
+        mimeType,
+        model,
+        ownerUserId,
+        projectId,
+        sizeBytes: 0,
+        source,
+        storageKey: null,
+        storageProvider: "external",
+      }),
+    catch: (cause) =>
+      toAssetWriteError("Failed to persist external asset metadata.", cause),
   });
 }
 
@@ -185,10 +314,55 @@ function readStoredAssetEffect(asset: Pick<WorkflowAsset, "storagePath">) {
   });
 }
 
-function readAssetByPathEffect(storagePath: string) {
+function readAssetByIdEffect(params: { assetId: string; userId: string }) {
   return Effect.gen(function* () {
+    const [asset] = yield* Effect.tryPromise({
+      try: () =>
+        db
+          .select()
+          .from(assets)
+          .where(
+            and(
+              isNull(assets.deletedAt),
+              eq(assets.id, params.assetId),
+              eq(assets.ownerUserId, params.userId),
+            ),
+          )
+          .limit(1),
+      catch: (cause) =>
+        new WorkflowStorageError({
+          message: "Failed to load asset metadata.",
+          cause,
+        }),
+    });
+
+    if (!asset) {
+      return yield* Effect.fail(
+        new WorkflowAuthorizationError({
+          message: `Asset ${params.assetId} was not found.`,
+        }),
+      );
+    }
+
+    if (asset.externalUri) {
+      return {
+        data: null,
+        externalUri: asset.externalUri,
+        mimeType: asset.mimeType,
+      };
+    }
+
+    const storageKey = asset.storageKey;
+    if (!storageKey) {
+      return yield* Effect.fail(
+        new WorkflowStorageError({
+          message: "Asset is missing a storage key.",
+        }),
+      );
+    }
+
     const absolutePath = yield* Effect.try({
-      try: () => resolveAssetAbsolutePath(storagePath),
+      try: () => resolveAssetAbsolutePath(storageKey),
       catch: (cause) =>
         new WorkflowStorageError({
           message: "Invalid asset path.",
@@ -207,7 +381,8 @@ function readAssetByPathEffect(storagePath: string) {
 
     return {
       data,
-      mimeType: guessMimeType(storagePath),
+      externalUri: null,
+      mimeType: asset.mimeType || guessMimeType(storageKey),
     };
   });
 }
@@ -215,32 +390,48 @@ function readAssetByPathEffect(storagePath: string) {
 export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
   WorkflowStorage,
   {
-    readonly saveBufferAsAsset: (
-      options: SaveBufferAsAssetOptions,
-    ) => Effect.Effect<WorkflowAsset, WorkflowStorageError>;
-    readonly saveFormFileAsAsset: (options: {
-      file: File;
-      kind: AssetKind;
-      source: AssetSource;
-      model?: string | null;
-    }) => Effect.Effect<WorkflowAsset, WorkflowStorageError>;
+    readonly readAssetById: (params: {
+      assetId: string;
+      userId: string;
+    }) => Effect.Effect<
+      { data: Buffer | null; externalUri: string | null; mimeType: string },
+      WorkflowAuthorizationError | WorkflowStorageError
+    >;
     readonly readStoredAsset: (
       asset: Pick<WorkflowAsset, "storagePath">,
     ) => Effect.Effect<Buffer, WorkflowStorageError>;
-    readonly readAssetByPath: (
-      storagePath: string,
+    readonly saveBufferAsAsset: (
+      options: SaveBufferAsAssetOptions,
     ) => Effect.Effect<
-      { data: Buffer; mimeType: string },
-      WorkflowStorageError
+      WorkflowAsset,
+      WorkflowAuthorizationError | WorkflowStorageError
+    >;
+    readonly saveExternalAsset: (
+      options: SaveExternalAssetOptions,
+    ) => Effect.Effect<
+      WorkflowAsset,
+      WorkflowAuthorizationError | WorkflowStorageError
+    >;
+    readonly saveFormFileAsAsset: (options: {
+      file: File;
+      kind: AssetKind;
+      ownerUserId: string;
+      projectId?: string | null;
+      source: AssetSource;
+      model?: string | null;
+    }) => Effect.Effect<
+      WorkflowAsset,
+      WorkflowAuthorizationError | WorkflowStorageError
     >;
   }
 >() {
   static readonly functions = Effect.serviceFunctions(this);
 
   static readonly Live = Layer.succeed(this, {
-    readAssetByPath: readAssetByPathEffect,
+    readAssetById: readAssetByIdEffect,
     readStoredAsset: readStoredAssetEffect,
     saveBufferAsAsset: saveBufferAsAssetEffect,
+    saveExternalAsset: saveExternalAssetEffect,
     saveFormFileAsAsset: (options) =>
       Effect.gen(function* () {
         const buffer = yield* Effect.tryPromise({
@@ -254,35 +445,14 @@ export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
 
         return yield* saveBufferAsAssetEffect({
           buffer,
-          kind: options.kind,
-          source: options.source,
-          mimeType: options.file.type || guessMimeType(options.file.name),
           fileName: options.file.name,
+          kind: options.kind,
+          mimeType: options.file.type || guessMimeType(options.file.name),
           model: options.model,
+          ownerUserId: options.ownerUserId,
+          projectId: options.projectId,
+          source: options.source,
         });
       }),
   });
-}
-
-export function createExternalAsset({
-  kind,
-  source,
-  mimeType,
-  fileName,
-  url,
-  model = null,
-}: CreateExternalAssetOptions): WorkflowAsset {
-  return {
-    id: randomUUID(),
-    kind,
-    source,
-    fileName,
-    mimeType,
-    size: 0,
-    createdAt: new Date().toISOString(),
-    url,
-    storagePath: null,
-    externalUri: url,
-    model,
-  };
 }

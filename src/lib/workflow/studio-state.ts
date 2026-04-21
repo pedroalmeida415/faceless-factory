@@ -147,8 +147,6 @@ function buildWorkflowCanvasNode(
   editor: WorkflowEditorState,
   runtime: WorkflowRuntimeState,
 ): WorkflowCanvasNode {
-  const dimensions = editor.nodeDimensionsById[node.id];
-
   return {
     id: node.id,
     type: node.kind,
@@ -156,8 +154,6 @@ function buildWorkflowCanvasNode(
     data: toWorkflowNodeData(node, runtime.nodeStateById[node.id]),
     selected: editor.selectedNodeIds.includes(node.id),
     style: { width: 320 },
-    width: dimensions?.width,
-    height: dimensions?.height,
   };
 }
 

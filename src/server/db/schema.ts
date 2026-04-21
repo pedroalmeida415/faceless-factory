@@ -1,5 +1,23 @@
 import { relations } from "drizzle-orm";
-import { boolean, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import {
+  bigint,
+  boolean,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+} from "drizzle-orm/pg-core";
+
+import type { WorkflowDocument } from "~/lib/workflow/document";
+import type { AssetKind, AssetSource } from "~/lib/workflow/types";
+
+type CreditLedgerEntryKind =
+  | "debit"
+  | "refund"
+  | "grant"
+  | "purchase"
+  | "adjustment";
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -14,6 +32,9 @@ export const user = pgTable("user", {
     .notNull(),
   updatedAt: timestamp("updated_at")
     .$defaultFn(() => /* @__PURE__ */ new Date())
+    .notNull(),
+  creditBalance: bigint("credit_balance", { mode: "number" })
+    .default(0)
     .notNull(),
 });
 
@@ -61,9 +82,106 @@ export const verification = pgTable("verification", {
   ),
 });
 
+export const workflowProjects = pgTable(
+  "workflow_projects",
+  {
+    id: text("id").primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    document: jsonb("document").$type<WorkflowDocument>().notNull(),
+    documentRevision: bigint("document_revision", { mode: "number" })
+      .default(0)
+      .notNull(),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => /* @__PURE__ */ new Date())
+      .notNull(),
+    updatedAt: timestamp("updated_at")
+      .$defaultFn(() => /* @__PURE__ */ new Date())
+      .notNull(),
+    lastOpenedAt: timestamp("last_opened_at"),
+  },
+  (table) => ({
+    ownerUpdatedAtIdx: index("workflow_projects_owner_updated_at_idx").on(
+      table.ownerUserId,
+      table.updatedAt,
+    ),
+    ownerLastOpenedAtIdx: index(
+      "workflow_projects_owner_last_opened_at_idx",
+    ).on(table.ownerUserId, table.lastOpenedAt),
+  }),
+);
+
+export const assets = pgTable(
+  "assets",
+  {
+    id: text("id").primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    projectId: text("project_id").references(() => workflowProjects.id, {
+      onDelete: "set null",
+    }),
+    source: text("source").$type<AssetSource>().notNull(),
+    kind: text("kind").$type<AssetKind>().notNull(),
+    storageProvider: text("storage_provider").notNull(),
+    storageKey: text("storage_key"),
+    mimeType: text("mime_type").notNull(),
+    fileName: text("file_name").notNull(),
+    sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+    model: text("model"),
+    externalUri: text("external_uri"),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => /* @__PURE__ */ new Date())
+      .notNull(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (table) => ({
+    ownerCreatedAtIdx: index("assets_owner_created_at_idx").on(
+      table.ownerUserId,
+      table.createdAt,
+    ),
+    projectCreatedAtIdx: index("assets_project_created_at_idx").on(
+      table.projectId,
+      table.createdAt,
+    ),
+  }),
+);
+
+export const creditLedgerEntries = pgTable(
+  "credit_ledger_entries",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    executionId: text("execution_id"),
+    kind: text("kind").$type<CreditLedgerEntryKind>().notNull(),
+    amount: bigint("amount", { mode: "number" }).notNull(),
+    balanceAfter: bigint("balance_after", { mode: "number" }).notNull(),
+    reason: text("reason").notNull(),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => ({
+    userCreatedAtIdx: index("credit_ledger_entries_user_created_at_idx").on(
+      table.userId,
+      table.createdAt,
+    ),
+    executionIdIdx: index("credit_ledger_entries_execution_id_idx").on(
+      table.executionId,
+    ),
+  }),
+);
+
 export const userRelations = relations(user, ({ many }) => ({
   account: many(account),
+  assets: many(assets),
+  creditLedgerEntries: many(creditLedgerEntries),
   session: many(session),
+  workflowProjects: many(workflowProjects),
 }));
 
 export const accountRelations = relations(account, ({ one }) => ({
@@ -73,3 +191,35 @@ export const accountRelations = relations(account, ({ one }) => ({
 export const sessionRelations = relations(session, ({ one }) => ({
   user: one(user, { fields: [session.userId], references: [user.id] }),
 }));
+
+export const workflowProjectsRelations = relations(
+  workflowProjects,
+  ({ many, one }) => ({
+    assets: many(assets),
+    owner: one(user, {
+      fields: [workflowProjects.ownerUserId],
+      references: [user.id],
+    }),
+  }),
+);
+
+export const assetsRelations = relations(assets, ({ one }) => ({
+  owner: one(user, {
+    fields: [assets.ownerUserId],
+    references: [user.id],
+  }),
+  project: one(workflowProjects, {
+    fields: [assets.projectId],
+    references: [workflowProjects.id],
+  }),
+}));
+
+export const creditLedgerEntriesRelations = relations(
+  creditLedgerEntries,
+  ({ one }) => ({
+    user: one(user, {
+      fields: [creditLedgerEntries.userId],
+      references: [user.id],
+    }),
+  }),
+);

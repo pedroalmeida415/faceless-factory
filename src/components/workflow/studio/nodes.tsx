@@ -14,6 +14,11 @@ import {
 import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
 import {
+  WORKFLOW_ASSET_UPLOAD_ACCEPT,
+  WORKFLOW_IMAGE_UPLOAD_ACCEPT,
+  WORKFLOW_VIDEO_UPLOAD_ACCEPT,
+} from "~/lib/workflow/assets";
+import {
   type GeneratorControlDefinition,
   getImageGeneratorControlDefinitions,
   getImageGeneratorModelOptions,
@@ -110,7 +115,12 @@ function AssetNode({ id, data, selected }: NodeProps<AssetNodeData>) {
       : data.assetKind === "video"
         ? "#818cf8"
         : "#94a3b8";
-  const accept = data.assetKind ? `${data.assetKind}/*` : "image/*,video/*";
+  const accept =
+    data.assetKind === "image"
+      ? WORKFLOW_IMAGE_UPLOAD_ACCEPT
+      : data.assetKind === "video"
+        ? WORKFLOW_VIDEO_UPLOAD_ACCEPT
+        : WORKFLOW_ASSET_UPLOAD_ACCEPT;
   const uploadLabel = data.assets.length
     ? `Add more ${data.assetKind ?? "assets"}`
     : data.assetKind

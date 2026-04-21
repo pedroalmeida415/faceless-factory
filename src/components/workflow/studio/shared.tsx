@@ -7,6 +7,10 @@ import { Handle, Position } from "reactflow";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { cn } from "~/lib/utils";
+import {
+  formatWorkflowAssetSize,
+  shouldInlineAssetPreview,
+} from "~/lib/workflow/assets";
 import type { WorkflowAsset, WorkflowNodeData } from "~/lib/workflow/types";
 import type { HandleDefinition } from "./graph";
 import { useWorkflowStudioStore } from "./store";
@@ -30,35 +34,38 @@ export function AssetPreview({
   asset: WorkflowAsset;
   className?: string;
 }) {
-  if (asset.kind === "image") {
+  if (!shouldInlineAssetPreview(asset)) {
     return (
-      <div className="relative h-full w-full">
-        <Image
-          alt={asset.fileName}
-          className={cn("object-cover", className)}
-          fill
-          sizes="(max-width: 768px) 100vw, 320px"
-          src={asset.url}
-          unoptimized
-        />
+      <div
+        className={cn(
+          "flex h-full w-full flex-col items-center justify-center gap-2 bg-muted/40 p-3 text-center",
+          className,
+        )}
+      >
+        <div className="text-[10px] text-muted-foreground uppercase tracking-[0.24em]">
+          {asset.kind}
+        </div>
+        <div className="line-clamp-2 font-medium text-xs">{asset.fileName}</div>
+        <div className="text-[10px] text-muted-foreground">
+          {asset.size
+            ? `${formatWorkflowAssetSize(asset.size)} - open to preview`
+            : "Open to preview"}
+        </div>
       </div>
     );
   }
 
   return (
-    <video
-      className={cn("h-full w-full object-cover", className)}
-      controls
-      preload="metadata"
-      src={asset.url}
-    >
-      <track
-        default
-        kind="captions"
-        label="No captions available"
-        src="data:text/vtt,WEBVTT"
+    <div className="relative h-full w-full">
+      <Image
+        alt={asset.fileName}
+        className={cn("object-cover", className)}
+        fill
+        sizes="(max-width: 768px) 100vw, 320px"
+        src={asset.url}
+        unoptimized
       />
-    </video>
+    </div>
   );
 }
 

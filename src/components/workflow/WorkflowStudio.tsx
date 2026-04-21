@@ -15,6 +15,7 @@ import {
 } from "reactflow";
 import { Card, CardContent } from "~/components/ui/card";
 import { WORKFLOW_GRID_STEP } from "~/lib/workflow/document";
+import type { WorkflowProject } from "~/lib/workflow/project";
 import { WorkflowCreditsBadge } from "./studio/CreditsBadge";
 import { StudioContext } from "./studio/context";
 import { isEditableTarget } from "./studio/graph";
@@ -99,8 +100,8 @@ function WorkflowCanvasControls({
   );
 }
 
-export function WorkflowStudio() {
-  useWorkflowStudioPersistence();
+export function WorkflowStudio({ project }: { project: WorkflowProject }) {
+  useWorkflowStudioPersistence(project);
 
   const flowRef = useRef<ReactFlowInstance | null>(null);
   const nodes = useWorkflowStudioStore((state) => state.nodes);

@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 
+import { assertWorkflowUploadFile } from "~/lib/workflow/assets";
 import {
   getErrorMessage,
   WorkflowValidationError,
@@ -7,26 +8,11 @@ import {
 import { WorkflowNodeAssetService } from "~/lib/workflow/services/node-services";
 import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
 import { WorkflowStudioStoreService } from "~/lib/workflow/services/workflow-studio-store-service";
-import type { AssetKind } from "~/lib/workflow/types";
-
-function getFileAssetKind(file: File): AssetKind {
-  if (file.type.startsWith("image/")) {
-    return "image";
-  }
-
-  if (file.type.startsWith("video/")) {
-    return "video";
-  }
-
-  throw new WorkflowValidationError({
-    message: "Only image and video uploads are supported.",
-  });
-}
 
 function getBatchAssetKind(files: File[]) {
-  const firstKind = getFileAssetKind(files[0] as File);
+  const firstKind = assertWorkflowUploadFile(files[0] as File);
 
-  if (!files.every((file) => getFileAssetKind(file) === firstKind)) {
+  if (!files.every((file) => assertWorkflowUploadFile(file) === firstKind)) {
     throw new WorkflowValidationError({
       message: "Asset nodes only accept one media type at a time.",
     });
@@ -40,9 +26,18 @@ export const WorkflowAssetService = {
     return Effect.gen(function* () {
       const workflowStudioStore = yield* WorkflowStudioStoreService;
       const snapshot = yield* workflowStudioStore.getWorkflowSnapshot();
+      const projectId = snapshot.projectId;
       const node = snapshot.document.nodes.find(
         (candidate) => candidate.id === nodeId,
       );
+
+      if (!projectId) {
+        return yield* Effect.fail(
+          new WorkflowValidationError({
+            message: "Workflow project is not ready yet.",
+          }),
+        );
+      }
 
       if (!node || node.kind !== "asset") {
         return yield* Effect.fail(
@@ -68,7 +63,7 @@ export const WorkflowAssetService = {
 
       const uploadedAssets = yield* Effect.forEach(
         files,
-        (file) => WorkflowClientService.uploadAsset(file),
+        (file) => WorkflowClientService.uploadAsset(file, projectId),
         {
           concurrency: "unbounded",
         },

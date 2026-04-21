@@ -6,6 +6,7 @@ import {
 import { Context, Effect, Layer } from "effect";
 
 import {
+  WorkflowAuthorizationError,
   WorkflowConfigError,
   WorkflowGenerationError,
   type WorkflowStorageError,
@@ -20,10 +21,7 @@ import {
   VEO_31_MODEL_ID,
   type WorkflowAsset,
 } from "~/lib/workflow/types";
-import {
-  createExternalAsset,
-  WorkflowStorage,
-} from "~/server/workflow/storage";
+import { WorkflowStorage } from "~/server/workflow/storage";
 
 type GenerateContentResponse = Awaited<
   ReturnType<GoogleGenAI["models"]["generateContent"]>
@@ -161,19 +159,25 @@ function pollVideosOperation(
 export class VertexAi extends Context.Tag("VertexAi")<
   VertexAi,
   {
-    readonly generateImagesWithNanoBananaPro: (
-      request: GenerateImageRequest,
-    ) => Effect.Effect<
+    readonly generateImagesWithNanoBananaPro: (params: {
+      ownerUserId: string;
+      projectId?: string | null;
+      request: GenerateImageRequest;
+    }) => Effect.Effect<
       GenerateImageResponse,
+      | WorkflowAuthorizationError
       | WorkflowConfigError
       | WorkflowGenerationError
       | WorkflowStorageError
       | WorkflowValidationError
     >;
-    readonly generateVideosWithVeo31: (
-      request: GenerateVideoRequest,
-    ) => Effect.Effect<
+    readonly generateVideosWithVeo31: (params: {
+      ownerUserId: string;
+      projectId?: string | null;
+      request: GenerateVideoRequest;
+    }) => Effect.Effect<
       GenerateVideoResponse,
+      | WorkflowAuthorizationError
       | WorkflowConfigError
       | WorkflowGenerationError
       | WorkflowStorageError
@@ -215,12 +219,20 @@ export class VertexAi extends Context.Tag("VertexAi")<
         }));
 
       const generateImagesWithNanoBananaPro = ({
-        model,
-        mode: _mode,
-        prompt,
-        referenceImages = [],
-        aspectRatio = "1:1",
-      }: GenerateImageRequest) =>
+        ownerUserId,
+        projectId = null,
+        request: {
+          model,
+          mode: _mode,
+          prompt,
+          referenceImages = [],
+          aspectRatio = "1:1",
+        },
+      }: {
+        ownerUserId: string;
+        projectId?: string | null;
+        request: GenerateImageRequest;
+      }) =>
         Effect.gen(function* () {
           const promptText = prompt.trim();
           if (!promptText) {
@@ -277,7 +289,9 @@ export class VertexAi extends Context.Tag("VertexAi")<
             Array.from(generatedParts.entries()),
             ([index, part]): Effect.Effect<
               WorkflowAsset,
-              WorkflowGenerationError | WorkflowStorageError
+              | WorkflowAuthorizationError
+              | WorkflowGenerationError
+              | WorkflowStorageError
             > => {
               const mimeType = part.inlineData?.mimeType ?? "image/png";
               const bytes = part.inlineData?.data;
@@ -297,6 +311,8 @@ export class VertexAi extends Context.Tag("VertexAi")<
                 mimeType,
                 fileName: `nano-banana-pro-${index + 1}.png`,
                 model: NANO_BANANA_PRO_MODEL_ID,
+                ownerUserId,
+                projectId,
               });
             },
             { concurrency: "unbounded" },
@@ -310,15 +326,23 @@ export class VertexAi extends Context.Tag("VertexAi")<
         });
 
       const generateVideosWithVeo31 = ({
-        model,
-        mode: _mode,
-        prompt,
-        referenceImages = [],
-        aspectRatio = "16:9",
-        durationSeconds = 4,
-        generateAudio = true,
-        resolution = "720p",
-      }: GenerateVideoRequest) =>
+        ownerUserId,
+        projectId = null,
+        request: {
+          model,
+          mode: _mode,
+          prompt,
+          referenceImages = [],
+          aspectRatio = "16:9",
+          durationSeconds = 4,
+          generateAudio = true,
+          resolution = "720p",
+        },
+      }: {
+        ownerUserId: string;
+        projectId?: string | null;
+        request: GenerateVideoRequest;
+      }) =>
         Effect.gen(function* () {
           const promptText = prompt.trim();
           const inputImages = referenceImages;
@@ -405,7 +429,9 @@ export class VertexAi extends Context.Tag("VertexAi")<
             Array.from(generatedVideos.entries()),
             ([index, generatedVideo]): Effect.Effect<
               WorkflowAsset,
-              WorkflowGenerationError | WorkflowStorageError
+              | WorkflowAuthorizationError
+              | WorkflowGenerationError
+              | WorkflowStorageError
             > => {
               const video = generatedVideo.video;
               const mimeType = video?.mimeType ?? "video/mp4";
@@ -418,20 +444,22 @@ export class VertexAi extends Context.Tag("VertexAi")<
                   mimeType,
                   fileName: `veo-3-1-${index + 1}.mp4`,
                   model: VEO_31_MODEL_ID,
+                  ownerUserId,
+                  projectId,
                 });
               }
 
               if (video?.uri) {
-                return Effect.succeed(
-                  createExternalAsset({
-                    kind: "video",
-                    source: "generated",
-                    mimeType,
-                    fileName: `veo-3-1-${index + 1}.mp4`,
-                    url: video.uri,
-                    model: VEO_31_MODEL_ID,
-                  }),
-                );
+                return workflowStorage.saveExternalAsset({
+                  fileName: `veo-3-1-${index + 1}.mp4`,
+                  kind: "video",
+                  mimeType,
+                  model: VEO_31_MODEL_ID,
+                  ownerUserId,
+                  projectId,
+                  source: "generated",
+                  url: video.uri,
+                });
               }
 
               return Effect.fail(

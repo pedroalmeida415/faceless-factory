@@ -3,28 +3,31 @@ import { randomUUID } from "node:crypto";
 import { Context, Effect, Layer } from "effect";
 import {
   getErrorMessage,
-  type WorkflowAuthorizationError,
+  WorkflowAuthorizationError,
   type WorkflowCreditsError,
   WorkflowInfrastructureError,
   type WorkflowRunNotFoundError,
-  type WorkflowValidationError,
+  WorkflowValidationError,
 } from "~/lib/workflow/errors";
 import { executeWorkflow } from "~/lib/workflow/execution/core";
 import {
   buildWorkflowExecutionStatusResponse,
   createWorkflowExecutionRuntimeState,
 } from "~/lib/workflow/execution/runtime-state";
+import { extractWorkflowExecutionSubgraph } from "~/lib/workflow/execution/subgraph";
+import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target-resolution";
 import type {
   StartWorkflowExecutionRequest,
   WorkflowExecutionPortError,
   WorkflowExecutionStatusResponse,
 } from "~/lib/workflow/execution/types";
+import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
+import { quoteWorkflowExecution } from "~/server/workflow/pricing";
 import {
-  priceImageGeneration,
-  priceVideoGeneration,
-  quoteWorkflowExecution,
-} from "~/server/workflow/pricing";
+  getWorkflowProject,
+  persistWorkflowExecutionResults,
+} from "~/server/workflow/projects";
 import { enqueueWorkflowExecutionJob } from "~/server/workflow/queue";
 import { WorkflowRunStore } from "~/server/workflow/run-store";
 import { VertexAi } from "~/server/workflow/vertex";
@@ -39,6 +42,7 @@ export class WorkflowExecutionService extends Context.Tag(
       request: StartWorkflowExecutionRequest,
     ) => Effect.Effect<
       WorkflowExecutionStatusResponse,
+      | WorkflowAuthorizationError
       | WorkflowCreditsError
       | WorkflowInfrastructureError
       | WorkflowValidationError
@@ -95,8 +99,9 @@ export class WorkflowExecutionService extends Context.Tag(
             return currentRun;
           }
 
-          const credits = yield* workflowCreditsService.refundRemainingCredits({
-            runId: params.runId,
+          const credits = yield* workflowCreditsService.refundExecution({
+            executionId: params.runId,
+            reason: params.message,
             userId: params.userId,
           });
 
@@ -120,18 +125,82 @@ export class WorkflowExecutionService extends Context.Tag(
         request: StartWorkflowExecutionRequest,
       ) =>
         Effect.gen(function* () {
+          const projectId = request.projectId?.trim();
+          if (!projectId) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "A workflow project is required to start execution.",
+              }),
+            );
+          }
+
+          if (request.documentRevision === null || request.documentRevision === undefined) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Workflow project must be saved before execution starts.",
+              }),
+            );
+          }
+
+          const project = yield* Effect.tryPromise({
+            try: () =>
+              getWorkflowProject({
+                ownerUserId: userId,
+                projectId,
+              }),
+            catch: (cause) =>
+              cause instanceof WorkflowAuthorizationError ||
+              cause instanceof WorkflowValidationError
+                ? cause
+                : new WorkflowInfrastructureError({
+                    message: getErrorMessage(cause),
+                    cause,
+                  }),
+          });
+
+          if (project.documentRevision !== request.documentRevision) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Workflow project changed before execution. Save again and retry.",
+              }),
+            );
+          }
+
           const runId = randomUUID();
-          const priceQuote = quoteWorkflowExecution(request);
-          const credits = yield* workflowCreditsService.reserveCredits({
-            runId,
+          const targetNodeIds = resolveWorkflowExecutionTargets(
+            project.document,
+            request.selection?.nodeIds ?? [],
+            request.target,
+          );
+
+          WorkflowGraphValidator.validateExecutionTargets(
+            project.document,
+            targetNodeIds,
+          );
+
+          const submittedRequest = {
+            ...request,
+            documentRevision: project.documentRevision,
+            document: extractWorkflowExecutionSubgraph(
+              project.document,
+              targetNodeIds,
+            ),
+            projectId,
+          } satisfies StartWorkflowExecutionRequest;
+          const priceQuote = quoteWorkflowExecution(submittedRequest);
+          const credits = yield* workflowCreditsService.debitExecution({
+            amount: priceQuote.totalCost,
+            executionId: runId,
+            reason: "Workflow execution started.",
             userId,
-            totalCost: priceQuote.totalCost,
           });
           const initialRun = buildWorkflowExecutionStatusResponse({
             runId,
-            document: request.document,
+            targetNodeIds,
+            projectDocumentRevision: project.documentRevision,
+            document: submittedRequest.document,
             runtime: createWorkflowExecutionRuntimeState(
-              request.document,
+              submittedRequest.document,
               "Queued workflow run.",
             ),
             credits,
@@ -141,13 +210,15 @@ export class WorkflowExecutionService extends Context.Tag(
           const run = yield* workflowRunStore
             .createRun({
               ownerUserId: userId,
+              projectId,
               run: initialRun,
             })
             .pipe(
               Effect.catchAll((error) =>
                 workflowCreditsService
-                  .refundRemainingCredits({
-                    runId,
+                  .refundExecution({
+                    executionId: runId,
+                    reason: "Workflow execution failed before queueing.",
                     userId,
                   })
                   .pipe(
@@ -166,7 +237,7 @@ export class WorkflowExecutionService extends Context.Tag(
           yield* Effect.tryPromise({
             try: () =>
               enqueueWorkflowExecutionJob({
-                request,
+                request: submittedRequest,
                 runId,
                 userId,
               }),
@@ -207,25 +278,41 @@ export class WorkflowExecutionService extends Context.Tag(
           runId,
           ports: {
             generateImage: (imageRequest) =>
-              vertexAi.generateImagesWithNanoBananaPro(imageRequest).pipe(
-                Effect.tap(() =>
-                  workflowCreditsService.consumeReservedCredits({
-                    runId,
-                    userId,
-                    cost: priceImageGeneration(imageRequest),
-                  }),
-                ),
-              ),
+              vertexAi.generateImagesWithNanoBananaPro({
+                ownerUserId: userId,
+                projectId: request.projectId ?? null,
+                request: imageRequest,
+              }),
             generateVideo: (videoRequest) =>
-              vertexAi.generateVideosWithVeo31(videoRequest).pipe(
-                Effect.tap(() =>
-                  workflowCreditsService.consumeReservedCredits({
-                    runId,
-                    userId,
-                    cost: priceVideoGeneration(videoRequest),
+              vertexAi.generateVideosWithVeo31({
+                ownerUserId: userId,
+                projectId: request.projectId ?? null,
+                request: videoRequest,
+              }),
+            onCompleted: ({ document, targetNodeIds }) =>
+              Effect.tryPromise({
+                try: async () => {
+                  const projectId = request.projectId?.trim();
+                  if (!projectId) {
+                    throw new WorkflowInfrastructureError({
+                      message:
+                        "Workflow project is missing from execution context.",
+                    });
+                  }
+
+                  return persistWorkflowExecutionResults({
+                    executionDocument: document,
+                    ownerUserId: userId,
+                    projectId,
+                    targetNodeIds,
+                  });
+                },
+                catch: (cause) =>
+                  new WorkflowInfrastructureError({
+                    message: getErrorMessage(cause),
+                    cause,
                   }),
-                ),
-              ),
+              }),
             onStateChange: (state) =>
               Effect.gen(function* () {
                 const credits = yield* workflowCreditsService.getRunSummary({
@@ -243,12 +330,10 @@ export class WorkflowExecutionService extends Context.Tag(
         }).pipe(
           Effect.tap((state) =>
             Effect.gen(function* () {
-              const credits = yield* workflowCreditsService.finalizeReservation(
-                {
-                  runId,
-                  userId,
-                },
-              );
+              const credits = yield* workflowCreditsService.getRunSummary({
+                runId,
+                userId,
+              });
               return yield* workflowRunStore.updateRun({
                 ...state,
                 credits,
@@ -257,11 +342,11 @@ export class WorkflowExecutionService extends Context.Tag(
           ),
           Effect.catchAll((error) =>
             Effect.gen(function* () {
-              const credits =
-                yield* workflowCreditsService.refundRemainingCredits({
-                  runId,
-                  userId,
-                });
+              const credits = yield* workflowCreditsService.refundExecution({
+                executionId: runId,
+                reason: getErrorMessage(error),
+                userId,
+              });
               const currentRun = yield* workflowRunStore.getRun({
                 runId,
                 userId,
