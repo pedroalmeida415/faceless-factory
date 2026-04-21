@@ -90,6 +90,14 @@ These rules are strict and non-negotiable:
 * **Dense Reasoning:** Provide 1-2 sentences of deep architectural justification for structural changes.
 * **Code-Centric Output:** Output only the necessary commands, diffs, or code blocks.
 
+## 8. Rapid Prototyping & Breakage Policy
+
+This project is in a high-velocity MVP phase. Speed of iteration is the primary metric; technical debt in the form of "legacy support" is strictly forbidden.
+
+* **Schema Volatility:** Do not waste time writing complex Drizzle migration scripts or maintenance tasks. If a schema change is required, apply it directly. Assume the local and staging databases can be dropped and re-initialized (`drizzle-kit push`).
+* **Zero Legacy Support:** Backward compatibility is a non-goal. If a refactor to the node structure or graph engine breaks existing saved workflows in the database, **break them**. We favor a clean, optimal architecture over the preservation of prototype data.
+* **Ephemeral State:** Treat all data in PostgreSQL, Redis, and BullMQ as transient. Do not implement defensive logic for "stale" job payloads or deprecated node configurations. 
+* **Velocity Over Stability:** If a structural change yields a 10% improvement in architectural clarity but breaks every existing user-created graph, execute the change immediately. We are building the engine, not archiving history.
 
 <!-- rtk-instructions v2 -->
 # RTK (Rust Token Killer) - Token-Optimized Commands
