@@ -283,9 +283,7 @@ export function NodeShell({
         </div>
       </CardHeader>
 
-      <CardContent className="nodrag nopan nowheel space-y-3">
-        {children}
-      </CardContent>
+      <CardContent className="space-y-3">{children}</CardContent>
 
       {data.error ? (
         <CardContent>
