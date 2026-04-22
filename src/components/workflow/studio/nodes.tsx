@@ -112,7 +112,7 @@ const PromptNode = memo(function PromptNode({
       selected={selected}
     >
       <Textarea
-        className="min-h-40"
+        className="nodrag nopan min-h-40"
         onChange={(event) => setPrompt(id, event.target.value)}
         placeholder="Describe the shot, mood, framing, lens, motion."
         value={data.prompt}
