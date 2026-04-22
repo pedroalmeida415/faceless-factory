@@ -15,6 +15,15 @@ import type { WorkflowAsset, WorkflowNodeData } from "~/lib/workflow/types";
 import type { HandleDefinition } from "./graph";
 import { useWorkflowStudioStore } from "./store";
 
+function formatHandleLabel(handle: HandleDefinition) {
+  return handle.labelIndex
+    ? `${handle.label} ${handle.labelIndex}`
+    : handle.label;
+}
+
+const socketLabelClassName =
+  "pointer-events-none absolute z-10 -translate-y-4 whitespace-nowrap text-[9px] opacity-0 transition-opacity duration-200 group-hover:opacity-100";
+
 export function ShellButton(
   props: PropsWithChildren<React.ComponentProps<typeof Button>>,
 ) {
@@ -222,10 +231,10 @@ export function NodeShell({
         return (
           <Fragment key={input.id}>
             <div
-              className="pointer-events-none absolute right-full z-10 -translate-y-4 whitespace-nowrap pr-3 text-[9px] opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+              className={cn(socketLabelClassName, "right-full pr-3")}
               style={{ color: input.color, top }}
             >
-              <span>{input.label}</span>
+              <span>{formatHandleLabel(input)}</span>
             </div>
             <Handle
               id={input.id}
@@ -247,22 +256,30 @@ export function NodeShell({
         );
       })}
       {output ? (
-        <Handle
-          id={output.id}
-          position={Position.Right}
-          style={{
-            background: outputConnected ? output.color : "transparent",
-            border: "2px solid rgba(255,255,255,0.9)",
-            boxShadow: outputConnected
-              ? undefined
-              : `inset 0 0 0 2px ${output.color}`,
-            height: 14,
-            right: -8,
-            top: socketTop,
-            width: 14,
-          }}
-          type="source"
-        />
+        <Fragment key={output.id}>
+          <div
+            className={cn(socketLabelClassName, "left-full pl-3")}
+            style={{ color: output.color, top: socketTop }}
+          >
+            <span>{formatHandleLabel(output)}</span>
+          </div>
+          <Handle
+            id={output.id}
+            position={Position.Right}
+            style={{
+              background: outputConnected ? output.color : "transparent",
+              border: "2px solid rgba(255,255,255,0.9)",
+              boxShadow: outputConnected
+                ? undefined
+                : `inset 0 0 0 2px ${output.color}`,
+              height: 14,
+              right: -8,
+              top: socketTop,
+              width: 14,
+            }}
+            type="source"
+          />
+        </Fragment>
       ) : null}
 
       <CardHeader>

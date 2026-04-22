@@ -347,11 +347,13 @@ function getVideoGeneratorModeDefinition(
 function toHandleDefinition(
   input: GeneratorInputDefinition,
   id: string,
+  labelIndex?: number,
 ): GeneratorHandleDefinition {
   const baseDefinition = {
     color: VALUE_TYPE_COLORS[input.valueType],
     id,
     label: input.label,
+    labelIndex,
     required: input.required,
     valueType: input.valueType,
   } satisfies BaseGeneratorHandleDefinition;
@@ -398,7 +400,7 @@ function buildHandleDefinitions(
     );
 
     return Array.from({ length: visibleCount }, (_, index) =>
-      toHandleDefinition(input, `${input.idPrefix}${index}`),
+      toHandleDefinition(input, `${input.idPrefix}${index}`, index + 1),
     );
   });
 }

@@ -7,6 +7,7 @@ export type WorkflowValueType = "text" | "image" | "video";
 export type HandleDefinition = {
   id: string;
   label: string;
+  labelIndex?: number;
   color: string;
 };
 
