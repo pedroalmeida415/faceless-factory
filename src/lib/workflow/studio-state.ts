@@ -237,6 +237,31 @@ function canReuseNode(
   );
 }
 
+function reuseNode(
+  previousNode: WorkflowCanvasNode,
+  nextNode: WorkflowCanvasNode,
+) {
+  if (!canReuseNode(previousNode, nextNode)) {
+    return nextNode;
+  }
+
+  if (
+    previousNode.dragging === nextNode.dragging &&
+    previousNode.resizing === nextNode.resizing
+  ) {
+    return previousNode;
+  }
+
+  // React Flow mutates transient interaction flags onto nodes while dragging.
+  // Preserve measured internals, but clear those flags when syncing from the
+  // document snapshot so completed drags do not stay "live" forever.
+  return {
+    ...previousNode,
+    dragging: nextNode.dragging,
+    resizing: nextNode.resizing,
+  };
+}
+
 function canReuseEdge(
   previousEdge: WorkflowCanvasEdge,
   nextEdge: WorkflowCanvasEdge,
@@ -271,9 +296,7 @@ export function buildWorkflowCanvas(
     );
     const previousNode = previousNodeById?.get(node.id);
 
-    return previousNode && canReuseNode(previousNode, nextNode)
-      ? previousNode
-      : nextNode;
+    return previousNode ? reuseNode(previousNode, nextNode) : nextNode;
   });
 
   const nextEdges = snapshot.document.edges.map((edge) => {

@@ -20,6 +20,7 @@ type WorkflowPersistenceConfig = {
 
 let debounceTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 let config: WorkflowPersistenceConfig | null = null;
+let drainPromise: Promise<WorkflowProjectSaveResponse | null> | null = null;
 let inFlightSave: Promise<WorkflowProjectSaveResponse> | null = null;
 let isDirty = false;
 
@@ -32,39 +33,59 @@ function clearDebounceTimer() {
   debounceTimer = null;
 }
 
-async function drainPendingSave(): Promise<WorkflowProjectSaveResponse | null> {
-  if (!config) {
-    return null;
-  }
+async function runDrainLoop(): Promise<WorkflowProjectSaveResponse | null> {
+  let lastResult: WorkflowProjectSaveResponse | null = null;
 
-  if (inFlightSave) {
-    const result = await inFlightSave;
-    return isDirty ? ((await drainPendingSave()) ?? result) : result;
-  }
+  while (config) {
+    if (inFlightSave) {
+      lastResult = await inFlightSave;
+      continue;
+    }
 
-  if (!isDirty) {
-    return null;
-  }
+    if (!isDirty) {
+      return lastResult;
+    }
 
-  const snapshot = config.getSnapshot();
-  if (!snapshot) {
+    const snapshot = config.getSnapshot();
+    if (!snapshot) {
+      isDirty = false;
+      return lastResult;
+    }
+
     isDirty = false;
-    return null;
+
+    const pendingSave = Effect.runPromise(
+      WorkflowClientService.saveProject(snapshot),
+    );
+    inFlightSave = pendingSave;
+
+    try {
+      const result = await pendingSave;
+      lastResult = result;
+      config?.onSaved(result);
+    } catch (error) {
+      config?.onError(error);
+      throw error;
+    } finally {
+      if (inFlightSave === pendingSave) {
+        inFlightSave = null;
+      }
+    }
   }
 
-  isDirty = false;
-  inFlightSave = Effect.runPromise(WorkflowClientService.saveProject(snapshot));
+  return lastResult;
+}
 
-  try {
-    const result = await inFlightSave;
-    config?.onSaved(result);
-    return isDirty ? ((await drainPendingSave()) ?? result) : result;
-  } catch (error) {
-    config?.onError(error);
-    throw error;
-  } finally {
-    inFlightSave = null;
+function drainPendingSave(): Promise<WorkflowProjectSaveResponse | null> {
+  if (drainPromise) {
+    return drainPromise;
   }
+
+  drainPromise = runDrainLoop().finally(() => {
+    drainPromise = null;
+  });
+
+  return drainPromise;
 }
 
 export const WorkflowPersistenceService = {
@@ -98,6 +119,7 @@ export const WorkflowPersistenceService = {
   reset() {
     clearDebounceTimer();
     config = null;
+    drainPromise = null;
     inFlightSave = null;
     isDirty = false;
   },
