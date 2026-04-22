@@ -5,16 +5,22 @@ import {
   normalizeVideoGeneratorSettings,
 } from "~/lib/workflow/generator-models";
 import {
+  createDefaultLlmGeneratorSettings,
+  normalizeLlmGeneratorSettings,
+} from "~/lib/workflow/llm-models";
+import {
   formatNodeTitle,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
 import type {
   AssetNodeFields,
   ImageGeneratorSettings,
+  LlmGeneratorSettings,
   PromptNodeFields,
   VideoGeneratorSettings,
   WorkflowAsset,
   WorkflowGeneratorResult,
+  WorkflowLlmResult,
   WorkflowNodeKind,
 } from "~/lib/workflow/types";
 
@@ -56,11 +62,18 @@ export type VideoGeneratorWorkflowNode = WorkflowDocumentNodeBase &
     kind: "videoGenerator";
   };
 
+export type LlmGeneratorWorkflowNode = WorkflowDocumentNodeBase &
+  LlmGeneratorSettings &
+  WorkflowLlmResult & {
+    kind: "llmGenerator";
+  };
+
 export type WorkflowDocumentNode =
   | PromptWorkflowNode
   | AssetWorkflowNode
   | ImageGeneratorWorkflowNode
-  | VideoGeneratorWorkflowNode;
+  | VideoGeneratorWorkflowNode
+  | LlmGeneratorWorkflowNode;
 
 export type WorkflowDocumentEdge = {
   id: string;
@@ -111,6 +124,14 @@ function createWorkflowGeneratorResult(): WorkflowGeneratorResult {
   };
 }
 
+function createWorkflowLlmResult(): WorkflowLlmResult {
+  return {
+    lastPrompt: "",
+    lastSystemPrompt: "",
+    responseText: null,
+  };
+}
+
 function makeWorkflowNode(
   id: string,
   kind: WorkflowNodeKind,
@@ -155,6 +176,15 @@ function makeWorkflowNode(
         ...createDefaultVideoGeneratorSettings(),
         ...createWorkflowGeneratorResult(),
       };
+    case "llmGenerator":
+      return {
+        id,
+        kind,
+        label,
+        position,
+        ...createDefaultLlmGeneratorSettings(),
+        ...createWorkflowLlmResult(),
+      };
   }
 }
 
@@ -175,7 +205,8 @@ function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
     value === "prompt" ||
     value === "asset" ||
     value === "imageGenerator" ||
-    value === "videoGenerator"
+    value === "videoGenerator" ||
+    value === "llmGenerator"
   );
 }
 
@@ -343,6 +374,35 @@ function normalizeWorkflowNode(
           baseNode.responseText,
         ),
         outputAssets: asWorkflowAssets(value.outputAssets),
+      };
+    }
+    case "llmGenerator": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as LlmGeneratorWorkflowNode;
+      const settings = normalizeLlmGeneratorSettings({
+        model: value.model as LlmGeneratorSettings["model"] | undefined,
+        mode: value.mode as string | null | undefined,
+        config: isRecord(value.config)
+          ? (value.config as LlmGeneratorSettings["config"])
+          : {},
+      });
+
+      return {
+        ...baseNode,
+        ...settings,
+        label: asString(value.label, baseNode.label),
+        lastPrompt: asString(value.lastPrompt, baseNode.lastPrompt),
+        lastSystemPrompt: asString(
+          value.lastSystemPrompt,
+          baseNode.lastSystemPrompt,
+        ),
+        responseText: asNullableString(
+          value.responseText,
+          baseNode.responseText,
+        ),
       };
     }
   }

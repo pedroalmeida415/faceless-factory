@@ -12,7 +12,7 @@ import {
 } from "~/lib/workflow/errors";
 import {
   coerceMediaInputBatches,
-  coercePromptInput,
+  coerceTextInput,
 } from "~/lib/workflow/execution/input-coercion";
 import {
   buildWorkflowExecutionStatusResponse,
@@ -31,12 +31,22 @@ import type {
 import {
   buildImageGenerationRequest,
   buildVideoGenerationRequest,
+  getImageGeneratorModelCreditCost,
+  getVideoGeneratorModelCreditCost,
 } from "~/lib/workflow/generator-models";
 import { buildIncomingByTarget, type RuntimeValue } from "~/lib/workflow/graph";
 import {
+  buildLlmGenerationRequest,
+  calculateLlmUsageCreditCost,
+  SYSTEM_PROMPT_INPUT_HANDLE_ID,
+} from "~/lib/workflow/llm-models";
+import { PROMPT_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
+import {
   ImageGeneratorService,
+  LlmGeneratorService,
   VideoGeneratorService,
 } from "~/lib/workflow/services/node-services";
+import { isGeneratorNodeKind } from "~/lib/workflow/types";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 
 type ExecutionError = WorkflowExecutionError | WorkflowExecutionPortError;
@@ -82,6 +92,9 @@ export function executeWorkflow(params: {
     params.request.selection?.nodeIds ?? [],
     params.request.target,
   );
+  const executedNodeIds = params.request.document.nodes
+    .filter((node) => isGeneratorNodeKind(node.kind))
+    .map((node) => node.id);
 
   const state: ExecutionState = {
     document: params.request.document,
@@ -92,12 +105,14 @@ export function executeWorkflow(params: {
     status: "queued",
   };
   let projectDocumentRevision = params.request.documentRevision ?? null;
+  let finalCostCredits = 0;
 
   const publish = () => {
     const response = buildWorkflowExecutionStatusResponse({
       runId: params.runId,
-      targetNodeIds,
+      targetNodeIds: executedNodeIds,
       projectDocumentRevision,
+      finalCostCredits: state.status === "success" ? finalCostCredits : null,
       document: state.document,
       runtime: syncWorkflowExecutionRuntimeState(state.document, state.runtime),
       status: state.status,
@@ -201,13 +216,18 @@ export function executeWorkflow(params: {
         return Effect.gen(function* () {
           yield* setNodeRuntime(currentId, "running", null);
 
-          const prompt = yield* coercePromptInput(
+          const prompt = (yield* coerceTextInput(
             state.document,
             nextPath,
             currentId,
+            PROMPT_INPUT_HANDLE_ID,
+            {
+              message: "Connect prompt text.",
+              required: true,
+            },
             incomingByTarget,
             evaluateNode,
-          );
+          )) as string;
           const batchPlan = yield* coerceMediaInputBatches(
             state.document,
             nextPath,
@@ -238,6 +258,9 @@ export function executeWorkflow(params: {
             { concurrency: "unbounded" },
           );
 
+          finalCostCredits +=
+            responses.length * getImageGeneratorModelCreditCost(node.model);
+
           const outputAssets = responses.flatMap((response) => response.assets);
           const responseTextParts = responses
             .map((response) => response.responseText?.trim())
@@ -267,13 +290,18 @@ export function executeWorkflow(params: {
         return Effect.gen(function* () {
           yield* setNodeRuntime(currentId, "running", null);
 
-          const prompt = yield* coercePromptInput(
+          const prompt = (yield* coerceTextInput(
             state.document,
             nextPath,
             currentId,
+            PROMPT_INPUT_HANDLE_ID,
+            {
+              message: "Connect prompt text.",
+              required: true,
+            },
             incomingByTarget,
             evaluateNode,
-          );
+          )) as string;
           const batchPlan = yield* coerceMediaInputBatches(
             state.document,
             nextPath,
@@ -304,6 +332,9 @@ export function executeWorkflow(params: {
             { concurrency: "unbounded" },
           );
 
+          finalCostCredits +=
+            responses.length * getVideoGeneratorModelCreditCost(node.model);
+
           const outputAssets = responses.flatMap((response) => response.assets);
 
           yield* updateDocumentNode(currentId, (currentNode) =>
@@ -321,6 +352,96 @@ export function executeWorkflow(params: {
             type: "video",
             assets: outputAssets,
             iterationMode: "static",
+          } satisfies RuntimeValue;
+        });
+      case "llmGenerator":
+        return Effect.gen(function* () {
+          yield* setNodeRuntime(currentId, "running", null);
+
+          const prompt = (yield* coerceTextInput(
+            state.document,
+            nextPath,
+            currentId,
+            PROMPT_INPUT_HANDLE_ID,
+            {
+              message: "Connect prompt text.",
+              required: true,
+            },
+            incomingByTarget,
+            evaluateNode,
+          )) as string;
+          const systemPrompt = yield* coerceTextInput(
+            state.document,
+            nextPath,
+            currentId,
+            SYSTEM_PROMPT_INPUT_HANDLE_ID,
+            {
+              message: "Connect system text.",
+              required: false,
+            },
+            incomingByTarget,
+            evaluateNode,
+          );
+          const batchPlan = yield* coerceMediaInputBatches(
+            state.document,
+            nextPath,
+            currentId,
+            "image",
+            incomingByTarget,
+            evaluateNode,
+          );
+
+          yield* setActivity(
+            formatRunningActivity(
+              node.label,
+              batchPlan.iterations,
+              batchPlan.hasIterator,
+            ),
+          );
+
+          const responses = yield* Effect.forEach(
+            batchPlan.batches,
+            (imageInputsByHandle) =>
+              params.ports.generateLlm(
+                buildLlmGenerationRequest({
+                  imageInputsByHandle,
+                  prompt,
+                  settings: node,
+                  systemPrompt,
+                }),
+              ),
+            { concurrency: "unbounded" },
+          );
+
+          finalCostCredits += responses.reduce(
+            (totalCost, response) =>
+              totalCost +
+              calculateLlmUsageCreditCost({
+                model: response.model,
+                usage: response.usage,
+              }),
+            0,
+          );
+
+          const responseText = responses
+            .map((response) => response.responseText.trim())
+            .filter(Boolean)
+            .join("\n\n");
+
+          yield* updateDocumentNode(currentId, (currentNode) =>
+            currentNode.kind === "llmGenerator"
+              ? LlmGeneratorService.setExecutionResult(currentNode, {
+                  lastPrompt: prompt,
+                  lastSystemPrompt: systemPrompt ?? "",
+                  responseText: responseText || null,
+                })
+              : currentNode,
+          );
+          yield* setNodeRuntime(currentId, "success", null);
+
+          return {
+            type: "text",
+            text: responseText,
           } satisfies RuntimeValue;
         });
     }
@@ -393,7 +514,7 @@ export function executeWorkflow(params: {
     if (!targetNodeIds.length) {
       return yield* Effect.fail(
         new WorkflowValidationError({
-          message: "Add an image or video generator first.",
+          message: "Add a generator first.",
         }),
       );
     }
@@ -431,9 +552,10 @@ export function executeWorkflow(params: {
       (yield* params.ports.onCompleted
         ? params.ports.onCompleted({
             document: state.document,
+            finalCostCredits,
             request: params.request,
             runId: params.runId,
-            targetNodeIds,
+            targetNodeIds: executedNodeIds,
           })
         : Effect.succeed(projectDocumentRevision)) ?? projectDocumentRevision;
 
@@ -447,8 +569,9 @@ export function executeWorkflow(params: {
 
     return buildWorkflowExecutionStatusResponse({
       runId: params.runId,
-      targetNodeIds,
+      targetNodeIds: executedNodeIds,
       projectDocumentRevision,
+      finalCostCredits,
       document: state.document,
       runtime: syncWorkflowExecutionRuntimeState(state.document, state.runtime),
       status: state.status,

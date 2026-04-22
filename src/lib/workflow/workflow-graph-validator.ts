@@ -78,7 +78,8 @@ function validateExecutionSubgraph(
       }
       break;
     case "imageGenerator":
-    case "videoGenerator": {
+    case "videoGenerator":
+    case "llmGenerator": {
       const requiredTextHandles = getGeneratorInputHandles(
         document,
         node.id,

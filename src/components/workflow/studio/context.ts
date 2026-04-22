@@ -1,6 +1,5 @@
 import { createContext, useContext } from "react";
 import type { GeneratorHandleDefinition } from "~/lib/workflow/generator-models";
-import type { WorkflowExecutionPriceQuote } from "~/lib/workflow/pricing";
 import type {
   GeneratorConfigValue,
   ImageGeneratorModelId,
@@ -13,7 +12,6 @@ export type StudioContextValue = {
   uploadFilesToNode: (nodeId: string, files: File[]) => Promise<void>;
   clearNodeAssets: (nodeId: string) => void;
   getGeneratorIterationInfo: (nodeId: string) => GeneratorIterationInfo;
-  getGeneratorRunCost: (nodeId: string) => WorkflowExecutionPriceQuote | null;
   getGeneratorInputs: (nodeId: string) => GeneratorHandleDefinition[];
   setImageGeneratorModel: (
     nodeId: string,
@@ -26,6 +24,11 @@ export type StudioContextValue = {
   setImageGeneratorMode: (nodeId: string, mode: string) => void;
   setVideoGeneratorMode: (nodeId: string, mode: string) => void;
   setImageGeneratorConfigValue: (
+    nodeId: string,
+    key: string,
+    value: GeneratorConfigValue,
+  ) => void;
+  setLlmGeneratorConfigValue: (
     nodeId: string,
     key: string,
     value: GeneratorConfigValue,

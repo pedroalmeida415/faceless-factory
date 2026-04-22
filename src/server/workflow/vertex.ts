@@ -1,22 +1,30 @@
 import {
+  createPartFromBase64,
+  createPartFromUri,
   GoogleGenAI,
   Modality,
+  ThinkingLevel,
   VideoGenerationReferenceType,
 } from "@google/genai";
 import { Context, Effect, Layer } from "effect";
 
 import {
-  WorkflowAuthorizationError,
+  type WorkflowAuthorizationError,
   WorkflowConfigError,
   WorkflowGenerationError,
-  type WorkflowStorageError,
+  WorkflowStorageError,
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
 import {
+  GEMINI_3_FLASH_PREVIEW_MODEL_ID,
   type GenerateImageRequest,
   type GenerateImageResponse,
+  type GenerateLlmRequest,
+  type GenerateLlmResponse,
+  type GenerateLlmUsage,
   type GenerateVideoRequest,
   type GenerateVideoResponse,
+  type LlmThinkingLevel,
   NANO_BANANA_PRO_MODEL_ID,
   VEO_31_MODEL_ID,
   type WorkflowAsset,
@@ -116,6 +124,23 @@ function getVideoLocation() {
   return "us-central1";
 }
 
+function getLlmLocation() {
+  return process.env.GOOGLE_CLOUD_LOCATION_LLM ?? "global";
+}
+
+function toThinkingLevel(thinkingLevel: LlmThinkingLevel) {
+  switch (thinkingLevel) {
+    case "MINIMAL":
+      return ThinkingLevel.MINIMAL;
+    case "LOW":
+      return ThinkingLevel.LOW;
+    case "MEDIUM":
+      return ThinkingLevel.MEDIUM;
+    case "HIGH":
+      return ThinkingLevel.HIGH;
+  }
+}
+
 function pickImageParts(response: GenerateContentResponse) {
   return (
     response.candidates
@@ -159,12 +184,35 @@ function pollVideosOperation(
 export class VertexAi extends Context.Tag("VertexAi")<
   VertexAi,
   {
+    readonly countTokensForGemini3Flash: (params: {
+      ownerUserId: string;
+      request: GenerateLlmRequest;
+    }) => Effect.Effect<
+      { totalTokens: number },
+      | WorkflowAuthorizationError
+      | WorkflowConfigError
+      | WorkflowGenerationError
+      | WorkflowStorageError
+      | WorkflowValidationError
+    >;
     readonly generateImagesWithNanoBananaPro: (params: {
       ownerUserId: string;
       projectId?: string | null;
       request: GenerateImageRequest;
     }) => Effect.Effect<
       GenerateImageResponse,
+      | WorkflowAuthorizationError
+      | WorkflowConfigError
+      | WorkflowGenerationError
+      | WorkflowStorageError
+      | WorkflowValidationError
+    >;
+    readonly generateTextWithGemini3Flash: (params: {
+      ownerUserId: string;
+      projectId?: string | null;
+      request: GenerateLlmRequest;
+    }) => Effect.Effect<
+      GenerateLlmResponse,
       | WorkflowAuthorizationError
       | WorkflowConfigError
       | WorkflowGenerationError
@@ -217,6 +265,187 @@ export class VertexAi extends Context.Tag("VertexAi")<
           image,
           referenceType: VideoGenerationReferenceType.ASSET,
         }));
+
+      const toLlmImagePart = (ownerUserId: string, asset: WorkflowAsset) =>
+        Effect.gen(function* () {
+          const storedAsset = yield* workflowStorage.readAssetById({
+            assetId: asset.id,
+            userId: ownerUserId,
+          });
+
+          if (storedAsset.data) {
+            return createPartFromBase64(
+              storedAsset.data.toString("base64"),
+              storedAsset.mimeType,
+            );
+          }
+
+          if (storedAsset.externalUri) {
+            return createPartFromUri(
+              storedAsset.externalUri,
+              storedAsset.mimeType,
+            );
+          }
+
+          return yield* Effect.fail(
+            new WorkflowStorageError({
+              message: `Asset ${asset.id} could not be loaded for LLM input.`,
+            }),
+          );
+        });
+
+      const toLlmUsage = (usage: GenerateContentResponse["usageMetadata"]) =>
+        ({
+          candidatesTokenCount: usage?.candidatesTokenCount ?? 0,
+          promptTokenCount: usage?.promptTokenCount ?? 0,
+          thoughtsTokenCount: usage?.thoughtsTokenCount ?? 0,
+          totalTokenCount: usage?.totalTokenCount ?? 0,
+        }) satisfies GenerateLlmUsage;
+
+      const countTokensForGemini3Flash = ({
+        ownerUserId,
+        request: { prompt, referenceImages = [], systemPrompt = null },
+      }: {
+        ownerUserId: string;
+        request: GenerateLlmRequest;
+      }) =>
+        Effect.gen(function* () {
+          const promptText = prompt.trim();
+          if (!promptText) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Prompt is required for LLM generation.",
+              }),
+            );
+          }
+
+          if (referenceImages.length > 1) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Only one image can be provided to this LLM node.",
+              }),
+            );
+          }
+
+          const client = yield* createVertexClientEffect(getLlmLocation());
+          const imageParts = yield* Effect.forEach(
+            referenceImages,
+            (asset) => toLlmImagePart(ownerUserId, asset),
+            {
+              concurrency: "unbounded",
+            },
+          );
+          const response = yield* Effect.tryPromise({
+            try: () =>
+              client.models.countTokens({
+                model: GEMINI_3_FLASH_PREVIEW_MODEL_ID,
+                contents: [
+                  {
+                    role: "user",
+                    parts: [{ text: promptText }, ...imageParts],
+                  },
+                ],
+                config: {
+                  systemInstruction: systemPrompt?.trim() || undefined,
+                },
+              }),
+            catch: (cause) =>
+              new WorkflowGenerationError({
+                message: "Vertex AI token counting failed.",
+                cause,
+              }),
+          });
+
+          return {
+            totalTokens: response.totalTokens ?? 0,
+          };
+        });
+
+      const generateTextWithGemini3Flash = ({
+        ownerUserId,
+        projectId: _projectId = null,
+        request: {
+          model,
+          mode: _mode,
+          prompt,
+          systemPrompt = null,
+          referenceImages = [],
+          temperature = 1,
+          thinkingLevel = "LOW",
+          maxOutputTokens = 2048,
+        },
+      }: {
+        ownerUserId: string;
+        projectId?: string | null;
+        request: GenerateLlmRequest;
+      }) =>
+        Effect.gen(function* () {
+          const promptText = prompt.trim();
+          const systemPromptText = systemPrompt?.trim() || null;
+          if (!promptText) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Prompt is required for LLM generation.",
+              }),
+            );
+          }
+
+          if (referenceImages.length > 1) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Only one image can be provided to this LLM node.",
+              }),
+            );
+          }
+
+          const client = yield* createVertexClientEffect(getLlmLocation());
+          const imageParts = yield* Effect.forEach(
+            referenceImages,
+            (asset) => toLlmImagePart(ownerUserId, asset),
+            {
+              concurrency: "unbounded",
+            },
+          );
+          const response = yield* Effect.tryPromise({
+            try: () =>
+              client.models.generateContent({
+                model: GEMINI_3_FLASH_PREVIEW_MODEL_ID,
+                contents: [
+                  {
+                    role: "user",
+                    parts: [{ text: promptText }, ...imageParts],
+                  },
+                ],
+                config: {
+                  maxOutputTokens,
+                  systemInstruction: systemPromptText || undefined,
+                  temperature,
+                  thinkingConfig: {
+                    thinkingLevel: toThinkingLevel(thinkingLevel),
+                  },
+                },
+              }),
+            catch: (cause) =>
+              new WorkflowGenerationError({
+                message: "Vertex AI text generation failed.",
+                cause,
+              }),
+          });
+          const responseText = response.text?.trim();
+          if (!responseText) {
+            return yield* Effect.fail(
+              new WorkflowGenerationError({
+                message: "Vertex AI returned no text output.",
+              }),
+            );
+          }
+
+          return {
+            model,
+            responseText,
+            usage: toLlmUsage(response.usageMetadata),
+          } satisfies GenerateLlmResponse;
+        });
 
       const generateImagesWithNanoBananaPro = ({
         ownerUserId,
@@ -479,7 +708,9 @@ export class VertexAi extends Context.Tag("VertexAi")<
         });
 
       return VertexAi.of({
+        countTokensForGemini3Flash,
         generateImagesWithNanoBananaPro,
+        generateTextWithGemini3Flash,
         generateVideosWithVeo31,
       });
     }),

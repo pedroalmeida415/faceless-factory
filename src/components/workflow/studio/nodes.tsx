@@ -4,6 +4,7 @@ import { memo, useEffect } from "react";
 import { type NodeProps, useUpdateNodeInternals } from "reactflow";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardContent } from "~/components/ui/card";
+import { Input } from "~/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -11,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
+import { Slider } from "~/components/ui/slider";
 import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
 import {
@@ -26,10 +28,15 @@ import {
   getVideoGeneratorModelOptions,
   getVideoGeneratorModeOptions,
 } from "~/lib/workflow/generator-models";
+import {
+  getLlmGeneratorControlDefinitions,
+  getLlmGeneratorModelOptions,
+} from "~/lib/workflow/llm-models";
 import type {
   AssetNodeData,
   GeneratorConfigValue,
   ImageGeneratorNodeData,
+  LlmGeneratorNodeData,
   PromptNodeData,
   VideoGeneratorNodeData,
   WorkflowNodeData,
@@ -43,6 +50,7 @@ import {
   OutputGallery,
   ShellButton,
 } from "./shared";
+import { useWorkflowExecutionQuote } from "./useWorkflowExecutionQuote";
 
 function capitalize(value: string) {
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
@@ -63,6 +71,15 @@ function formatCredits(value: number) {
   return `${value} credit${value === 1 ? "" : "s"}`;
 }
 
+function formatNumericValue(value: number, step?: number) {
+  if (step && step < 1) {
+    const precision = String(step).split(".")[1]?.length ?? 1;
+    return value.toFixed(precision);
+  }
+
+  return String(value);
+}
+
 function isSameNodeRender<T extends WorkflowNodeData>(
   previousProps: NodeProps<T>,
   nextProps: NodeProps<T>,
@@ -74,9 +91,8 @@ function isSameNodeRender<T extends WorkflowNodeData>(
   );
 }
 
-function GeneratorRunCostBadge({ nodeId }: { nodeId: string }) {
-  const { getGeneratorRunCost } = useStudioContext();
-  const priceQuote = getGeneratorRunCost(nodeId);
+function WorkflowExecutionCostBadge({ nodeId }: { nodeId: string }) {
+  const { priceQuote } = useWorkflowExecutionQuote(nodeId);
 
   if (!priceQuote || priceQuote.totalCost <= 0) {
     return null;
@@ -87,13 +103,51 @@ function GeneratorRunCostBadge({ nodeId }: { nodeId: string }) {
       className="border-primary/20 bg-primary/10 text-primary"
       title={
         priceQuote.lineItems.length > 1
-          ? "Includes upstream generator costs."
-          : undefined
+          ? priceQuote.hasEstimate
+            ? "Estimate includes upstream generator costs."
+            : "Includes upstream generator costs."
+          : priceQuote.hasEstimate
+            ? "Estimated cost. Final usage may settle higher or lower."
+            : undefined
       }
       variant="outline"
     >
-      {`${formatCredits(priceQuote.totalCost)} / run`}
+      {`${priceQuote.hasEstimate ? "~" : ""}${formatCredits(priceQuote.totalCost)} / run`}
     </Badge>
+  );
+}
+
+function GeneratedTextPreview({ text }: { text: string | null }) {
+  return text ? (
+    <NodeFieldCard label="Response">
+      <div className="max-h-32 overflow-hidden whitespace-pre-wrap text-sm">
+        {text}
+      </div>
+    </NodeFieldCard>
+  ) : (
+    <Card className="border-dashed py-0">
+      <CardContent className="py-4 text-muted-foreground text-sm">
+        No response yet.
+      </CardContent>
+    </Card>
+  );
+}
+
+export function WorkflowExecutionEstimateWarning({
+  nodeId,
+}: {
+  nodeId: string;
+}) {
+  const { isLoading, priceQuote } = useWorkflowExecutionQuote(nodeId);
+
+  return (
+    <NodeNotice tone="accent">
+      {isLoading
+        ? "Quoting LLM run estimate..."
+        : priceQuote
+          ? `${formatCredits(priceQuote.totalCost)} estimated. Final cost varies with generated output and reasoning tokens.`
+          : "Estimate only. Final cost varies with generated output and reasoning tokens."}
+    </NodeNotice>
   );
 }
 
@@ -214,6 +268,58 @@ export function GeneratorControlGrid({
           );
         }
 
+        if (control.type === "range") {
+          const currentValue = config[control.key];
+          const value =
+            typeof currentValue === "number" ? currentValue : control.min;
+
+          return (
+            <NodeFieldCard key={control.key} label={control.label}>
+              <div className="space-y-2">
+                <div className="text-sm">
+                  {formatNumericValue(value, control.step)}
+                </div>
+                <Slider
+                  max={control.max}
+                  min={control.min}
+                  onValueChange={(values) =>
+                    onConfigChange(control.key, values[0] ?? control.min)
+                  }
+                  step={control.step}
+                  value={[value]}
+                />
+              </div>
+            </NodeFieldCard>
+          );
+        }
+
+        if (control.type === "number") {
+          const currentValue = config[control.key];
+          const value =
+            typeof currentValue === "number"
+              ? currentValue
+              : (control.min ?? 0);
+
+          return (
+            <NodeFieldCard key={control.key} label={control.label}>
+              <Input
+                nativeInput
+                max={control.max}
+                min={control.min}
+                onChange={(event) => {
+                  const nextValue = Number(event.target.value);
+                  if (Number.isFinite(nextValue)) {
+                    onConfigChange(control.key, nextValue);
+                  }
+                }}
+                step={control.step}
+                type="number"
+                value={value}
+              />
+            </NodeFieldCard>
+          );
+        }
+
         return (
           <NodeFieldCard key={control.key} label={control.label}>
             <Select
@@ -280,7 +386,7 @@ const ImageGeneratorNode = memo(function ImageGeneratorNode({
   return (
     <NodeShell
       data={{ ...data, label: "Image Gen" }}
-      headerDetail={<GeneratorRunCostBadge nodeId={id} />}
+      headerDetail={<WorkflowExecutionCostBadge nodeId={id} />}
       id={id}
       inputs={inputs}
       output={{ id: "images", label: "Images", color: "#22c55e" }}
@@ -348,7 +454,7 @@ const VideoGeneratorNode = memo(function VideoGeneratorNode({
   return (
     <NodeShell
       data={data}
-      headerDetail={<GeneratorRunCostBadge nodeId={id} />}
+      headerDetail={<WorkflowExecutionCostBadge nodeId={id} />}
       id={id}
       inputs={inputs}
       output={{ id: "videos", label: "Videos", color: "#a78bfa" }}
@@ -421,9 +527,81 @@ const VideoGeneratorNode = memo(function VideoGeneratorNode({
   );
 }, isSameNodeRender);
 
+const LlmGeneratorNode = memo(function LlmGeneratorNode({
+  id,
+  data,
+  selected,
+}: NodeProps<LlmGeneratorNodeData>) {
+  const updateNodeInternals = useUpdateNodeInternals();
+  const {
+    getGeneratorInputs,
+    getGeneratorIterationInfo,
+    runNode,
+    setLlmGeneratorConfigValue,
+  } = useStudioContext();
+  const inputs = getGeneratorInputs(id);
+  const inputHandleSignature = inputs.map((handle) => handle.id).join("|");
+  const iterationInfo = getGeneratorIterationInfo(id);
+  const modelLabel =
+    getLlmGeneratorModelOptions().find((option) => option.value === data.model)
+      ?.label ?? data.model;
+  const controls = getLlmGeneratorControlDefinitions(data.model);
+
+  useEffect(() => {
+    inputHandleSignature;
+    updateNodeInternals(id);
+  }, [id, inputHandleSignature, updateNodeInternals]);
+
+  return (
+    <NodeShell
+      data={data}
+      headerDetail={<WorkflowExecutionCostBadge nodeId={id} />}
+      id={id}
+      inputs={inputs}
+      output={{ id: "text", label: "Text", color: "#f59e0b" }}
+      selected={selected}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge
+          className="border-border/70 bg-muted/50 text-foreground"
+          variant="outline"
+        >
+          {modelLabel}
+        </Badge>
+      </div>
+
+      <GeneratorControlGrid
+        config={data.config}
+        controls={controls}
+        onConfigChange={(key, value) =>
+          setLlmGeneratorConfigValue(id, key, value)
+        }
+      />
+
+      <WorkflowExecutionEstimateWarning nodeId={id} />
+
+      {iterationInfo.hasIterator ? (
+        <NodeNotice tone="accent">
+          {`Will run ${iterationInfo.iterations} iteration${iterationInfo.iterations === 1 ? "" : "s"}. Each result is merged into one downstream text output.`}
+        </NodeNotice>
+      ) : null}
+
+      <GeneratedTextPreview text={data.responseText} />
+
+      <ShellButton
+        className="w-full justify-center"
+        onClick={() => void runNode(id)}
+      >
+        Run LLM
+      </ShellButton>
+    </NodeShell>
+  );
+}, isSameNodeRender);
+
 export const nodeTypes = {
   prompt: PromptNode,
   asset: AssetNode,
   imageGenerator: ImageGeneratorNode,
   videoGenerator: VideoGeneratorNode,
+  llmGenerator: LlmGeneratorNode,
 };

@@ -13,6 +13,8 @@ import type {
 import {
   IMAGE_ASPECT_RATIOS,
   IMAGE_MODEL_IDS,
+  LLM_MODEL_IDS,
+  LLM_THINKING_LEVELS,
   VIDEO_ASPECT_RATIOS,
   VIDEO_DURATIONS,
   VIDEO_MODEL_IDS,
@@ -22,6 +24,7 @@ import { toTRPCError } from "~/server/api/errors";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
 import { WorkflowExecutionService } from "~/server/workflow/execution-service";
+import { quoteWorkflowExecution } from "~/server/workflow/pricing";
 import { saveWorkflowProjectDocument } from "~/server/workflow/projects";
 import { WorkflowRunStore } from "~/server/workflow/run-store";
 import { WorkflowStorage } from "~/server/workflow/storage";
@@ -147,6 +150,23 @@ export const workflowRouter = createTRPCRouter({
         throw toTRPCError(error);
       }
     }),
+
+  quoteExecution: protectedProcedure
+    .input(workflowExecutionRequestSchema.omit({ documentRevision: true }))
+    .query(async ({ ctx, input }) =>
+      ServerRuntime.runPromise(
+        Effect.gen(function* () {
+          const vertexAi = yield* VertexAi;
+          return yield* quoteWorkflowExecution({
+            request: input,
+            userId: ctx.session.user.id,
+            vertexAi,
+          });
+        }),
+      ).catch((error) => {
+        throw toTRPCError(error);
+      }),
+    ),
 
   startExecution: protectedProcedure
     .input(workflowExecutionRequestSchema)
@@ -281,6 +301,33 @@ export const workflowRouter = createTRPCRouter({
         Effect.gen(function* () {
           const vertexAi = yield* VertexAi;
           return yield* vertexAi.generateVideosWithVeo31({
+            ownerUserId: ctx.session.user.id,
+            request: input,
+          });
+        }),
+      ).catch((error) => {
+        throw toTRPCError(error);
+      }),
+    ),
+
+  generateLlm: protectedProcedure
+    .input(
+      z.object({
+        model: z.enum(LLM_MODEL_IDS),
+        mode: z.string().nullable(),
+        prompt: z.string(),
+        systemPrompt: z.string().nullable().optional(),
+        referenceImages: z.array(workflowAssetSchema).optional(),
+        temperature: z.number().min(0).max(2).optional(),
+        thinkingLevel: z.enum(LLM_THINKING_LEVELS).optional(),
+        maxOutputTokens: z.number().int().positive().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) =>
+      ServerRuntime.runPromise(
+        Effect.gen(function* () {
+          const vertexAi = yield* VertexAi;
+          return yield* vertexAi.generateTextWithGemini3Flash({
             ownerUserId: ctx.session.user.id,
             request: input,
           });

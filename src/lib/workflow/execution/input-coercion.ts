@@ -54,40 +54,53 @@ function getInputValues(
   );
 }
 
-export function coercePromptInput(
+export function coerceTextInput(
   document: WorkflowDocument,
   path: ReadonlySet<string>,
   targetId: string,
+  handleId: string,
+  params: {
+    message: string;
+    required: boolean;
+  },
   incomingByTarget: IncomingByTarget,
   evaluateNode: EvaluateNode,
 ) {
   return Effect.gen(function* () {
-    const promptHandle = getGeneratorInputHandles(document, targetId).find(
-      (handle) => handle.valueType === "text",
+    const textHandle = getGeneratorInputHandles(document, targetId).find(
+      (handle) => handle.id === handleId && handle.valueType === "text",
     );
 
-    if (!promptHandle) {
-      return "";
+    if (!textHandle) {
+      return null;
     }
 
     const values = yield* getInputValues(
       path,
       targetId,
-      promptHandle.id,
+      textHandle.id,
       incomingByTarget,
       evaluateNode,
     );
-    const prompt = values.find((value) => value.type === "text");
+    const text = values
+      .flatMap((value) =>
+        value.type === "text" && value.text.trim() ? [value.text.trim()] : [],
+      )
+      .join("\n\n");
 
-    if (!prompt?.text.trim()) {
+    if (!text) {
+      if (!params.required) {
+        return null;
+      }
+
       return yield* Effect.fail(
         new WorkflowValidationError({
-          message: "Connect prompt text.",
+          message: params.message,
         }),
       );
     }
 
-    return prompt.text.trim();
+    return text;
   });
 }
 

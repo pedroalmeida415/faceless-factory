@@ -28,6 +28,7 @@ import type { WorkflowValueType } from "~/lib/workflow/node-definitions";
 import type { WorkflowProject } from "~/lib/workflow/project";
 import {
   ImageGeneratorService,
+  LlmGeneratorService,
   PromptNodeService,
   VideoGeneratorService,
   WorkflowNodeAssetService,
@@ -379,6 +380,18 @@ function mergeExecutionTargetResults(
         };
       }
 
+      if (
+        node.kind === "llmGenerator" &&
+        executionNode.kind === "llmGenerator"
+      ) {
+        return {
+          ...node,
+          lastPrompt: executionNode.lastPrompt,
+          lastSystemPrompt: executionNode.lastSystemPrompt,
+          responseText: executionNode.responseText,
+        };
+      }
+
       return node;
     }),
   } satisfies WorkflowDocument;
@@ -449,6 +462,11 @@ type WorkflowStudioState = {
   setImageGeneratorMode: (nodeId: string, mode: string) => void;
   setVideoGeneratorMode: (nodeId: string, mode: string) => void;
   setImageGeneratorConfigValue: (
+    nodeId: string,
+    key: string,
+    value: GeneratorConfigValue,
+  ) => void;
+  setLlmGeneratorConfigValue: (
     nodeId: string,
     key: string,
     value: GeneratorConfigValue,
@@ -711,6 +729,14 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       get().updateDocumentNode(nodeId, (node) =>
         node.kind === "imageGenerator"
           ? ImageGeneratorService.setConfigValue(node, key, value)
+          : node,
+      );
+    },
+
+    setLlmGeneratorConfigValue: (nodeId, key, value) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "llmGenerator"
+          ? LlmGeneratorService.setConfigValue(node, key, value)
           : node,
       );
     },
