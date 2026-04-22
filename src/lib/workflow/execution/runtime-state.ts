@@ -58,6 +58,7 @@ export function buildWorkflowExecutionStatusResponse(params: {
   runId: string;
   targetNodeIds: string[];
   projectDocumentRevision?: number | null;
+  finalCostCredits?: number | null;
   document: WorkflowDocument;
   runtime: WorkflowExecutionRuntimeState;
   status: WorkflowRunStatus;
@@ -67,6 +68,7 @@ export function buildWorkflowExecutionStatusResponse(params: {
     runId: params.runId,
     targetNodeIds: params.targetNodeIds,
     projectDocumentRevision: params.projectDocumentRevision ?? null,
+    finalCostCredits: params.finalCostCredits ?? null,
     document: params.document,
     runtime: params.runtime,
     activity: params.runtime.activity,

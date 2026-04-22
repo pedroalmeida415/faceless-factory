@@ -1,5 +1,6 @@
 import type {
   ImageGeneratorWorkflowNode,
+  LlmGeneratorWorkflowNode,
   PromptWorkflowNode,
   VideoGeneratorWorkflowNode,
   WorkflowDocumentNode,
@@ -12,6 +13,7 @@ import {
   setVideoGeneratorMode,
   setVideoGeneratorModel,
 } from "~/lib/workflow/generator-models";
+import { setLlmGeneratorConfigValue } from "~/lib/workflow/llm-models";
 import type {
   AssetKind,
   GeneratorConfigValue,
@@ -155,6 +157,35 @@ export const VideoGeneratorService = {
   },
 };
 
+export const LlmGeneratorService = {
+  setConfigValue(
+    node: LlmGeneratorWorkflowNode,
+    key: string,
+    value: GeneratorConfigValue,
+  ): LlmGeneratorWorkflowNode {
+    return {
+      ...node,
+      config: setLlmGeneratorConfigValue(node.config, key, value),
+    };
+  },
+
+  setExecutionResult(
+    node: LlmGeneratorWorkflowNode,
+    result: {
+      lastPrompt: string;
+      lastSystemPrompt: string;
+      responseText: string | null;
+    },
+  ): LlmGeneratorWorkflowNode {
+    return {
+      ...node,
+      lastPrompt: result.lastPrompt,
+      lastSystemPrompt: result.lastSystemPrompt,
+      responseText: result.responseText,
+    };
+  },
+};
+
 export const WorkflowNodeAssetService = {
   clearAssets(node: WorkflowDocumentNode): WorkflowDocumentNode {
     switch (node.kind) {
@@ -170,6 +201,13 @@ export const WorkflowNodeAssetService = {
           outputAssets: [],
           responseText: null,
           lastPrompt: "",
+        };
+      case "llmGenerator":
+        return {
+          ...node,
+          lastPrompt: "",
+          lastSystemPrompt: "",
+          responseText: null,
         };
       default:
         return node;

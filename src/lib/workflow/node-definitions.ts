@@ -21,6 +21,8 @@ export function formatNodeTitle(kind: WorkflowNodeKind) {
       return "Image Gen";
     case "videoGenerator":
       return "Video Generator";
+    case "llmGenerator":
+      return "Run LLM";
   }
 }
 
@@ -34,5 +36,7 @@ export function getNodeOutputHandleId(kind: WorkflowNodeKind) {
       return "images";
     case "videoGenerator":
       return "videos";
+    case "llmGenerator":
+      return "text";
   }
 }

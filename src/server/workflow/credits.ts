@@ -91,6 +91,15 @@ export class WorkflowCreditsService extends Context.Tag(
 )<
   WorkflowCreditsService,
   {
+    readonly alignExecutionCost: (params: {
+      executionId: string;
+      reason: string;
+      targetCost: number;
+      userId: string;
+    }) => Effect.Effect<
+      WorkflowCreditsSummary,
+      WorkflowCreditsError | WorkflowInfrastructureError
+    >;
     readonly debitExecution: (params: {
       amount: number;
       executionId: string;
@@ -148,6 +157,106 @@ export class WorkflowCreditsService extends Context.Tag(
   };
 
   static readonly Live = Layer.succeed(this, {
+    alignExecutionCost: ({ executionId, reason, targetCost, userId }) =>
+      Effect.tryPromise({
+        try: async () =>
+          db.transaction(async (tx) => {
+            const totals = await getExecutionTotals(tx, {
+              executionId,
+              userId,
+            });
+            const nextTargetCost = Math.max(0, targetCost);
+            const currentNetCost = Math.max(
+              0,
+              totals.totalCost - totals.refunded,
+            );
+
+            if (currentNetCost === nextTargetCost) {
+              return buildRunSummary({
+                available: await getUserCreditBalance(tx, userId),
+                refunded: totals.refunded,
+                totalCost: totals.totalCost,
+              });
+            }
+
+            const now = new Date();
+
+            if (currentNetCost < nextTargetCost) {
+              const debitAmount = nextTargetCost - currentNetCost;
+              const [updatedUser] = await tx
+                .update(user)
+                .set({
+                  creditBalance: sql`${user.creditBalance} - ${debitAmount}`,
+                  updatedAt: now,
+                })
+                .where(
+                  and(
+                    eq(user.id, userId),
+                    gte(user.creditBalance, debitAmount),
+                  ),
+                )
+                .returning({ creditBalance: user.creditBalance });
+
+              if (!updatedUser) {
+                throw new WorkflowCreditsError({
+                  message:
+                    "You do not have enough credits to settle this workflow execution.",
+                });
+              }
+
+              await tx.insert(creditLedgerEntries).values({
+                amount: debitAmount,
+                balanceAfter: updatedUser.creditBalance,
+                createdAt: now,
+                executionId,
+                id: randomUUID(),
+                kind: "debit",
+                reason,
+                userId,
+              });
+
+              return buildRunSummary({
+                available: updatedUser.creditBalance,
+                refunded: totals.refunded,
+                totalCost: totals.totalCost + debitAmount,
+              });
+            }
+
+            const refundAmount = currentNetCost - nextTargetCost;
+            const [updatedUser] = await tx
+              .update(user)
+              .set({
+                creditBalance: sql`${user.creditBalance} + ${refundAmount}`,
+                updatedAt: now,
+              })
+              .where(eq(user.id, userId))
+              .returning({ creditBalance: user.creditBalance });
+
+            if (!updatedUser) {
+              throw new WorkflowInfrastructureError({
+                message: `User ${userId} was not found.`,
+              });
+            }
+
+            await tx.insert(creditLedgerEntries).values({
+              amount: refundAmount,
+              balanceAfter: updatedUser.creditBalance,
+              createdAt: now,
+              executionId,
+              id: randomUUID(),
+              kind: "refund",
+              reason,
+              userId,
+            });
+
+            return buildRunSummary({
+              available: updatedUser.creditBalance,
+              refunded: totals.refunded + refundAmount,
+              totalCost: totals.totalCost,
+            });
+          }),
+        catch: WorkflowCreditsService.toCreditsError,
+      }),
     debitExecution: ({ amount, executionId, reason, userId }) =>
       Effect.tryPromise({
         try: async () => {

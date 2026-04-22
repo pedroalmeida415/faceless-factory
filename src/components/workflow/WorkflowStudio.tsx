@@ -28,6 +28,7 @@ import {
 import { Card, CardContent } from "~/components/ui/card";
 import {
   createWorkflowNode,
+  snapWorkflowPositionToGrid,
   specializeWorkflowNodeForValueType,
   WORKFLOW_GRID_STEP,
   type WorkflowDocument,
@@ -78,6 +79,7 @@ const WORKFLOW_CONNECTION_AUTOCOMPLETE_SIDE_THRESHOLD = 320;
 const WORKFLOW_NODE_KINDS: WorkflowNodeKind[] = [
   "prompt",
   "asset",
+  "llmGenerator",
   "imageGenerator",
   "videoGenerator",
 ];

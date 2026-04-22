@@ -21,6 +21,7 @@ import type {
   WorkflowExecutionPortError,
   WorkflowExecutionStatusResponse,
 } from "~/lib/workflow/execution/types";
+import { isGeneratorNodeKind } from "~/lib/workflow/types";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
 import { quoteWorkflowExecution } from "~/server/workflow/pricing";
@@ -44,6 +45,7 @@ export class WorkflowExecutionService extends Context.Tag(
       WorkflowExecutionStatusResponse,
       | WorkflowAuthorizationError
       | WorkflowCreditsError
+      | WorkflowExecutionPortError
       | WorkflowInfrastructureError
       | WorkflowValidationError
     >;
@@ -134,10 +136,14 @@ export class WorkflowExecutionService extends Context.Tag(
             );
           }
 
-          if (request.documentRevision === null || request.documentRevision === undefined) {
+          if (
+            request.documentRevision === null ||
+            request.documentRevision === undefined
+          ) {
             return yield* Effect.fail(
               new WorkflowValidationError({
-                message: "Workflow project must be saved before execution starts.",
+                message:
+                  "Workflow project must be saved before execution starts.",
               }),
             );
           }
@@ -161,7 +167,8 @@ export class WorkflowExecutionService extends Context.Tag(
           if (project.documentRevision !== request.documentRevision) {
             return yield* Effect.fail(
               new WorkflowValidationError({
-                message: "Workflow project changed before execution. Save again and retry.",
+                message:
+                  "Workflow project changed before execution. Save again and retry.",
               }),
             );
           }
@@ -187,7 +194,14 @@ export class WorkflowExecutionService extends Context.Tag(
             ),
             projectId,
           } satisfies StartWorkflowExecutionRequest;
-          const priceQuote = quoteWorkflowExecution(submittedRequest);
+          const executionNodeIds = submittedRequest.document.nodes
+            .filter((node) => isGeneratorNodeKind(node.kind))
+            .map((node) => node.id);
+          const priceQuote = yield* quoteWorkflowExecution({
+            request: submittedRequest,
+            userId,
+            vertexAi,
+          });
           const credits = yield* workflowCreditsService.debitExecution({
             amount: priceQuote.totalCost,
             executionId: runId,
@@ -196,7 +210,7 @@ export class WorkflowExecutionService extends Context.Tag(
           });
           const initialRun = buildWorkflowExecutionStatusResponse({
             runId,
-            targetNodeIds,
+            targetNodeIds: executionNodeIds,
             projectDocumentRevision: project.documentRevision,
             document: submittedRequest.document,
             runtime: createWorkflowExecutionRuntimeState(
@@ -289,6 +303,12 @@ export class WorkflowExecutionService extends Context.Tag(
                 projectId: request.projectId ?? null,
                 request: videoRequest,
               }),
+            generateLlm: (llmRequest) =>
+              vertexAi.generateTextWithGemini3Flash({
+                ownerUserId: userId,
+                projectId: request.projectId ?? null,
+                request: llmRequest,
+              }),
             onCompleted: ({ document, targetNodeIds }) =>
               Effect.tryPromise({
                 try: async () => {
@@ -330,8 +350,10 @@ export class WorkflowExecutionService extends Context.Tag(
         }).pipe(
           Effect.tap((state) =>
             Effect.gen(function* () {
-              const credits = yield* workflowCreditsService.getRunSummary({
-                runId,
+              const credits = yield* workflowCreditsService.alignExecutionCost({
+                executionId: runId,
+                reason: "Workflow execution settled.",
+                targetCost: state.finalCostCredits ?? 0,
                 userId,
               });
               return yield* workflowRunStore.updateRun({

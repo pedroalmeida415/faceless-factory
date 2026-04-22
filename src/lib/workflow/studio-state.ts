@@ -144,6 +144,19 @@ function toWorkflowNodeData(
         responseText: node.responseText,
         outputAssets: node.outputAssets,
       };
+    case "llmGenerator":
+      return {
+        kind: node.kind,
+        label: node.label,
+        status,
+        error,
+        model: node.model,
+        mode: node.mode,
+        config: node.config,
+        lastPrompt: node.lastPrompt,
+        lastSystemPrompt: node.lastSystemPrompt,
+        responseText: node.responseText,
+      };
   }
 }
 
@@ -213,14 +226,26 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
     );
   }
 
+  if (left.kind === "videoGenerator") {
+    return (
+      right.kind === "videoGenerator" &&
+      left.model === right.model &&
+      left.mode === right.mode &&
+      left.config === right.config &&
+      left.lastPrompt === right.lastPrompt &&
+      left.responseText === right.responseText &&
+      left.outputAssets === right.outputAssets
+    );
+  }
+
   return (
-    right.kind === "videoGenerator" &&
+    right.kind === "llmGenerator" &&
     left.model === right.model &&
     left.mode === right.mode &&
     left.config === right.config &&
     left.lastPrompt === right.lastPrompt &&
-    left.responseText === right.responseText &&
-    left.outputAssets === right.outputAssets
+    left.lastSystemPrompt === right.lastSystemPrompt &&
+    left.responseText === right.responseText
   );
 }
 

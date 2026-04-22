@@ -7,7 +7,6 @@ import {
   uploadFilesToNode as uploadWorkflowFilesToNode,
 } from "~/components/workflow/studio/runner";
 import { ClientRuntime } from "~/effect/client/runtime";
-import { estimateWorkflowExecution } from "~/lib/workflow/pricing";
 import { api } from "~/trpc/react";
 import type { StudioContextValue } from "./context";
 import {
@@ -38,6 +37,9 @@ export function useWorkflowStudioController() {
   const setImageGeneratorConfigValue = useWorkflowStudioStore(
     (state) => state.setImageGeneratorConfigValue,
   );
+  const setLlmGeneratorConfigValue = useWorkflowStudioStore(
+    (state) => state.setLlmGeneratorConfigValue,
+  );
   const setVideoGeneratorConfigValue = useWorkflowStudioStore(
     (state) => state.setVideoGeneratorConfigValue,
   );
@@ -50,19 +52,6 @@ export function useWorkflowStudioController() {
   const getGeneratorInputs = useCallback((nodeId: string) => {
     const { document } = useWorkflowStudioStore.getState();
     return getGeneratorInputHandles(document, nodeId);
-  }, []);
-
-  const getGeneratorRunCost = useCallback((nodeId: string) => {
-    const { document } = useWorkflowStudioStore.getState();
-
-    try {
-      return estimateWorkflowExecution({
-        document,
-        target: { type: "node", nodeId },
-      });
-    } catch {
-      return null;
-    }
   }, []);
 
   const uploadFilesToNode = useCallback(
@@ -87,12 +76,12 @@ export function useWorkflowStudioController() {
       clearNodeAssets,
       getGeneratorInputs,
       getGeneratorIterationInfo,
-      getGeneratorRunCost,
       setImageGeneratorModel,
       setVideoGeneratorModel,
       setImageGeneratorMode,
       setVideoGeneratorMode,
       setImageGeneratorConfigValue,
+      setLlmGeneratorConfigValue,
       setVideoGeneratorConfigValue,
       runNode,
     }),
@@ -100,11 +89,11 @@ export function useWorkflowStudioController() {
       clearNodeAssets,
       getGeneratorInputs,
       getGeneratorIterationInfo,
-      getGeneratorRunCost,
       runNode,
       setImageGeneratorConfigValue,
       setImageGeneratorMode,
       setImageGeneratorModel,
+      setLlmGeneratorConfigValue,
       setPrompt,
       setVideoGeneratorConfigValue,
       setVideoGeneratorMode,

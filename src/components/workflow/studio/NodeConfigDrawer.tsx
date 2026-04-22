@@ -21,6 +21,7 @@ import { Textarea } from "~/components/ui/textarea";
 import type {
   AssetWorkflowNode,
   ImageGeneratorWorkflowNode,
+  LlmGeneratorWorkflowNode,
   PromptWorkflowNode,
   VideoGeneratorWorkflowNode,
   WorkflowDocumentNode,
@@ -33,9 +34,21 @@ import {
   getVideoGeneratorModelOptions,
   getVideoGeneratorModeOptions,
 } from "~/lib/workflow/generator-models";
-import { GeneratorControlGrid } from "./nodes";
+import {
+  getLlmGeneratorControlDefinitions,
+  getLlmGeneratorModelOptions,
+} from "~/lib/workflow/llm-models";
+import {
+  GeneratorControlGrid,
+  WorkflowExecutionEstimateWarning,
+} from "./nodes";
 import { NodeFieldCard, ShellButton } from "./shared";
 import { useWorkflowStudioStore } from "./store";
+import { useWorkflowExecutionQuote } from "./useWorkflowExecutionQuote";
+
+function formatCredits(value: number) {
+  return `${value} credit${value === 1 ? "" : "s"}`;
+}
 
 function getSelectedNode(nodeIds: string[], nodes: WorkflowDocumentNode[]) {
   for (let index = nodeIds.length - 1; index >= 0; index -= 1) {
@@ -70,6 +83,11 @@ function getDrawerHeading(node: WorkflowDocumentNode) {
       return {
         description: "Tune model, mode, and video generation controls.",
         title: "Video Generation",
+      } as const;
+    case "llmGenerator":
+      return {
+        description: "Tune prompt execution controls for the Gemini LLM node.",
+        title: "Run Any LLM",
       } as const;
   }
 }
@@ -260,6 +278,50 @@ function VideoGeneratorConfigPanel({
   );
 }
 
+function LlmEstimatePanel({ nodeId }: { nodeId: string }) {
+  const { isLoading, priceQuote } = useWorkflowExecutionQuote(nodeId);
+
+  return (
+    <NodeFieldCard label="Estimated cost">
+      <p className="text-sm">
+        {isLoading
+          ? "Quoting..."
+          : priceQuote
+            ? `${priceQuote.hasEstimate ? "~" : ""}${formatCredits(priceQuote.totalCost)} per run`
+            : "Unavailable"}
+      </p>
+    </NodeFieldCard>
+  );
+}
+
+function LlmGeneratorConfigPanel({ node }: { node: LlmGeneratorWorkflowNode }) {
+  const setLlmGeneratorConfigValue = useWorkflowStudioStore(
+    (state) => state.setLlmGeneratorConfigValue,
+  );
+  const modelLabel =
+    getLlmGeneratorModelOptions().find((option) => option.value === node.model)
+      ?.label ?? node.model;
+
+  return (
+    <div className="space-y-3">
+      <NodeFieldCard label="Model">
+        <p className="text-sm">{modelLabel}</p>
+      </NodeFieldCard>
+
+      <GeneratorControlGrid
+        config={node.config}
+        controls={getLlmGeneratorControlDefinitions(node.model)}
+        onConfigChange={(key, value) =>
+          setLlmGeneratorConfigValue(node.id, key, value)
+        }
+      />
+
+      <LlmEstimatePanel nodeId={node.id} />
+      <WorkflowExecutionEstimateWarning nodeId={node.id} />
+    </div>
+  );
+}
+
 function NodeConfigPanel({ node }: { node: WorkflowDocumentNode }) {
   switch (node.kind) {
     case "prompt":
@@ -270,6 +332,8 @@ function NodeConfigPanel({ node }: { node: WorkflowDocumentNode }) {
       return <ImageGeneratorConfigPanel node={node} />;
     case "videoGenerator":
       return <VideoGeneratorConfigPanel node={node} />;
+    case "llmGenerator":
+      return <LlmGeneratorConfigPanel node={node} />;
   }
 }
 
@@ -303,6 +367,14 @@ function isSameNodeConfig(
         left.model === right.model &&
         left.mode === right.mode &&
         left.config === right.config
+      );
+    case "llmGenerator":
+      return (
+        right.kind === "llmGenerator" &&
+        left.model === right.model &&
+        left.mode === right.mode &&
+        left.config === right.config &&
+        left.responseText === right.responseText
       );
   }
 }

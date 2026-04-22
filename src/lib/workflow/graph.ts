@@ -10,6 +10,7 @@ import {
   getImageGeneratorHandleDefinitions,
   getVideoGeneratorHandleDefinitions,
 } from "~/lib/workflow/generator-models";
+import { getLlmGeneratorHandleDefinitions } from "~/lib/workflow/llm-models";
 import {
   getNodeOutputHandleId,
   type WorkflowValueType,
@@ -97,6 +98,8 @@ function getGeneratorHandleDefinitions(
       return getImageGeneratorHandleDefinitions(node, edges, node.id);
     case "videoGenerator":
       return getVideoGeneratorHandleDefinitions(node, edges, node.id);
+    case "llmGenerator":
+      return getLlmGeneratorHandleDefinitions(node, edges, node.id);
     default:
       return [];
   }
@@ -235,6 +238,8 @@ function getNodeOutputValueType(
       return normalizedHandleId === "images" ? "image" : null;
     case "videoGenerator":
       return normalizedHandleId === "videos" ? "video" : null;
+    case "llmGenerator":
+      return normalizedHandleId === "text" ? "text" : null;
   }
 }
 
@@ -254,7 +259,9 @@ function getNodeInputValueType(
   );
 }
 
-function toRuntimeValue(node: WorkflowDocumentNode): RuntimeValue | null {
+export function getWorkflowNodeRuntimeValue(
+  node: WorkflowDocumentNode,
+): RuntimeValue | null {
   switch (node.kind) {
     case "prompt":
       return node.prompt.trim()
@@ -285,6 +292,13 @@ function toRuntimeValue(node: WorkflowDocumentNode): RuntimeValue | null {
             type: "video",
             assets: node.outputAssets,
             iterationMode: "static",
+          }
+        : null;
+    case "llmGenerator":
+      return node.responseText?.trim()
+        ? {
+            type: "text",
+            text: node.responseText.trim(),
           }
         : null;
   }
@@ -397,7 +411,9 @@ export function getGeneratorIterationPreview(
     getIncomingEdgesForHandle(incomingByTarget, targetId, handle.id).flatMap(
       (edge) => {
         const sourceNode = nodeMap.get(edge.source);
-        const runtimeValue = sourceNode ? toRuntimeValue(sourceNode) : null;
+        const runtimeValue = sourceNode
+          ? getWorkflowNodeRuntimeValue(sourceNode)
+          : null;
         return runtimeValue?.type === "image" &&
           runtimeValue.iterationMode === "iterator"
           ? [runtimeValue.assets.length]
@@ -428,7 +444,7 @@ export function getGeneratorMediaValuesByHandle(
   document: WorkflowDocument,
   targetId: string,
   valueType: Extract<WorkflowValueType, "image" | "video">,
-) {
+): Record<string, MediaRuntimeValue[]> {
   const nodeMap = toNodeMap(document);
   const targetNode = nodeMap.get(targetId);
   if (!targetNode || !isGeneratorNodeKind(targetNode.kind)) {
@@ -451,9 +467,14 @@ export function getGeneratorMediaValuesByHandle(
             ).flatMap((edge) => {
               const sourceNode = nodeMap.get(edge.source);
               const runtimeValue = sourceNode
-                ? toRuntimeValue(sourceNode)
+                ? getWorkflowNodeRuntimeValue(sourceNode)
                 : null;
-              return runtimeValue?.type === valueType ? [runtimeValue] : [];
+
+              if (!runtimeValue || runtimeValue.type !== valueType) {
+                return [];
+              }
+
+              return [runtimeValue];
             }),
           ] as const,
       )

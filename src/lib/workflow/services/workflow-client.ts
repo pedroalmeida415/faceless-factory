@@ -15,6 +15,8 @@ import type {
 import type {
   GenerateImageRequest,
   GenerateImageResponse,
+  GenerateLlmRequest,
+  GenerateLlmResponse,
   GenerateVideoRequest,
   GenerateVideoResponse,
   UploadAssetResponse,
@@ -100,6 +102,17 @@ export const WorkflowClientService = {
           cause,
         }),
     }) as Effect.Effect<GenerateImageResponse, WorkflowRequestError>;
+  },
+
+  generateLlm(input: GenerateLlmRequest) {
+    return Effect.tryPromise({
+      try: () => trpcClient.workflow.generateLlm.mutate(input),
+      catch: (cause) =>
+        new WorkflowRequestError({
+          message: getErrorMessage(cause),
+          cause,
+        }),
+    }) as Effect.Effect<GenerateLlmResponse, WorkflowRequestError>;
   },
 
   generateVideo(input: GenerateVideoRequest) {

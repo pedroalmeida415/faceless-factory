@@ -14,6 +14,8 @@ import type {
 import type {
   GenerateImageRequest,
   GenerateImageResponse,
+  GenerateLlmRequest,
+  GenerateLlmResponse,
   GenerateVideoRequest,
   GenerateVideoResponse,
   WorkflowNodeStatus,
@@ -63,6 +65,7 @@ export type WorkflowExecutionStatusResponse = {
   runId: string;
   targetNodeIds: string[];
   projectDocumentRevision: number | null;
+  finalCostCredits: number | null;
   document: WorkflowDocument;
   runtime: WorkflowExecutionRuntimeState;
   activity: string;
@@ -87,8 +90,12 @@ export type WorkflowExecutionPorts = {
   readonly generateVideo: (
     request: GenerateVideoRequest,
   ) => Effect.Effect<GenerateVideoResponse, WorkflowExecutionPortError>;
+  readonly generateLlm: (
+    request: GenerateLlmRequest,
+  ) => Effect.Effect<GenerateLlmResponse, WorkflowExecutionPortError>;
   readonly onCompleted?: (params: {
     document: WorkflowDocument;
+    finalCostCredits: number;
     request: StartWorkflowExecutionRequest;
     runId: string;
     targetNodeIds: string[];

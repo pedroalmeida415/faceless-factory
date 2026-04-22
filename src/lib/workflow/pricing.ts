@@ -22,14 +22,16 @@ import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator"
 
 export type WorkflowExecutionPriceLineItem = {
   nodeId: string;
-  kind: "imageGenerator" | "videoGenerator";
+  kind: "imageGenerator" | "videoGenerator" | "llmGenerator";
   iterations: number;
   costPerIteration: number;
   totalCost: number;
+  isEstimate: boolean;
 };
 
 export type WorkflowExecutionPriceQuote = {
   totalCost: number;
+  hasEstimate: boolean;
   lineItems: WorkflowExecutionPriceLineItem[];
 };
 
@@ -87,6 +89,7 @@ function buildWorkflowExecutionPriceLineItem(
         kind: node.kind,
         iterations,
         costPerIteration,
+        isEstimate: false,
         totalCost: costPerIteration * iterations,
       };
     }
@@ -97,6 +100,7 @@ function buildWorkflowExecutionPriceLineItem(
         kind: node.kind,
         iterations,
         costPerIteration,
+        isEstimate: false,
         totalCost: costPerIteration * iterations,
       };
     }
@@ -114,7 +118,7 @@ function resolveQuotedTargetIds(request: StartWorkflowExecutionRequest) {
 
   if (!targetIds.length) {
     throw new WorkflowValidationError({
-      message: "Add an image or video generator first.",
+      message: "Add a generator first.",
     });
   }
 
@@ -137,6 +141,7 @@ function buildWorkflowExecutionPriceQuote(
     );
 
   return {
+    hasEstimate: lineItems.some((lineItem) => lineItem.isEstimate),
     totalCost: lineItems.reduce(
       (totalCost, lineItem) => totalCost + lineItem.totalCost,
       0,

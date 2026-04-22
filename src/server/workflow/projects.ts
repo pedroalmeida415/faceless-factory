@@ -117,6 +117,18 @@ function applyExecutionResultsToDocument(params: {
         };
       }
 
+      if (
+        node.kind === "llmGenerator" &&
+        executionNode.kind === "llmGenerator"
+      ) {
+        return {
+          ...node,
+          lastPrompt: executionNode.lastPrompt,
+          lastSystemPrompt: executionNode.lastSystemPrompt,
+          responseText: executionNode.responseText,
+        };
+      }
+
       throw new WorkflowValidationError({
         message: `Node ${node.id} is not an executable generator target.`,
       });

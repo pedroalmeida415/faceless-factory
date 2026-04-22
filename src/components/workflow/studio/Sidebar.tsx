@@ -47,6 +47,33 @@ const TextIcon = () => (
 );
 
 const AssetsDrawerIcon = () => (
+const LlmIcon = () => (
+  <svg
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <title>LLM</title>
+    <path
+      d="M12 3L13.9 8.1L19 10L13.9 11.9L12 17L10.1 11.9L5 10L10.1 8.1L12 3Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    ></path>
+    <path
+      d="M18 15L18.8 17.2L21 18L18.8 18.8L18 21L17.2 18.8L15 18L17.2 17.2L18 15Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    ></path>
+  </svg>
+);
+
+const AssetsDrawerIcon = () => (
   <svg
     width="20"
     height="20"
@@ -81,6 +108,7 @@ const NODE_ACTIONS: Array<{
 }> = [
   { kind: "prompt", label: "Text", icon: TextIcon },
   { kind: "asset", label: "Asset", icon: RiImageLine },
+  { kind: "llmGenerator", label: "Run any LLM", icon: LlmIcon },
   { kind: "videoGenerator", label: "Video generator", icon: RiVideoAiLine },
   {
     kind: "imageGenerator",

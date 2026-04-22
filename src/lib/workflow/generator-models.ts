@@ -50,9 +50,29 @@ type SwitchGeneratorControlDefinition = {
   label: string;
 };
 
+type RangeGeneratorControlDefinition = {
+  type: "range";
+  key: string;
+  label: string;
+  min: number;
+  max: number;
+  step?: number;
+};
+
+type NumberGeneratorControlDefinition = {
+  type: "number";
+  key: string;
+  label: string;
+  min?: number;
+  max?: number;
+  step?: number;
+};
+
 export type GeneratorControlDefinition =
   | SelectGeneratorControlDefinition
-  | SwitchGeneratorControlDefinition;
+  | SwitchGeneratorControlDefinition
+  | RangeGeneratorControlDefinition
+  | NumberGeneratorControlDefinition;
 
 type FixedGeneratorInputDefinition = {
   type: "fixed";
