@@ -13,7 +13,7 @@
 
 
 # Application
-- [ ] Database design (tables, credits, etc...)
+- [X] ~~Database design (tables, credits, etc...)~~
 - [ ] Any LLM node for text-related functionality.
 - [ ] Human-in-the-loop nodes or something to  that require approval before moving forward.
 - [ ] Plans Stripe integration
