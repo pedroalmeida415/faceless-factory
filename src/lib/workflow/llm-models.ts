@@ -96,19 +96,16 @@ function buildHandleDefinitions(
       required: false,
       valueType: "text",
     },
-    ...Array.from(
-      { length: Math.min(1, connectedImageCount + 1) },
-      (_, index) => ({
-        color: VALUE_TYPE_COLORS.image,
-        id: `${IMAGE_INPUT_PREFIX}${index}`,
-        idPrefix: IMAGE_INPUT_PREFIX,
-        inputType: "repeatable" as const,
-        label: "Image",
-        labelIndex: index + 1,
-        required: false,
-        valueType: "image" as const,
-      }),
-    ),
+    ...Array.from({ length: connectedImageCount + 1 }, (_, index) => ({
+      color: VALUE_TYPE_COLORS.image,
+      id: `${IMAGE_INPUT_PREFIX}${index}`,
+      idPrefix: IMAGE_INPUT_PREFIX,
+      inputType: "repeatable" as const,
+      label: "Image",
+      labelIndex: index + 1,
+      required: false,
+      valueType: "image" as const,
+    })),
   ];
 }
 

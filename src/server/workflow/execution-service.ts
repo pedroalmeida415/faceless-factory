@@ -364,13 +364,33 @@ export class WorkflowExecutionService extends Context.Tag(
           ),
           Effect.catchAll((error) =>
             Effect.gen(function* () {
+              const currentRun = yield* workflowRunStore.getRun({
+                runId,
+                userId,
+              });
+
+              if (currentRun.status === "success") {
+                const credits = yield* workflowCreditsService
+                  .getRunSummary({
+                    runId,
+                    userId,
+                  })
+                  .pipe(
+                    Effect.catchAll(() => Effect.succeed(currentRun.credits)),
+                  );
+                const nextRun = {
+                  ...currentRun,
+                  credits,
+                };
+
+                return yield* workflowRunStore
+                  .updateRun(nextRun)
+                  .pipe(Effect.catchAll(() => Effect.succeed(nextRun)));
+              }
+
               const credits = yield* workflowCreditsService.refundExecution({
                 executionId: runId,
                 reason: getErrorMessage(error),
-                userId,
-              });
-              const currentRun = yield* workflowRunStore.getRun({
-                runId,
                 userId,
               });
               yield* workflowRunStore.updateRun({
