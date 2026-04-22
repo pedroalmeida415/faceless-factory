@@ -1,4 +1,4 @@
-import type { Connection } from "reactflow";
+import type { Connection, HandleType } from "reactflow";
 
 import type {
   WorkflowDocument,
@@ -23,6 +23,12 @@ export type RuntimeValue =
       assets: WorkflowAsset[];
       iterationMode: "static" | "iterator";
     };
+
+export type WorkflowHandleReference = {
+  nodeId: string;
+  handleId: string | null;
+  handleType: HandleType;
+};
 
 type MediaRuntimeValue = Extract<RuntimeValue, { type: "image" | "video" }>;
 
@@ -121,6 +127,55 @@ export function getGeneratorInputHandles(
   }
 
   return getGeneratorHandleDefinitions(node, document.edges);
+}
+
+export function getWorkflowHandleValueType(
+  document: WorkflowDocument,
+  handle: WorkflowHandleReference,
+) {
+  const node = document.nodes.find(
+    (candidate) => candidate.id === handle.nodeId,
+  );
+  if (!node) {
+    return null;
+  }
+
+  return handle.handleType === "source"
+    ? getNodeOutputValueType(node, handle.handleId)
+    : getNodeInputValueType(node, handle.handleId, document.edges);
+}
+
+export function findFirstWorkflowHandleIdByValueType(
+  document: WorkflowDocument,
+  params: {
+    nodeId: string;
+    handleType: HandleType;
+    valueType: WorkflowValueType;
+  },
+) {
+  const node = document.nodes.find(
+    (candidate) => candidate.id === params.nodeId,
+  );
+  if (!node) {
+    return null;
+  }
+
+  if (params.handleType === "source") {
+    const handleId = getNodeOutputHandleId(node.kind);
+    return getNodeOutputValueType(node, handleId) === params.valueType
+      ? handleId
+      : null;
+  }
+
+  if (!isGeneratorNodeKind(node.kind)) {
+    return null;
+  }
+
+  return (
+    getGeneratorHandleDefinitions(node, document.edges).find(
+      (handle) => handle.valueType === params.valueType,
+    )?.id ?? null
+  );
 }
 
 export function normalizeGeneratorTargetHandles(

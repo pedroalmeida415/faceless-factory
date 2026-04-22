@@ -4,7 +4,10 @@ import {
   normalizeImageGeneratorSettings,
   normalizeVideoGeneratorSettings,
 } from "~/lib/workflow/generator-models";
-import { formatNodeTitle } from "~/lib/workflow/node-definitions";
+import {
+  formatNodeTitle,
+  type WorkflowValueType,
+} from "~/lib/workflow/node-definitions";
 import type {
   AssetNodeFields,
   ImageGeneratorSettings,
@@ -405,11 +408,28 @@ export function updateWorkflowDocumentNode(
   } satisfies WorkflowDocument;
 }
 
-export function createWorkflowNode(kind: WorkflowNodeKind, index: number) {
+export function specializeWorkflowNodeForValueType(
+  node: WorkflowDocumentNode,
+  valueType: WorkflowValueType,
+) {
+  return node.kind === "asset" &&
+    (valueType === "image" || valueType === "video")
+    ? {
+        ...node,
+        assetKind: valueType,
+      }
+    : node;
+}
+
+export function createWorkflowNode(
+  kind: WorkflowNodeKind,
+  index: number,
+  position?: WorkflowPosition,
+) {
   return makeWorkflowNode(
     createWorkflowNodeId(),
     kind,
-    nextNodePosition(index),
+    position ? snapWorkflowPositionToGrid(position) : nextNodePosition(index),
   );
 }
 

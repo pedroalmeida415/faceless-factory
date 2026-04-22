@@ -10,14 +10,21 @@ import {
   createEmptyWorkflowDocument,
   createWorkflowNode,
   createWorkflowNodeId,
+  specializeWorkflowNodeForValueType,
   type WorkflowDocument,
+  type WorkflowPosition,
 } from "~/lib/workflow/document";
 import {
+  findFirstWorkflowHandleIdByValueType,
   getGeneratorInputHandles,
   isValidWorkflowConnection,
   normalizeGeneratorTargetHandles,
+  type WorkflowHandleReference,
 } from "~/lib/workflow/graph";
-import { formatNodeTitle } from "~/lib/workflow/node-definitions";
+import {
+  formatNodeTitle,
+  type WorkflowValueType,
+} from "~/lib/workflow/node-definitions";
 import {
   buildWorkflowCanvas,
   createWorkflowEditorState,
@@ -347,6 +354,93 @@ export const WorkflowEngine = {
     );
 
     nextState.runtime.activity = `${formatNodeTitle(kind)} node added.`;
+    return nextState;
+  },
+
+  addConnectedNode(
+    state: WorkflowEngineState,
+    params: {
+      kind: WorkflowNodeKind;
+      position: WorkflowPosition;
+      startHandle: WorkflowHandleReference;
+      valueType: WorkflowValueType;
+    },
+  ) {
+    const nextNode = specializeWorkflowNodeForValueType(
+      createWorkflowNode(
+        params.kind,
+        state.document.nodes.length,
+        params.position,
+      ),
+      params.valueType,
+    );
+    const documentWithNode = {
+      ...state.document,
+      nodes: [...state.document.nodes, nextNode],
+    } satisfies WorkflowDocument;
+    const nextHandleId = findFirstWorkflowHandleIdByValueType(
+      documentWithNode,
+      {
+        nodeId: nextNode.id,
+        handleType:
+          params.startHandle.handleType === "source" ? "target" : "source",
+        valueType: params.valueType,
+      },
+    );
+
+    if (!nextHandleId) {
+      const nextState = syncEngineState(
+        documentWithNode,
+        state.editor,
+        state.runtime,
+      );
+      nextState.runtime.activity = `${formatNodeTitle(params.kind)} node added.`;
+      return nextState;
+    }
+
+    const connection =
+      params.startHandle.handleType === "source"
+        ? {
+            source: params.startHandle.nodeId,
+            sourceHandle: params.startHandle.handleId,
+            target: nextNode.id,
+            targetHandle: nextHandleId,
+          }
+        : {
+            source: nextNode.id,
+            sourceHandle: nextHandleId,
+            target: params.startHandle.nodeId,
+            targetHandle: params.startHandle.handleId,
+          };
+    const documentWithEdge = isValidWorkflowConnection(
+      documentWithNode,
+      connection,
+    )
+      ? {
+          ...documentWithNode,
+          edges: [
+            ...documentWithNode.edges,
+            {
+              id: createWorkflowNodeId(),
+              source: connection.source,
+              sourceHandle: connection.sourceHandle ?? null,
+              target: connection.target,
+              targetHandle: connection.targetHandle ?? null,
+            },
+          ],
+        }
+      : documentWithNode;
+    const nextState = syncEngineState(
+      documentWithEdge,
+      state.editor,
+      state.runtime,
+    );
+
+    nextState.runtime.activity =
+      documentWithEdge === documentWithNode
+        ? `${formatNodeTitle(params.kind)} node added.`
+        : `${formatNodeTitle(params.kind)} node added and connected.`;
+
     return nextState;
   },
 
