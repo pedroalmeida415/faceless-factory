@@ -5,17 +5,43 @@ import {
   RiArrowGoForwardLine,
   RiFullscreenFill,
 } from "@remixicon/react";
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   Background,
+  type Connection,
   ConnectionLineType,
+  type OnConnectEnd,
+  type OnConnectStart,
   ReactFlow,
   type ReactFlowInstance,
   useReactFlow,
 } from "reactflow";
+import {
+  Autocomplete,
+  AutocompleteEmpty,
+  AutocompleteInput,
+  AutocompleteItem,
+  AutocompleteList,
+  AutocompletePopup,
+} from "~/components/ui/autocomplete";
 import { Card, CardContent } from "~/components/ui/card";
-import { WORKFLOW_GRID_STEP } from "~/lib/workflow/document";
+import {
+  createWorkflowNode,
+  specializeWorkflowNodeForValueType,
+  WORKFLOW_GRID_STEP,
+  type WorkflowDocument,
+} from "~/lib/workflow/document";
+import {
+  findFirstWorkflowHandleIdByValueType,
+  getWorkflowHandleValueType,
+  type WorkflowHandleReference,
+} from "~/lib/workflow/graph";
+import {
+  formatNodeTitle,
+  type WorkflowValueType,
+} from "~/lib/workflow/node-definitions";
 import type { WorkflowProject } from "~/lib/workflow/project";
+import type { WorkflowNodeKind } from "~/lib/workflow/types";
 import { WorkflowCreditsBadge } from "./studio/CreditsBadge";
 import { StudioContext } from "./studio/context";
 import { isEditableTarget } from "./studio/graph";
@@ -42,6 +68,178 @@ const WORKFLOW_SNAP_GRID: [number, number] = [
   WORKFLOW_GRID_STEP,
   WORKFLOW_GRID_STEP,
 ];
+const WORKFLOW_CONNECTION_AUTOCOMPLETE_WIDTH = 320;
+const WORKFLOW_CONNECTION_AUTOCOMPLETE_MARGIN = 16;
+const WORKFLOW_CONNECTION_AUTOCOMPLETE_SIDE_THRESHOLD = 320;
+const WORKFLOW_NODE_KINDS: WorkflowNodeKind[] = [
+  "prompt",
+  "asset",
+  "imageGenerator",
+  "videoGenerator",
+];
+
+type ConnectionAutocompleteOption = {
+  kind: WorkflowNodeKind;
+  label: string;
+};
+
+type ConnectionAutocompleteState = {
+  flowPosition: { x: number; y: number };
+  popupPosition: { x: number; y: number };
+  popupSide: "top" | "bottom";
+  options: ConnectionAutocompleteOption[];
+  startHandle: WorkflowHandleReference;
+  valueType: WorkflowValueType;
+};
+
+function getEventClientPosition(event: MouseEvent | TouchEvent) {
+  if ("changedTouches" in event) {
+    const touch = event.changedTouches[0] ?? event.touches[0];
+    return touch
+      ? {
+          x: touch.clientX,
+          y: touch.clientY,
+        }
+      : null;
+  }
+
+  return {
+    x: event.clientX,
+    y: event.clientY,
+  };
+}
+
+function clampAutocompletePosition(position: { x: number; y: number }) {
+  const maxX = Math.max(
+    WORKFLOW_CONNECTION_AUTOCOMPLETE_MARGIN,
+    window.innerWidth -
+      WORKFLOW_CONNECTION_AUTOCOMPLETE_WIDTH -
+      WORKFLOW_CONNECTION_AUTOCOMPLETE_MARGIN,
+  );
+  const maxY = Math.max(
+    WORKFLOW_CONNECTION_AUTOCOMPLETE_MARGIN,
+    window.innerHeight - 48 - WORKFLOW_CONNECTION_AUTOCOMPLETE_MARGIN,
+  );
+
+  return {
+    x: Math.min(
+      Math.max(position.x, WORKFLOW_CONNECTION_AUTOCOMPLETE_MARGIN),
+      maxX,
+    ),
+    y: Math.min(
+      Math.max(position.y, WORKFLOW_CONNECTION_AUTOCOMPLETE_MARGIN),
+      maxY,
+    ),
+  };
+}
+
+function buildConnectionAutocompleteOptions(params: {
+  document: WorkflowDocument;
+  flowPosition: { x: number; y: number };
+  startHandle: WorkflowHandleReference;
+  valueType: WorkflowValueType;
+}) {
+  return WORKFLOW_NODE_KINDS.flatMap((kind) => {
+    const candidateNode = specializeWorkflowNodeForValueType(
+      createWorkflowNode(
+        kind,
+        params.document.nodes.length,
+        params.flowPosition,
+      ),
+      params.valueType,
+    );
+    const documentWithCandidate = {
+      ...params.document,
+      nodes: [...params.document.nodes, candidateNode],
+    };
+    const compatibleHandleId = findFirstWorkflowHandleIdByValueType(
+      documentWithCandidate,
+      {
+        nodeId: candidateNode.id,
+        handleType:
+          params.startHandle.handleType === "source" ? "target" : "source",
+        valueType: params.valueType,
+      },
+    );
+
+    return compatibleHandleId
+      ? [
+          {
+            kind,
+            label: formatNodeTitle(kind),
+          } satisfies ConnectionAutocompleteOption,
+        ]
+      : [];
+  });
+}
+
+function WorkflowConnectionAutocomplete({
+  onClose,
+  onSelect,
+  state,
+}: {
+  onClose: () => void;
+  onSelect: (kind: WorkflowNodeKind) => void;
+  state: ConnectionAutocompleteState;
+}) {
+  const [value, setValue] = useState("");
+
+  return (
+    <div
+      className="fixed z-50 w-80"
+      style={{
+        left: state.popupPosition.x,
+        top: state.popupPosition.y,
+      }}
+    >
+      <Autocomplete
+        autoHighlight="always"
+        itemToStringValue={(item: ConnectionAutocompleteOption) => item.label}
+        items={state.options}
+        modal={false}
+        onOpenChange={(open) => {
+          if (!open) {
+            onClose();
+          }
+        }}
+        onValueChange={setValue}
+        open
+        openOnInputClick
+        value={value}
+      >
+        <AutocompleteInput
+          autoFocus
+          className="w-full rounded-full border-border/60 bg-background/92 shadow-2xl backdrop-blur-xl"
+          placeholder={`Add a ${state.valueType} node...`}
+          showClear
+        />
+        <AutocompletePopup
+          className="w-80"
+          side={state.popupSide}
+          sideOffset={8}
+        >
+          <AutocompleteEmpty>No compatible nodes</AutocompleteEmpty>
+          <AutocompleteList>
+            {(item: ConnectionAutocompleteOption) => (
+              <AutocompleteItem
+                key={item.kind}
+                onClick={() => onSelect(item.kind)}
+                value={item}
+              >
+                <div className="flex w-full items-center justify-between gap-3">
+                  <span>{item.label}</span>
+                  <span className="text-muted-foreground text-xs uppercase">
+                    {state.valueType}
+                  </span>
+                </div>
+              </AutocompleteItem>
+            )}
+          </AutocompleteList>
+        </AutocompletePopup>
+      </Autocomplete>
+    </div>
+  );
+}
 
 function WorkflowCanvasControls({
   onRedo,
@@ -117,9 +315,14 @@ function WorkflowCanvasControls({
 
 const WorkflowCanvas = memo(function WorkflowCanvas({
   flowRef,
+  onRequestConnectionAutocomplete,
 }: {
   flowRef: { current: ReactFlowInstance | null };
+  onRequestConnectionAutocomplete: (
+    state: ConnectionAutocompleteState | null,
+  ) => void;
 }) {
+  const document = useWorkflowStudioStore((state) => state.document);
   const nodes = useWorkflowStudioStore((state) => state.nodes);
   const edges = useWorkflowStudioStore((state) => state.edges);
   const connect = useWorkflowStudioStore((state) => state.connect);
@@ -134,6 +337,8 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
   const redo = useWorkflowStudioStore((state) => state.redo);
   const canUndo = useWorkflowStudioStore((state) => state.canUndo);
   const canRedo = useWorkflowStudioStore((state) => state.canRedo);
+  const pendingStartHandleRef = useRef<WorkflowHandleReference | null>(null);
+  const didConnectRef = useRef(false);
 
   const handleFlowInit = useCallback(
     (instance: ReactFlowInstance) => {
@@ -141,6 +346,93 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
       requestAnimationFrame(() => instance.fitView({ padding: 0.18 }));
     },
     [flowRef],
+  );
+
+  const handleConnect = useCallback(
+    (connection: Connection) => {
+      didConnectRef.current = true;
+      pendingStartHandleRef.current = null;
+      onRequestConnectionAutocomplete(null);
+      connect(connection);
+    },
+    [connect, onRequestConnectionAutocomplete],
+  );
+
+  const handleConnectStart = useCallback<OnConnectStart>(
+    (_event, params) => {
+      didConnectRef.current = false;
+      pendingStartHandleRef.current =
+        params.nodeId && params.handleType
+          ? {
+              nodeId: params.nodeId,
+              handleId: params.handleId ?? null,
+              handleType: params.handleType,
+            }
+          : null;
+      onRequestConnectionAutocomplete(null);
+    },
+    [onRequestConnectionAutocomplete],
+  );
+
+  const handleConnectEnd = useCallback<OnConnectEnd>(
+    (event: MouseEvent | TouchEvent) => {
+      const startHandle = pendingStartHandleRef.current;
+      pendingStartHandleRef.current = null;
+
+      if (!startHandle || didConnectRef.current) {
+        didConnectRef.current = false;
+        onRequestConnectionAutocomplete(null);
+        return;
+      }
+
+      didConnectRef.current = false;
+
+      const clientPosition = getEventClientPosition(event);
+      if (!clientPosition) {
+        onRequestConnectionAutocomplete(null);
+        return;
+      }
+
+      const valueType = getWorkflowHandleValueType(document, startHandle);
+
+      if (!valueType) {
+        onRequestConnectionAutocomplete(null);
+        return;
+      }
+
+      const flowPosition =
+        flowRef.current?.screenToFlowPosition(clientPosition);
+      if (!flowPosition) {
+        onRequestConnectionAutocomplete(null);
+        return;
+      }
+
+      const options = buildConnectionAutocompleteOptions({
+        document,
+        flowPosition,
+        startHandle,
+        valueType,
+      });
+
+      if (!options.length) {
+        onRequestConnectionAutocomplete(null);
+        return;
+      }
+
+      onRequestConnectionAutocomplete({
+        flowPosition,
+        popupPosition: clampAutocompletePosition(clientPosition),
+        popupSide:
+          clientPosition.y >
+          window.innerHeight - WORKFLOW_CONNECTION_AUTOCOMPLETE_SIDE_THRESHOLD
+            ? "top"
+            : "bottom",
+        options,
+        startHandle,
+        valueType,
+      });
+    },
+    [document, flowRef, onRequestConnectionAutocomplete],
   );
 
   return (
@@ -155,7 +447,9 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
           isValidConnection={canConnect}
           nodes={nodes}
           nodeTypes={nodeTypes}
-          onConnect={connect}
+          onConnect={handleConnect}
+          onConnectEnd={handleConnectEnd}
+          onConnectStart={handleConnectStart}
           onEdgesChange={applyEdgeChanges}
           onInit={handleFlowInit}
           onNodesChange={applyNodeChanges}
@@ -184,6 +478,11 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
 
   const flowRef = useRef<ReactFlowInstance | null>(null);
   const addNode = useWorkflowStudioStore((state) => state.addNode);
+  const addConnectedNode = useWorkflowStudioStore(
+    (state) => state.addConnectedNode,
+  );
+  const [connectionAutocomplete, setConnectionAutocomplete] =
+    useState<ConnectionAutocompleteState | null>(null);
   const { contextValue } = useWorkflowStudioController();
 
   useEffect(() => {
@@ -227,10 +526,28 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
 
   const addNodeToCanvas = useCallback(
     (kind: Parameters<typeof addNode>[0]) => {
+      setConnectionAutocomplete(null);
       addNode(kind);
       requestAnimationFrame(() => flowRef.current?.fitView({ padding: 0.18 }));
     },
     [addNode],
+  );
+
+  const handleConnectionAutocompleteSelect = useCallback(
+    (kind: WorkflowNodeKind) => {
+      if (!connectionAutocomplete) {
+        return;
+      }
+
+      addConnectedNode({
+        kind,
+        position: connectionAutocomplete.flowPosition,
+        startHandle: connectionAutocomplete.startHandle,
+        valueType: connectionAutocomplete.valueType,
+      });
+      setConnectionAutocomplete(null);
+    },
+    [addConnectedNode, connectionAutocomplete],
   );
 
   return (
@@ -239,7 +556,17 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
         <WorkflowCreditsBadge />
         <WorkflowSidebar onAddNode={addNodeToCanvas} />
         <WorkflowNodeConfigDrawer />
-        <WorkflowCanvas flowRef={flowRef} />
+        <WorkflowCanvas
+          flowRef={flowRef}
+          onRequestConnectionAutocomplete={setConnectionAutocomplete}
+        />
+        {connectionAutocomplete ? (
+          <WorkflowConnectionAutocomplete
+            onClose={() => setConnectionAutocomplete(null)}
+            onSelect={handleConnectionAutocompleteSelect}
+            state={connectionAutocomplete}
+          />
+        ) : null}
       </div>
     </StudioContext.Provider>
   );

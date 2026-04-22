@@ -14,6 +14,7 @@ import {
   updateWorkflowDocumentNode,
   type WorkflowDocument,
   type WorkflowDocumentNode,
+  type WorkflowPosition,
 } from "~/lib/workflow/document";
 import { getErrorMessage } from "~/lib/workflow/errors";
 import { collectWorkflowExecutionNodeIds } from "~/lib/workflow/execution/subgraph";
@@ -22,6 +23,8 @@ import type {
   WorkflowExecutionRuntimeState,
   WorkflowExecutionStatusResponse,
 } from "~/lib/workflow/execution/types";
+import type { WorkflowHandleReference } from "~/lib/workflow/graph";
+import type { WorkflowValueType } from "~/lib/workflow/node-definitions";
 import type { WorkflowProject } from "~/lib/workflow/project";
 import {
   ImageGeneratorService,
@@ -419,6 +422,12 @@ type WorkflowStudioState = {
   connect: (connection: Connection) => void;
   canConnect: (connection: Connection) => boolean;
   addNode: (kind: WorkflowNodeKind) => void;
+  addConnectedNode: (params: {
+    kind: WorkflowNodeKind;
+    position: WorkflowPosition;
+    startHandle: WorkflowHandleReference;
+    valueType: WorkflowValueType;
+  }) => void;
   clearSelection: () => void;
   deleteSelection: () => void;
   undo: () => void;
@@ -862,6 +871,25 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
         const currentSnapshot = snapshotFromState(state);
         runSnapshotMutation(state, () =>
           WorkflowEngine.addNode(currentSnapshot, kind),
+        );
+      });
+    },
+
+    addConnectedNode: (params) => {
+      set((state) => {
+        const lockedExecutionNodeIds = getLockedExecutionNodeIds(
+          state.document,
+          state.lockedNodeIds,
+        );
+
+        if (lockedExecutionNodeIds.has(params.startHandle.nodeId)) {
+          state.runtime.activity = LOCKED_WORKFLOW_ACTIVITY;
+          return;
+        }
+
+        const currentSnapshot = snapshotFromState(state);
+        runSnapshotMutation(state, () =>
+          WorkflowEngine.addConnectedNode(currentSnapshot, params),
         );
       });
     },
