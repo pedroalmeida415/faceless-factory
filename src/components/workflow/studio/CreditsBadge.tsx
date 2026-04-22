@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { Badge } from "~/components/ui/badge";
 import { useWorkflowStudioStore } from "~/components/workflow/studio/store";
 import { api } from "~/trpc/react";
@@ -25,12 +27,13 @@ export function WorkflowCreditsBadge() {
         : "Credits unavailable";
 
   return (
-    <div className="pointer-events-none absolute top-4 right-4 z-20">
+    <div className="absolute top-4 right-4 z-20">
       <Badge
+        asChild
         className="h-auto rounded-full border border-border/60 bg-background/88 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] shadow-2xl backdrop-blur-xl"
         variant="outline"
       >
-        {label}
+        <Link href="/app/billing">{label}</Link>
       </Badge>
     </div>
   );

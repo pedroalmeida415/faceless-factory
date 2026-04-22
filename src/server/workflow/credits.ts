@@ -9,6 +9,7 @@ import {
   WorkflowInfrastructureError,
 } from "~/lib/workflow/errors";
 import type { WorkflowCreditsSummary } from "~/lib/workflow/execution/types";
+import { syncSubscriptionCreditsForUser } from "~/server/billing/service";
 import { db } from "~/server/db";
 import { creditLedgerEntries, user } from "~/server/db/schema";
 
@@ -150,6 +151,8 @@ export class WorkflowCreditsService extends Context.Tag(
     debitExecution: ({ amount, executionId, reason, userId }) =>
       Effect.tryPromise({
         try: async () => {
+          await syncSubscriptionCreditsForUser(userId);
+
           if (amount <= 0) {
             const available = await getUserCreditBalance(db, userId);
             return buildRunSummary({ available, refunded: 0, totalCost: 0 });
@@ -194,8 +197,10 @@ export class WorkflowCreditsService extends Context.Tag(
       }),
     getBalanceSummary: (userId) =>
       Effect.tryPromise({
-        try: async () =>
-          buildBalanceSummary(await getUserCreditBalance(db, userId)),
+        try: async () => {
+          await syncSubscriptionCreditsForUser(userId);
+          return buildBalanceSummary(await getUserCreditBalance(db, userId));
+        },
         catch: WorkflowCreditsService.toCreditsInfraError,
       }),
     getRunSummary: ({ runId, userId }) =>

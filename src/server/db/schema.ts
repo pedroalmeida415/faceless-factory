@@ -36,6 +36,7 @@ export const user = pgTable("user", {
   creditBalance: bigint("credit_balance", { mode: "number" })
     .default(0)
     .notNull(),
+  stripeCustomerId: text("stripe_customer_id").unique(),
 });
 
 export const session = pgTable("session", {
@@ -161,6 +162,7 @@ export const creditLedgerEntries = pgTable(
     amount: bigint("amount", { mode: "number" }).notNull(),
     balanceAfter: bigint("balance_after", { mode: "number" }).notNull(),
     reason: text("reason").notNull(),
+    sourceKey: text("source_key").unique(),
     createdAt: timestamp("created_at")
       .$defaultFn(() => /* @__PURE__ */ new Date())
       .notNull(),
@@ -176,11 +178,46 @@ export const creditLedgerEntries = pgTable(
   }),
 );
 
+export const subscription = pgTable(
+  "subscription",
+  {
+    id: text("id").primaryKey(),
+    plan: text("plan").notNull(),
+    referenceId: text("reference_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    stripeCustomerId: text("stripe_customer_id"),
+    stripeSubscriptionId: text("stripe_subscription_id"),
+    status: text("status").default("incomplete").notNull(),
+    periodStart: timestamp("period_start"),
+    periodEnd: timestamp("period_end"),
+    cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false),
+    cancelAt: timestamp("cancel_at"),
+    canceledAt: timestamp("canceled_at"),
+    endedAt: timestamp("ended_at"),
+    seats: bigint("seats", { mode: "number" }),
+    trialStart: timestamp("trial_start"),
+    trialEnd: timestamp("trial_end"),
+    billingInterval: text("billing_interval"),
+    stripeScheduleId: text("stripe_schedule_id"),
+  },
+  (table) => ({
+    referenceStatusIdx: index("subscription_reference_status_idx").on(
+      table.referenceId,
+      table.status,
+    ),
+    stripeSubscriptionIdIdx: index(
+      "subscription_stripe_subscription_id_idx",
+    ).on(table.stripeSubscriptionId),
+  }),
+);
+
 export const userRelations = relations(user, ({ many }) => ({
   account: many(account),
   assets: many(assets),
   creditLedgerEntries: many(creditLedgerEntries),
   session: many(session),
+  subscriptions: many(subscription),
   workflowProjects: many(workflowProjects),
 }));
 
@@ -223,3 +260,10 @@ export const creditLedgerEntriesRelations = relations(
     }),
   }),
 );
+
+export const subscriptionRelations = relations(subscription, ({ one }) => ({
+  user: one(user, {
+    fields: [subscription.referenceId],
+    references: [user.id],
+  }),
+}));
