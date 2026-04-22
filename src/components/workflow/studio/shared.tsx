@@ -69,6 +69,7 @@ export function AssetPreview({
       <Image
         alt={asset.fileName}
         className={cn("object-cover", className)}
+        draggable={false}
         fill
         sizes="(max-width: 768px) 100vw, 320px"
         src={asset.url}

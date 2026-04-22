@@ -1,16 +1,25 @@
 "use client";
 
 import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { RiCloseLine } from "@remixicon/react";
 import { useEffect, useRef } from "react";
 
 import { Badge } from "~/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
+import { Card, CardContent } from "~/components/ui/card";
+import {
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from "~/components/ui/drawer";
 import { cn } from "~/lib/utils";
 import { formatWorkflowAssetSize } from "~/lib/workflow/assets";
 import type { WorkflowAsset } from "~/lib/workflow/types";
 import { api } from "~/trpc/react";
 import { getWorkflowAssetDragData } from "./asset-dnd";
-import { AssetPreview } from "./shared";
+import { AssetPreview, ShellButton } from "./shared";
 import { useWorkflowStudioStore } from "./store";
 
 function AssetLibrarySection({
@@ -33,7 +42,7 @@ function AssetLibrarySection({
         </Badge>
       </div>
       {assets.length ? (
-        <div className="space-y-3">
+        <div className="grid auto-rows-auto grid-cols-2 gap-3">
           {assets.map((asset) => (
             <AssetLibraryCard asset={asset} key={asset.id} />
           ))}
@@ -65,9 +74,9 @@ function AssetLibraryCard({ asset }: { asset: WorkflowAsset }) {
   }, [asset]);
 
   return (
-    <div className="cursor-grab active:cursor-grabbing" ref={elementRef}>
+    <div className="h-full cursor-grab active:cursor-grabbing" ref={elementRef}>
       <Card
-        className="gap-0 rounded-2xl border-border/60 bg-background/70 py-0"
+        className="flex h-full flex-col gap-0 rounded-2xl border-border/60 bg-background/70 py-0"
         size="sm"
       >
         <div
@@ -104,7 +113,15 @@ function AssetLibraryCard({ asset }: { asset: WorkflowAsset }) {
   );
 }
 
-export function AssetLibrary({ projectId }: { projectId: string }) {
+export function AssetLibrary({
+  projectId,
+  open,
+  onOpenChange,
+}: {
+  projectId: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const utils = api.useUtils();
   const lastExecutionFinishedAt = useWorkflowStudioStore(
     (state) => state.lastExecutionFinishedAt,
@@ -130,15 +147,34 @@ export function AssetLibrary({ projectId }: { projectId: string }) {
   }, [lastExecutionFinishedAt, projectId, utils]);
 
   return (
-    <aside className="pointer-events-none absolute top-4 bottom-4 left-20 z-20 w-80 max-w-[calc(100vw-7rem)]">
-      <Card className="pointer-events-auto flex h-full flex-col rounded-[28px] border-border/60 bg-background/88 py-0 shadow-2xl backdrop-blur-xl">
-        <CardHeader className="gap-1 border-border/60 border-b py-4">
-          <CardTitle>Assets</CardTitle>
-          <div className="text-muted-foreground text-sm">
-            Drag uploaded or generated media into the canvas.
+    <Drawer
+      direction="left"
+      modal={false}
+      onOpenChange={onOpenChange}
+      open={open}
+    >
+      <DrawerContent className="h-screen rounded-none border-border/60 border-r bg-background/95 p-0 before:hidden data-[vaul-drawer-direction=left]:w-full data-[vaul-drawer-direction=left]:max-w-[380px]">
+        <DrawerHeader className="border-border/60 border-b px-5 py-4 text-left">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <DrawerTitle>Assets</DrawerTitle>
+              <DrawerDescription>
+                Drag uploaded or generated media into the canvas.
+              </DrawerDescription>
+            </div>
+            <DrawerClose asChild>
+              <ShellButton
+                aria-label="Close assets drawer"
+                className="size-8 p-0"
+                size="icon"
+                title="Close"
+              >
+                <RiCloseLine className="size-4" />
+              </ShellButton>
+            </DrawerClose>
           </div>
-        </CardHeader>
-        <CardContent className="flex-1 overflow-y-auto py-4">
+        </DrawerHeader>
+        <div className="nodrag nopan nowheel flex-1 overflow-y-auto px-5 py-4">
           {assetsQuery.error ? (
             <Card className="border-dashed py-0">
               <CardContent className="py-4 text-destructive text-sm">
@@ -165,8 +201,8 @@ export function AssetLibrary({ projectId }: { projectId: string }) {
               />
             </div>
           )}
-        </CardContent>
-      </Card>
-    </aside>
+        </div>
+      </DrawerContent>
+    </Drawer>
   );
 }

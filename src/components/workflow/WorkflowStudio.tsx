@@ -29,9 +29,9 @@ import { Card, CardContent } from "~/components/ui/card";
 import {
   createWorkflowNode,
   specializeWorkflowNodeForValueType,
-  snapWorkflowPositionToGrid,
   WORKFLOW_GRID_STEP,
   type WorkflowDocument,
+  type WorkflowPosition,
 } from "~/lib/workflow/document";
 import {
   findFirstWorkflowHandleIdByValueType,
@@ -94,6 +94,11 @@ type ConnectionAutocompleteState = {
   options: ConnectionAutocompleteOption[];
   startHandle: WorkflowHandleReference;
   valueType: WorkflowValueType;
+};
+
+type PendingAssetDropCenter = {
+  center: WorkflowPosition;
+  nodeId: string;
 };
 
 function getEventClientPosition(event: MouseEvent | TouchEvent) {
@@ -346,7 +351,59 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
   const addAssetNodeAt = useWorkflowStudioStore(
     (state) => state.addAssetNodeAt,
   );
+  const setNodePosition = useWorkflowStudioStore(
+    (state) => state.setNodePosition,
+  );
+  const nodeDimensionsById = useWorkflowStudioStore(
+    (state) => state.editor.nodeDimensionsById,
+  );
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [pendingAssetDropCenters, setPendingAssetDropCenters] = useState<
+    PendingAssetDropCenter[]
+  >([]);
+
+  useEffect(() => {
+    if (!pendingAssetDropCenters.length) {
+      return;
+    }
+
+    const canvasNodeIds = new Set(nodes.map((node) => node.id));
+    const readyNodeIds = new Set(
+      pendingAssetDropCenters.flatMap(({ nodeId }) =>
+        !canvasNodeIds.has(nodeId) || nodeDimensionsById[nodeId]
+          ? [nodeId]
+          : [],
+      ),
+    );
+
+    if (!readyNodeIds.size) {
+      return;
+    }
+
+    setPendingAssetDropCenters((currentDrops) =>
+      currentDrops.filter(({ nodeId }) => !readyNodeIds.has(nodeId)),
+    );
+
+    for (const { center, nodeId } of pendingAssetDropCenters) {
+      if (!readyNodeIds.has(nodeId)) {
+        continue;
+      }
+
+      const dimensions = nodeDimensionsById[nodeId];
+      if (!dimensions) {
+        continue;
+      }
+
+      setNodePosition(
+        nodeId,
+        {
+          x: center.x - dimensions.width / 2,
+          y: center.y - dimensions.height / 2,
+        },
+        { recordHistory: false },
+      );
+    }
+  }, [nodeDimensionsById, nodes, pendingAssetDropCenters, setNodePosition]);
 
   useEffect(() => {
     const element = canvasRef.current;
@@ -364,14 +421,20 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
           return;
         }
 
-        const position = snapWorkflowPositionToGrid(
-          flow.screenToFlowPosition({
-            x: location.current.input.clientX,
-            y: location.current.input.clientY,
-          }),
-        );
+        const center = flow.screenToFlowPosition({
+          x: location.current.input.clientX,
+          y: location.current.input.clientY,
+        });
+        const nodeId = addAssetNodeAt(center, [payload.asset]);
 
-        addAssetNodeAt(position, [payload.asset]);
+        if (!nodeId) {
+          return;
+        }
+
+        setPendingAssetDropCenters((currentDrops) => [
+          ...currentDrops,
+          { center, nodeId },
+        ]);
       },
     });
   }, [addAssetNodeAt, flowRef]);
@@ -515,6 +578,7 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
   useWorkflowStudioPersistence(project);
 
   const flowRef = useRef<ReactFlowInstance | null>(null);
+  const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
   const addNode = useWorkflowStudioStore((state) => state.addNode);
   const addConnectedNode = useWorkflowStudioStore(
     (state) => state.addConnectedNode,
@@ -592,8 +656,18 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
     <StudioContext.Provider value={contextValue}>
       <div className="relative h-screen p-2">
         <WorkflowCreditsBadge />
-        <WorkflowSidebar onAddNode={addNodeToCanvas} />
-        <AssetLibrary projectId={project.id} />
+        <WorkflowSidebar
+          isAssetLibraryOpen={isAssetLibraryOpen}
+          onAddNode={addNodeToCanvas}
+          onToggleAssetLibrary={() =>
+            setIsAssetLibraryOpen((currentOpen) => !currentOpen)
+          }
+        />
+        <AssetLibrary
+          onOpenChange={setIsAssetLibraryOpen}
+          open={isAssetLibraryOpen}
+          projectId={project.id}
+        />
         <WorkflowNodeConfigDrawer />
         <WorkflowCanvas
           flowRef={flowRef}

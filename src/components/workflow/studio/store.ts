@@ -157,6 +157,47 @@ function syncSelectedNodeIdsFromCanvas(
   state.editor.selectedNodeIds = nextSelectedNodeIds;
 }
 
+function getNodeDimensionsFromCanvas(nodes: WorkflowCanvasNode[]) {
+  return Object.fromEntries(
+    nodes.flatMap((node) =>
+      typeof node.width === "number" && typeof node.height === "number"
+        ? [[node.id, { width: node.width, height: node.height }] as const]
+        : [],
+    ),
+  );
+}
+
+function syncNodeDimensionsFromCanvas(
+  state: WorkflowStudioState,
+  nodes: WorkflowCanvasNode[],
+) {
+  const nextNodeDimensionsById = getNodeDimensionsFromCanvas(nodes);
+  const currentNodeDimensionsById = state.editor.nodeDimensionsById;
+  const nextNodeIds = Object.keys(nextNodeDimensionsById);
+  const currentNodeIds = Object.keys(currentNodeDimensionsById);
+
+  if (
+    nextNodeIds.length === currentNodeIds.length &&
+    nextNodeIds.every((nodeId) => {
+      const currentDimensions = currentNodeDimensionsById[nodeId];
+      const nextDimensions = nextNodeDimensionsById[nodeId];
+
+      if (!nextDimensions) {
+        return false;
+      }
+
+      return (
+        currentDimensions?.width === nextDimensions.width &&
+        currentDimensions?.height === nextDimensions.height
+      );
+    })
+  ) {
+    return;
+  }
+
+  state.editor.nodeDimensionsById = nextNodeDimensionsById;
+}
+
 function syncDocumentNodePositionsFromCanvas(
   document: WorkflowDocument,
   nodes: WorkflowCanvasNode[],
@@ -417,6 +458,13 @@ type WorkflowStudioState = {
     key: string,
     value: GeneratorConfigValue,
   ) => void;
+  setNodePosition: (
+    nodeId: string,
+    position: WorkflowPosition,
+    options?: {
+      recordHistory?: boolean;
+    },
+  ) => void;
   clearNodeAssets: (nodeId: string) => void;
   applyNodeChanges: (changes: NodeChange[]) => void;
   applyEdgeChanges: (changes: EdgeChange[]) => void;
@@ -429,7 +477,10 @@ type WorkflowStudioState = {
     startHandle: WorkflowHandleReference;
     valueType: WorkflowValueType;
   }) => void;
-  addAssetNodeAt: (position: WorkflowPosition, assets: WorkflowAsset[]) => void;
+  addAssetNodeAt: (
+    position: WorkflowPosition,
+    assets: WorkflowAsset[],
+  ) => string | null;
   clearSelection: () => void;
   deleteSelection: () => void;
   undo: () => void;
@@ -672,6 +723,51 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       );
     },
 
+    setNodePosition: (nodeId, position, options) => {
+      set((state) => {
+        if (
+          getLockedExecutionNodeIds(state.document, state.lockedNodeIds).has(
+            nodeId,
+          )
+        ) {
+          state.runtime.activity = LOCKED_WORKFLOW_ACTIVITY;
+          return;
+        }
+
+        const currentSnapshot = snapshotFromState(state);
+        const currentNode = currentSnapshot.document.nodes.find(
+          (candidate) => candidate.id === nodeId,
+        );
+
+        if (
+          !currentNode ||
+          (currentNode.position.x === position.x &&
+            currentNode.position.y === position.y)
+        ) {
+          return;
+        }
+
+        runSnapshotMutation(
+          state,
+          () =>
+            WorkflowEngine.syncState({
+              ...currentSnapshot,
+              document: updateWorkflowDocumentNode(
+                currentSnapshot.document,
+                nodeId,
+                (node) => ({
+                  ...node,
+                  position,
+                }),
+              ),
+            }),
+          {
+            recordHistory: options?.recordHistory,
+          },
+        );
+      });
+    },
+
     clearNodeAssets: (nodeId) => {
       set((state) => {
         const currentSnapshot = snapshotFromState(state);
@@ -695,10 +791,18 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
 
     applyNodeChanges: (changes) => {
       set((state) => {
+        const nextNodes = applyReactFlowNodeChanges(
+          changes,
+          state.nodes,
+        ) as WorkflowCanvasNode[];
         const relevantChanges = changes.filter(
           (change) => change.type !== "dimensions",
         );
+
         if (!relevantChanges.length) {
+          state.nodes = nextNodes;
+          syncSelectedNodeIdsFromCanvas(state, nextNodes);
+          syncNodeDimensionsFromCanvas(state, nextNodes);
           return;
         }
 
@@ -719,6 +823,9 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           state.runtime.activity = LOCKED_WORKFLOW_ACTIVITY;
           return;
         }
+
+        state.nodes = nextNodes;
+        syncNodeDimensionsFromCanvas(state, nextNodes);
 
         const hasDraggingPositionChange = relevantChanges.some(
           (change) => change.type === "position" && change.dragging === true,
@@ -748,24 +855,27 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           !hasDragStopPositionChange &&
           hasSelectionAndPositionOnlyChanges
         ) {
-          const nextNodes = applyReactFlowNodeChanges(
-            relevantChanges,
-            state.nodes,
-          ) as WorkflowCanvasNode[];
-          state.nodes = nextNodes;
           syncSelectedNodeIdsFromCanvas(state, nextNodes);
           return;
         }
 
+        const snapshotWithMeasurements = {
+          ...currentSnapshot,
+          editor: {
+            ...currentSnapshot.editor,
+            nodeDimensionsById: state.editor.nodeDimensionsById,
+          },
+        } satisfies WorkflowStudioSnapshot;
+
         const snapshotForNodeChanges = hasDragStopPositionChange
           ? {
-              ...currentSnapshot,
+              ...snapshotWithMeasurements,
               document: syncDocumentNodePositionsFromCanvas(
-                currentSnapshot.document,
-                state.nodes,
+                snapshotWithMeasurements.document,
+                nextNodes,
               ),
             }
-          : currentSnapshot;
+          : snapshotWithMeasurements;
 
         runSnapshotMutation(
           state,
@@ -897,12 +1007,25 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     },
 
     addAssetNodeAt: (position, assets) => {
+      let addedNodeId: string | null = null;
+
       set((state) => {
         const currentSnapshot = snapshotFromState(state);
+        const previousNodeIds = new Set(
+          currentSnapshot.document.nodes.map((node) => node.id),
+        );
+
         runSnapshotMutation(state, () =>
           WorkflowEngine.addAssetNodeAt(currentSnapshot, position, assets),
         );
+
+        const addedNode = state.document.nodes.find(
+          (node) => !previousNodeIds.has(node.id),
+        );
+        addedNodeId = addedNode?.kind === "asset" ? addedNode.id : null;
       });
+
+      return addedNodeId;
     },
 
     clearSelection: () => {

@@ -2,6 +2,7 @@
 
 import { RiImageAiLine, RiImageLine, RiVideoAiLine } from "@remixicon/react";
 import { Card, CardContent } from "~/components/ui/card";
+import { cn } from "~/lib/utils";
 import type { WorkflowNodeKind } from "~/lib/workflow/types";
 import { ShellButton } from "./shared";
 
@@ -45,6 +46,34 @@ const TextIcon = () => (
   </svg>
 );
 
+const AssetsDrawerIcon = () => (
+  <svg
+    width="20"
+    height="20"
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <title>Assets</title>
+    <path
+      d="M7 8.25H16.75C17.9926 8.25 19 9.25736 19 10.5V16.25"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    ></path>
+    <rect
+      x="5"
+      y="5"
+      width="11.75"
+      height="11.75"
+      rx="2.25"
+      stroke="currentColor"
+      strokeWidth="2"
+    ></rect>
+  </svg>
+);
+
 const NODE_ACTIONS: Array<{
   kind: WorkflowNodeKind;
   label: string;
@@ -62,11 +91,15 @@ const NODE_ACTIONS: Array<{
 
 export function WorkflowSidebar({
   onAddNode,
+  onToggleAssetLibrary,
+  isAssetLibraryOpen,
 }: {
   onAddNode: (kind: WorkflowNodeKind) => void;
+  onToggleAssetLibrary: () => void;
+  isAssetLibraryOpen: boolean;
 }) {
   return (
-    <aside className="pointer-events-none absolute top-4 left-4 z-20">
+    <aside className="pointer-events-none absolute top-4 left-4 z-[60]">
       <Card className="pointer-events-auto rounded-[32px] border-border/60 bg-background/88 py-2 shadow-2xl backdrop-blur-xl">
         <CardContent className="flex flex-col items-center gap-2 px-2 py-0">
           {NODE_ACTIONS.map(({ kind, label, icon: Icon }) => (
@@ -81,6 +114,22 @@ export function WorkflowSidebar({
               <Icon className="size-4" />
             </ShellButton>
           ))}
+          <div className="h-px w-8 bg-border/60" />
+          <ShellButton
+            aria-label={
+              isAssetLibraryOpen ? "Close assets drawer" : "Open assets drawer"
+            }
+            aria-pressed={isAssetLibraryOpen}
+            className={cn(
+              "size-11 rounded-full border-border/60 bg-background/70 p-0",
+              isAssetLibraryOpen && "bg-primary/10 text-primary",
+            )}
+            onClick={onToggleAssetLibrary}
+            size="icon"
+            title={isAssetLibraryOpen ? "Close assets" : "Open assets"}
+          >
+            <AssetsDrawerIcon />
+          </ShellButton>
         </CardContent>
       </Card>
     </aside>
