@@ -41,6 +41,11 @@ export type WorkflowStudioSnapshot = {
   runtime: WorkflowRuntimeState;
 };
 
+type WorkflowCanvas = {
+  nodes: WorkflowCanvasNode[];
+  edges: WorkflowCanvasEdge[];
+};
+
 const DEFAULT_EDGE_STYLE = {
   stroke: "rgba(226, 232, 240, 0.55)",
   strokeWidth: 2,
@@ -144,7 +149,7 @@ function toWorkflowNodeData(
 
 function buildWorkflowCanvasNode(
   node: WorkflowDocumentNode,
-  editor: WorkflowEditorState,
+  selectedNodeIds: Set<string>,
   runtime: WorkflowRuntimeState,
 ): WorkflowCanvasNode {
   return {
@@ -152,14 +157,14 @@ function buildWorkflowCanvasNode(
     type: node.kind,
     position: node.position,
     data: toWorkflowNodeData(node, runtime.nodeStateById[node.id]),
-    selected: editor.selectedNodeIds.includes(node.id),
+    selected: selectedNodeIds.has(node.id),
     style: { width: 320 },
   };
 }
 
 function buildWorkflowCanvasEdge(
   edge: WorkflowDocumentEdge,
-  editor: WorkflowEditorState,
+  selectedEdgeIds: Set<string>,
 ): WorkflowCanvasEdge {
   return {
     id: edge.id,
@@ -167,20 +172,134 @@ function buildWorkflowCanvasEdge(
     sourceHandle: edge.sourceHandle,
     target: edge.target,
     targetHandle: edge.targetHandle,
-    selected: editor.selectedEdgeIds.includes(edge.id),
+    selected: selectedEdgeIds.has(edge.id),
     type: "smoothstep",
     animated: false,
     style: DEFAULT_EDGE_STYLE,
   };
 }
 
-export function buildWorkflowCanvas(snapshot: WorkflowStudioSnapshot) {
+function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
+  if (
+    left.kind !== right.kind ||
+    left.label !== right.label ||
+    left.status !== right.status ||
+    left.error !== right.error
+  ) {
+    return false;
+  }
+
+  if (left.kind === "prompt") {
+    return right.kind === "prompt" && left.prompt === right.prompt;
+  }
+
+  if (left.kind === "asset") {
+    return (
+      right.kind === "asset" &&
+      left.assetKind === right.assetKind &&
+      left.assets === right.assets
+    );
+  }
+
+  if (left.kind === "imageGenerator") {
+    return (
+      right.kind === "imageGenerator" &&
+      left.model === right.model &&
+      left.mode === right.mode &&
+      left.config === right.config &&
+      left.lastPrompt === right.lastPrompt &&
+      left.responseText === right.responseText &&
+      left.outputAssets === right.outputAssets
+    );
+  }
+
+  return (
+    right.kind === "videoGenerator" &&
+    left.model === right.model &&
+    left.mode === right.mode &&
+    left.config === right.config &&
+    left.lastPrompt === right.lastPrompt &&
+    left.responseText === right.responseText &&
+    left.outputAssets === right.outputAssets
+  );
+}
+
+function canReuseNode(
+  previousNode: WorkflowCanvasNode,
+  nextNode: WorkflowCanvasNode,
+) {
+  return (
+    previousNode.type === nextNode.type &&
+    previousNode.selected === nextNode.selected &&
+    previousNode.position.x === nextNode.position.x &&
+    previousNode.position.y === nextNode.position.y &&
+    isSameNodeData(previousNode.data, nextNode.data)
+  );
+}
+
+function canReuseEdge(
+  previousEdge: WorkflowCanvasEdge,
+  nextEdge: WorkflowCanvasEdge,
+) {
+  return (
+    previousEdge.selected === nextEdge.selected &&
+    previousEdge.source === nextEdge.source &&
+    previousEdge.sourceHandle === nextEdge.sourceHandle &&
+    previousEdge.target === nextEdge.target &&
+    previousEdge.targetHandle === nextEdge.targetHandle
+  );
+}
+
+export function buildWorkflowCanvas(
+  snapshot: WorkflowStudioSnapshot,
+  previousCanvas?: WorkflowCanvas,
+) {
+  const selectedNodeIds = new Set(snapshot.editor.selectedNodeIds);
+  const selectedEdgeIds = new Set(snapshot.editor.selectedEdgeIds);
+  const previousNodeById = previousCanvas
+    ? new Map(previousCanvas.nodes.map((node) => [node.id, node]))
+    : null;
+  const previousEdgeById = previousCanvas
+    ? new Map(previousCanvas.edges.map((edge) => [edge.id, edge]))
+    : null;
+
+  const nextNodes = snapshot.document.nodes.map((node) => {
+    const nextNode = buildWorkflowCanvasNode(
+      node,
+      selectedNodeIds,
+      snapshot.runtime,
+    );
+    const previousNode = previousNodeById?.get(node.id);
+
+    return previousNode && canReuseNode(previousNode, nextNode)
+      ? previousNode
+      : nextNode;
+  });
+
+  const nextEdges = snapshot.document.edges.map((edge) => {
+    const nextEdge = buildWorkflowCanvasEdge(edge, selectedEdgeIds);
+    const previousEdge = previousEdgeById?.get(edge.id);
+
+    return previousEdge && canReuseEdge(previousEdge, nextEdge)
+      ? previousEdge
+      : nextEdge;
+  });
+
+  const nodes =
+    previousCanvas &&
+    previousCanvas.nodes.length === nextNodes.length &&
+    nextNodes.every((node, index) => node === previousCanvas.nodes[index])
+      ? previousCanvas.nodes
+      : nextNodes;
+  const edges =
+    previousCanvas &&
+    previousCanvas.edges.length === nextEdges.length &&
+    nextEdges.every((edge, index) => edge === previousCanvas.edges[index])
+      ? previousCanvas.edges
+      : nextEdges;
+
   return {
-    nodes: snapshot.document.nodes.map((node) =>
-      buildWorkflowCanvasNode(node, snapshot.editor, snapshot.runtime),
-    ),
-    edges: snapshot.document.edges.map((edge) =>
-      buildWorkflowCanvasEdge(edge, snapshot.editor),
-    ),
+    nodes,
+    edges,
   };
 }

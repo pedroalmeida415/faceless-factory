@@ -5,7 +5,7 @@ import {
   RiArrowGoForwardLine,
   RiFullscreenFill,
 } from "@remixicon/react";
-import { useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
 import {
   Background,
   ConnectionLineType,
@@ -19,6 +19,7 @@ import type { WorkflowProject } from "~/lib/workflow/project";
 import { WorkflowCreditsBadge } from "./studio/CreditsBadge";
 import { StudioContext } from "./studio/context";
 import { isEditableTarget } from "./studio/graph";
+import { WorkflowNodeConfigDrawer } from "./studio/NodeConfigDrawer";
 import { nodeTypes } from "./studio/nodes";
 import { WorkflowSidebar } from "./studio/Sidebar";
 import { ShellButton } from "./studio/shared";
@@ -27,6 +28,20 @@ import {
   useWorkflowStudioStore,
 } from "./studio/store";
 import { useWorkflowStudioController } from "./studio/useWorkflowStudioController";
+
+const WORKFLOW_DEFAULT_EDGE_OPTIONS = {
+  type: "smoothstep",
+  style: {
+    stroke: "rgba(226, 232, 240, 0.55)",
+    strokeWidth: 2,
+  },
+} as const;
+
+const WORKFLOW_PRO_OPTIONS = { hideAttribution: true } as const;
+const WORKFLOW_SNAP_GRID: [number, number] = [
+  WORKFLOW_GRID_STEP,
+  WORKFLOW_GRID_STEP,
+];
 
 function WorkflowCanvasControls({
   onRedo,
@@ -100,13 +115,13 @@ function WorkflowCanvasControls({
   );
 }
 
-export function WorkflowStudio({ project }: { project: WorkflowProject }) {
-  useWorkflowStudioPersistence(project);
-
-  const flowRef = useRef<ReactFlowInstance | null>(null);
+const WorkflowCanvas = memo(function WorkflowCanvas({
+  flowRef,
+}: {
+  flowRef: { current: ReactFlowInstance | null };
+}) {
   const nodes = useWorkflowStudioStore((state) => state.nodes);
   const edges = useWorkflowStudioStore((state) => state.edges);
-  const addNode = useWorkflowStudioStore((state) => state.addNode);
   const connect = useWorkflowStudioStore((state) => state.connect);
   const canConnect = useWorkflowStudioStore((state) => state.canConnect);
   const applyNodeChanges = useWorkflowStudioStore(
@@ -115,13 +130,60 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
   const applyEdgeChanges = useWorkflowStudioStore(
     (state) => state.applyEdgeChanges,
   );
-  const deleteSelection = useWorkflowStudioStore(
-    (state) => state.deleteSelection,
-  );
   const undo = useWorkflowStudioStore((state) => state.undo);
   const redo = useWorkflowStudioStore((state) => state.redo);
   const canUndo = useWorkflowStudioStore((state) => state.canUndo);
   const canRedo = useWorkflowStudioStore((state) => state.canRedo);
+
+  const handleFlowInit = useCallback(
+    (instance: ReactFlowInstance) => {
+      flowRef.current = instance;
+      requestAnimationFrame(() => instance.fitView({ padding: 0.18 }));
+    },
+    [flowRef],
+  );
+
+  return (
+    <Card className="h-full min-w-0 overflow-hidden rounded-[28px] border-border/60 py-0 md:min-h-[calc(100vh-2.5rem)]">
+      <CardContent className="h-full p-0">
+        <ReactFlow
+          connectionLineType={ConnectionLineType.SmoothStep}
+          defaultEdgeOptions={WORKFLOW_DEFAULT_EDGE_OPTIONS}
+          deleteKeyCode={null}
+          edges={edges}
+          fitView
+          isValidConnection={canConnect}
+          nodes={nodes}
+          nodeTypes={nodeTypes}
+          onConnect={connect}
+          onEdgesChange={applyEdgeChanges}
+          onInit={handleFlowInit}
+          onNodesChange={applyNodeChanges}
+          proOptions={WORKFLOW_PRO_OPTIONS}
+          snapGrid={WORKFLOW_SNAP_GRID}
+          snapToGrid
+        >
+          <Background
+            color="rgba(148, 163, 184, 0.16)"
+            gap={WORKFLOW_GRID_STEP}
+          />
+          <WorkflowCanvasControls
+            canRedo={canRedo}
+            canUndo={canUndo}
+            onRedo={redo}
+            onUndo={undo}
+          />
+        </ReactFlow>
+      </CardContent>
+    </Card>
+  );
+});
+
+export function WorkflowStudio({ project }: { project: WorkflowProject }) {
+  useWorkflowStudioPersistence(project);
+
+  const flowRef = useRef<ReactFlowInstance | null>(null);
+  const addNode = useWorkflowStudioStore((state) => state.addNode);
   const { contextValue } = useWorkflowStudioController();
 
   useEffect(() => {
@@ -130,18 +192,24 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
         return;
       }
 
+      const {
+        deleteSelection: deleteCurrentSelection,
+        redo: redoChange,
+        undo: undoChange,
+      } = useWorkflowStudioStore.getState();
+
       const key = event.key.toLowerCase();
       const modifierPressed = event.metaKey || event.ctrlKey;
 
       if (modifierPressed && !event.shiftKey && key === "z") {
         event.preventDefault();
-        undo();
+        undoChange();
         return;
       }
 
       if (modifierPressed && ((event.shiftKey && key === "z") || key === "y")) {
         event.preventDefault();
-        redo();
+        redoChange();
         return;
       }
 
@@ -150,12 +218,12 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
       }
 
       event.preventDefault();
-      deleteSelection();
+      deleteCurrentSelection();
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [deleteSelection, redo, undo]);
+  }, []);
 
   const addNodeToCanvas = useCallback(
     (kind: Parameters<typeof addNode>[0]) => {
@@ -170,50 +238,8 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
       <div className="relative h-screen p-2">
         <WorkflowCreditsBadge />
         <WorkflowSidebar onAddNode={addNodeToCanvas} />
-
-        <Card className="h-full min-w-0 overflow-hidden rounded-[28px] border-border/60 py-0 md:min-h-[calc(100vh-2.5rem)]">
-          <CardContent className="h-full p-0">
-            <ReactFlow
-              connectionLineType={ConnectionLineType.SmoothStep}
-              defaultEdgeOptions={{
-                type: "smoothstep",
-                style: {
-                  stroke: "rgba(226, 232, 240, 0.55)",
-                  strokeWidth: 2,
-                },
-              }}
-              deleteKeyCode={null}
-              edges={edges}
-              fitView
-              isValidConnection={canConnect}
-              nodes={nodes}
-              nodeTypes={nodeTypes}
-              onConnect={connect}
-              onEdgesChange={applyEdgeChanges}
-              onInit={(instance) => {
-                flowRef.current = instance;
-                requestAnimationFrame(() =>
-                  instance.fitView({ padding: 0.18 }),
-                );
-              }}
-              onNodesChange={applyNodeChanges}
-              proOptions={{ hideAttribution: true }}
-              snapGrid={[WORKFLOW_GRID_STEP, WORKFLOW_GRID_STEP]}
-              snapToGrid
-            >
-              <Background
-                color="rgba(148, 163, 184, 0.16)"
-                gap={WORKFLOW_GRID_STEP}
-              />
-              <WorkflowCanvasControls
-                canRedo={canRedo}
-                canUndo={canUndo}
-                onRedo={redo}
-                onUndo={undo}
-              />
-            </ReactFlow>
-          </CardContent>
-        </Card>
+        <WorkflowNodeConfigDrawer />
+        <WorkflowCanvas flowRef={flowRef} />
       </div>
     </StudioContext.Provider>
   );

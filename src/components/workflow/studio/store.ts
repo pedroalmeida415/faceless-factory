@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { Connection, EdgeChange, NodeChange } from "reactflow";
+import {
+  applyNodeChanges as applyReactFlowNodeChanges,
+  type Connection,
+  type EdgeChange,
+  type NodeChange,
+} from "reactflow";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 
@@ -61,11 +66,17 @@ function applySnapshotToState(
   state: WorkflowStudioState,
   snapshot: WorkflowStudioSnapshot,
 ) {
+  const previousNodes = state.nodes;
+  const previousEdges = state.edges;
+
   state.document = snapshot.document;
   state.editor = snapshot.editor;
   state.runtime = snapshot.runtime;
 
-  const canvas = buildWorkflowCanvas(snapshot);
+  const canvas = buildWorkflowCanvas(snapshot, {
+    edges: previousEdges,
+    nodes: previousNodes,
+  });
   state.nodes = canvas.nodes;
   state.edges = canvas.edges;
 }
@@ -104,17 +115,10 @@ function createHistoryEntry(
   snapshot: WorkflowStudioSnapshot,
 ): WorkflowHistoryEntry {
   return {
-    document: cloneWorkflowDocument(snapshot.document),
+    document: snapshot.document,
     selectedEdgeIds: [...snapshot.editor.selectedEdgeIds],
     selectedNodeIds: [...snapshot.editor.selectedNodeIds],
   };
-}
-
-function isSameWorkflowDocument(
-  left: WorkflowDocument,
-  right: WorkflowDocument,
-) {
-  return serializeWorkflowDocument(left) === serializeWorkflowDocument(right);
 }
 
 function syncHistoryFlags(state: WorkflowStudioState) {
@@ -126,6 +130,62 @@ function resetHistory(state: WorkflowStudioState) {
   state.history = createHistoryState();
   state.pendingNodeDragHistoryEntry = null;
   syncHistoryFlags(state);
+}
+
+function syncSelectedNodeIdsFromCanvas(
+  state: WorkflowStudioState,
+  nodes: WorkflowCanvasNode[],
+) {
+  const nextSelectedNodeIds = nodes
+    .filter((node) => Boolean(node.selected))
+    .map((node) => node.id);
+  const currentSelectedNodeIds = state.editor.selectedNodeIds;
+
+  if (
+    nextSelectedNodeIds.length === currentSelectedNodeIds.length &&
+    nextSelectedNodeIds.every(
+      (nodeId, index) => currentSelectedNodeIds[index] === nodeId,
+    )
+  ) {
+    return;
+  }
+
+  state.editor.selectedNodeIds = nextSelectedNodeIds;
+}
+
+function syncDocumentNodePositionsFromCanvas(
+  document: WorkflowDocument,
+  nodes: WorkflowCanvasNode[],
+): WorkflowDocument {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  let didUpdatePosition = false;
+
+  const syncedNodes = document.nodes.map((node) => {
+    const canvasNode = nodeById.get(node.id);
+    if (
+      !canvasNode ||
+      (node.position.x === canvasNode.position.x &&
+        node.position.y === canvasNode.position.y)
+    ) {
+      return node;
+    }
+
+    didUpdatePosition = true;
+    return {
+      ...node,
+      position: {
+        x: canvasNode.position.x,
+        y: canvasNode.position.y,
+      },
+    };
+  });
+
+  return didUpdatePosition
+    ? {
+        ...document,
+        nodes: syncedNodes,
+      }
+    : document;
 }
 
 function pushHistoryEntry(
@@ -173,15 +233,19 @@ function commitSnapshot(
   } = {},
 ) {
   const previousSnapshot = snapshotFromState(state);
-  const historyEntry =
-    options.historyEntry ?? createHistoryEntry(previousSnapshot);
-  const documentChanged = !isSameWorkflowDocument(
-    historyEntry.document,
-    nextSnapshot.document,
-  );
+  const shouldRecordHistory = options.recordHistory !== false;
 
-  if (options.recordHistory !== false && documentChanged) {
-    pushHistoryEntry(state, historyEntry);
+  if (shouldRecordHistory) {
+    const documentChanged =
+      (options.historyEntry?.document ?? previousSnapshot.document) !==
+      nextSnapshot.document;
+
+    if (documentChanged) {
+      pushHistoryEntry(
+        state,
+        options.historyEntry ?? createHistoryEntry(previousSnapshot),
+      );
+    }
   }
 
   applySnapshotToState(state, nextSnapshot);
@@ -355,6 +419,7 @@ type WorkflowStudioState = {
   connect: (connection: Connection) => void;
   canConnect: (connection: Connection) => boolean;
   addNode: (kind: WorkflowNodeKind) => void;
+  clearSelection: () => void;
   deleteSelection: () => void;
   undo: () => void;
   redo: () => void;
@@ -650,6 +715,12 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
         const hasDragStopPositionChange = relevantChanges.some(
           (change) => change.type === "position" && change.dragging === false,
         );
+        const hasNonSelectionChange = relevantChanges.some(
+          (change) => change.type !== "select",
+        );
+        const hasSelectionAndPositionOnlyChanges = relevantChanges.every(
+          (change) => change.type === "position" || change.type === "select",
+        );
 
         // React Flow emits every movement while dragging; keep the pre-drag
         // snapshot so undo collapses the whole drag into one step.
@@ -658,10 +729,40 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
             createHistoryEntry(currentSnapshot);
         }
 
+        // Keep drag movement transient in canvas state and only commit once on
+        // drag stop so document subscribers (drawer, persistence) don't churn
+        // every frame.
+        if (
+          hasDraggingPositionChange &&
+          !hasDragStopPositionChange &&
+          hasSelectionAndPositionOnlyChanges
+        ) {
+          const nextNodes = applyReactFlowNodeChanges(
+            relevantChanges,
+            state.nodes,
+          ) as WorkflowCanvasNode[];
+          state.nodes = nextNodes;
+          syncSelectedNodeIdsFromCanvas(state, nextNodes);
+          return;
+        }
+
+        const snapshotForNodeChanges = hasDragStopPositionChange
+          ? {
+              ...currentSnapshot,
+              document: syncDocumentNodePositionsFromCanvas(
+                currentSnapshot.document,
+                state.nodes,
+              ),
+            }
+          : currentSnapshot;
+
         runSnapshotMutation(
           state,
           () =>
-            WorkflowEngine.applyNodeChanges(currentSnapshot, relevantChanges),
+            WorkflowEngine.applyNodeChanges(
+              snapshotForNodeChanges,
+              relevantChanges,
+            ),
           hasDraggingPositionChange || hasDragStopPositionChange
             ? {
                 historyEntry: hasDragStopPositionChange
@@ -673,7 +774,11 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
                     ? false
                     : undefined,
               }
-            : undefined,
+            : hasNonSelectionChange
+              ? undefined
+              : {
+                  recordHistory: false,
+                },
         );
 
         if (hasDragStopPositionChange) {
@@ -685,6 +790,9 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     applyEdgeChanges: (changes) => {
       set((state) => {
         const currentSnapshot = snapshotFromState(state);
+        const hasNonSelectionChange = changes.some(
+          (change) => change.type !== "select",
+        );
         const lockedExecutionNodeIds = getLockedExecutionNodeIds(
           currentSnapshot.document,
           state.lockedNodeIds,
@@ -711,8 +819,14 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           return;
         }
 
-        runSnapshotMutation(state, () =>
-          WorkflowEngine.applyEdgeChanges(currentSnapshot, changes),
+        runSnapshotMutation(
+          state,
+          () => WorkflowEngine.applyEdgeChanges(currentSnapshot, changes),
+          hasNonSelectionChange
+            ? undefined
+            : {
+                recordHistory: false,
+              },
         );
       });
     },
@@ -748,6 +862,35 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
         const currentSnapshot = snapshotFromState(state);
         runSnapshotMutation(state, () =>
           WorkflowEngine.addNode(currentSnapshot, kind),
+        );
+      });
+    },
+
+    clearSelection: () => {
+      set((state) => {
+        if (
+          !state.editor.selectedNodeIds.length &&
+          !state.editor.selectedEdgeIds.length
+        ) {
+          return;
+        }
+
+        state.pendingNodeDragHistoryEntry = null;
+        const currentSnapshot = snapshotFromState(state);
+        runSnapshotMutation(
+          state,
+          () =>
+            WorkflowEngine.syncState({
+              ...currentSnapshot,
+              editor: {
+                ...currentSnapshot.editor,
+                selectedNodeIds: [],
+                selectedEdgeIds: [],
+              },
+            }),
+          {
+            recordHistory: false,
+          },
         );
       });
     },

@@ -158,6 +158,155 @@ function updateDocumentFromCanvasEdges(nextCanvasEdges: WorkflowCanvasEdge[]): {
   };
 }
 
+function hasSelectionAndPositionOnlyChanges(changes: NodeChange[]) {
+  return changes.every(
+    (change) => change.type === "position" || change.type === "select",
+  );
+}
+
+function hasSelectionOnlyEdgeChanges(changes: EdgeChange[]) {
+  return changes.every((change) => change.type === "select");
+}
+
+function applySelectionAndPositionChanges(
+  state: WorkflowEngineState,
+  changes: NodeChange[],
+): WorkflowEngineState {
+  const positionByNodeId = new Map<string, { x: number; y: number }>();
+  const selectionByNodeId = new Map<string, boolean>();
+
+  for (const change of changes) {
+    if (!("id" in change)) {
+      continue;
+    }
+
+    if (change.type === "position") {
+      if (!change.position) {
+        continue;
+      }
+
+      positionByNodeId.set(change.id, change.position);
+      continue;
+    }
+
+    if (change.type === "select") {
+      selectionByNodeId.set(change.id, change.selected);
+    }
+  }
+
+  const hasPositionUpdates = positionByNodeId.size > 0;
+  const hasSelectionUpdates = selectionByNodeId.size > 0;
+  let didUpdateDocument = false;
+
+  const nextDocumentNodes = hasPositionUpdates
+    ? state.document.nodes.map((node) => {
+        const nextPosition = positionByNodeId.get(node.id);
+        if (
+          !nextPosition ||
+          (node.position.x === nextPosition.x &&
+            node.position.y === nextPosition.y)
+        ) {
+          return node;
+        }
+
+        didUpdateDocument = true;
+        return {
+          ...node,
+          position: {
+            x: nextPosition.x,
+            y: nextPosition.y,
+          },
+        };
+      })
+    : state.document.nodes;
+
+  const selectedNodeIds = new Set(state.editor.selectedNodeIds);
+  if (hasSelectionUpdates) {
+    for (const [nodeId, isSelected] of selectionByNodeId) {
+      if (isSelected) {
+        selectedNodeIds.add(nodeId);
+      } else {
+        selectedNodeIds.delete(nodeId);
+      }
+    }
+  }
+
+  const nextSelectedNodeIds = hasSelectionUpdates
+    ? state.document.nodes
+        .filter((node) => selectedNodeIds.has(node.id))
+        .map((node) => node.id)
+    : state.editor.selectedNodeIds;
+
+  const didUpdateSelection =
+    hasSelectionUpdates &&
+    (nextSelectedNodeIds.length !== state.editor.selectedNodeIds.length ||
+      nextSelectedNodeIds.some(
+        (nodeId, index) => state.editor.selectedNodeIds[index] !== nodeId,
+      ));
+
+  if (!didUpdateDocument && !didUpdateSelection) {
+    return state;
+  }
+
+  return {
+    document: didUpdateDocument
+      ? {
+          ...state.document,
+          nodes: nextDocumentNodes,
+        }
+      : state.document,
+    editor: didUpdateSelection
+      ? {
+          ...state.editor,
+          selectedNodeIds: nextSelectedNodeIds,
+        }
+      : state.editor,
+    runtime: state.runtime,
+  } satisfies WorkflowEngineState;
+}
+
+function applyEdgeSelectionChanges(
+  state: WorkflowEngineState,
+  changes: EdgeChange[],
+): WorkflowEngineState {
+  const selectedEdgeIds = new Set(state.editor.selectedEdgeIds);
+
+  for (const change of changes) {
+    if (change.type !== "select") {
+      continue;
+    }
+
+    if (change.selected) {
+      selectedEdgeIds.add(change.id);
+    } else {
+      selectedEdgeIds.delete(change.id);
+    }
+  }
+
+  const nextSelectedEdgeIds = state.document.edges
+    .filter((edge) => selectedEdgeIds.has(edge.id))
+    .map((edge) => edge.id);
+
+  const didUpdateSelection =
+    nextSelectedEdgeIds.length !== state.editor.selectedEdgeIds.length ||
+    nextSelectedEdgeIds.some(
+      (edgeId, index) => state.editor.selectedEdgeIds[index] !== edgeId,
+    );
+
+  if (!didUpdateSelection) {
+    return state;
+  }
+
+  return {
+    document: state.document,
+    editor: {
+      ...state.editor,
+      selectedEdgeIds: nextSelectedEdgeIds,
+    },
+    runtime: state.runtime,
+  } satisfies WorkflowEngineState;
+}
+
 export const WorkflowEngine = {
   createInitialState(
     document = createEmptyWorkflowDocument(),
@@ -237,6 +386,10 @@ export const WorkflowEngine = {
   },
 
   applyNodeChanges(state: WorkflowEngineState, changes: NodeChange[]) {
+    if (hasSelectionAndPositionOnlyChanges(changes)) {
+      return applySelectionAndPositionChanges(state, changes);
+    }
+
     const canvas = buildWorkflowCanvas(state);
     const nextCanvasNodes = applyNodeChanges(
       changes,
@@ -273,6 +426,10 @@ export const WorkflowEngine = {
   },
 
   applyEdgeChanges(state: WorkflowEngineState, changes: EdgeChange[]) {
+    if (hasSelectionOnlyEdgeChanges(changes)) {
+      return applyEdgeSelectionChanges(state, changes);
+    }
+
     const canvas = buildWorkflowCanvas(state);
     const nextCanvasEdges = applyEdgeChanges(
       changes,

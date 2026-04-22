@@ -55,7 +55,7 @@ const NODE_ACTIONS: Array<{
   { kind: "videoGenerator", label: "Video generator", icon: RiVideoAiLine },
   {
     kind: "imageGenerator",
-    label: "Image generator",
+    label: "Image Gen",
     icon: RiImageAiLine,
   },
 ];

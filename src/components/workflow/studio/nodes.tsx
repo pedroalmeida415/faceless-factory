@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 import { type NodeProps, useUpdateNodeInternals } from "reactflow";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardContent } from "~/components/ui/card";
@@ -22,7 +22,6 @@ import {
   type GeneratorControlDefinition,
   getImageGeneratorControlDefinitions,
   getImageGeneratorModelOptions,
-  getImageGeneratorModeOptions,
   getVideoGeneratorControlDefinitions,
   getVideoGeneratorModelOptions,
   getVideoGeneratorModeOptions,
@@ -33,6 +32,7 @@ import type {
   ImageGeneratorNodeData,
   PromptNodeData,
   VideoGeneratorNodeData,
+  WorkflowNodeData,
 } from "~/lib/workflow/types";
 import { useStudioContext } from "./context";
 import {
@@ -63,6 +63,17 @@ function formatCredits(value: number) {
   return `${value} credit${value === 1 ? "" : "s"}`;
 }
 
+function isSameNodeRender<T extends WorkflowNodeData>(
+  previousProps: NodeProps<T>,
+  nextProps: NodeProps<T>,
+) {
+  return (
+    previousProps.id === nextProps.id &&
+    previousProps.selected === nextProps.selected &&
+    previousProps.data === nextProps.data
+  );
+}
+
 function GeneratorRunCostBadge({ nodeId }: { nodeId: string }) {
   const { getGeneratorRunCost } = useStudioContext();
   const priceQuote = getGeneratorRunCost(nodeId);
@@ -86,7 +97,11 @@ function GeneratorRunCostBadge({ nodeId }: { nodeId: string }) {
   );
 }
 
-function PromptNode({ id, data, selected }: NodeProps<PromptNodeData>) {
+const PromptNode = memo(function PromptNode({
+  id,
+  data,
+  selected,
+}: NodeProps<PromptNodeData>) {
   const { setPrompt } = useStudioContext();
 
   return (
@@ -104,9 +119,13 @@ function PromptNode({ id, data, selected }: NodeProps<PromptNodeData>) {
       />
     </NodeShell>
   );
-}
+}, isSameNodeRender);
 
-function AssetNode({ id, data, selected }: NodeProps<AssetNodeData>) {
+const AssetNode = memo(function AssetNode({
+  id,
+  data,
+  selected,
+}: NodeProps<AssetNodeData>) {
   const { uploadFilesToNode, clearNodeAssets } = useStudioContext();
   const assetKindLabel = data.assetKind ? capitalize(data.assetKind) : "Asset";
   const outputColor =
@@ -165,9 +184,9 @@ function AssetNode({ id, data, selected }: NodeProps<AssetNodeData>) {
       </div>
     </NodeShell>
   );
-}
+}, isSameNodeRender);
 
-function GeneratorControlGrid({
+export function GeneratorControlGrid({
   controls,
   config,
   onConfigChange,
@@ -226,26 +245,32 @@ function GeneratorControlGrid({
   );
 }
 
-function ImageGeneratorNode({
+const ImageGeneratorNode = memo(function ImageGeneratorNode({
   id,
   data,
   selected,
 }: NodeProps<ImageGeneratorNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
-  const {
-    getGeneratorInputs,
-    getGeneratorIterationInfo,
-    setImageGeneratorConfigValue,
-    setImageGeneratorMode,
-    setImageGeneratorModel,
-    runNode,
-  } = useStudioContext();
+  const { getGeneratorInputs, getGeneratorIterationInfo, runNode } =
+    useStudioContext();
   const inputs = getGeneratorInputs(id);
   const inputHandleSignature = inputs.map((handle) => handle.id).join("|");
   const iterationInfo = getGeneratorIterationInfo(id);
   const modelOptions = getImageGeneratorModelOptions();
-  const modeOptions = getImageGeneratorModeOptions(data.model);
   const controls = getImageGeneratorControlDefinitions(data.model, data.mode);
+  const modelLabel =
+    modelOptions.find((option) => option.value === data.model)?.label ??
+    data.model;
+  const aspectRatioControl = controls.find(
+    (
+      control,
+    ): control is Extract<GeneratorControlDefinition, { type: "select" }> =>
+      control.type === "select" && control.key === "aspectRatio",
+  );
+  const aspectRatio =
+    typeof data.config.aspectRatio === "string"
+      ? data.config.aspectRatio
+      : (aspectRatioControl?.options[0]?.value ?? "1:1");
 
   useEffect(() => {
     inputHandleSignature;
@@ -254,61 +279,27 @@ function ImageGeneratorNode({
 
   return (
     <NodeShell
-      data={data}
+      data={{ ...data, label: "Image Gen" }}
       headerDetail={<GeneratorRunCostBadge nodeId={id} />}
       id={id}
       inputs={inputs}
       output={{ id: "images", label: "Images", color: "#22c55e" }}
       selected={selected}
     >
-      <div className="grid gap-2">
-        <NodeFieldCard label="Model">
-          <Select
-            onValueChange={(value) =>
-              setImageGeneratorModel(id, value as typeof data.model)
-            }
-            value={data.model}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {modelOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </NodeFieldCard>
-        {modeOptions.length > 1 ? (
-          <NodeFieldCard label="Mode">
-            <Select
-              onValueChange={(value) => setImageGeneratorMode(id, value)}
-              value={data.mode ?? modeOptions[0]?.value}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {modeOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </NodeFieldCard>
-        ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge
+          className="border-border/70 bg-muted/50 text-foreground"
+          variant="outline"
+        >
+          {modelLabel}
+        </Badge>
+        <Badge
+          className="border-border/70 bg-muted/50 text-foreground"
+          variant="outline"
+        >
+          {`Aspect ${aspectRatio}`}
+        </Badge>
       </div>
-
-      <GeneratorControlGrid
-        config={data.config}
-        controls={controls}
-        onConfigChange={(key, value) =>
-          setImageGeneratorConfigValue(id, key, value)
-        }
-      />
 
       {iterationInfo.hasIterator ? (
         <NodeNotice tone="accent">
@@ -316,25 +307,19 @@ function ImageGeneratorNode({
         </NodeNotice>
       ) : null}
 
+      <OutputGallery assets={data.outputAssets} />
+
       <ShellButton
         className="w-full justify-center"
         onClick={() => void runNode(id)}
       >
         Run image generation
       </ShellButton>
-
-      {data.responseText ? (
-        <NodeFieldCard label="Model note">
-          <p>{data.responseText}</p>
-        </NodeFieldCard>
-      ) : null}
-
-      <OutputGallery assets={data.outputAssets} />
     </NodeShell>
   );
-}
+}, isSameNodeRender);
 
-function VideoGeneratorNode({
+const VideoGeneratorNode = memo(function VideoGeneratorNode({
   id,
   data,
   selected,
@@ -434,7 +419,7 @@ function VideoGeneratorNode({
       <OutputGallery assets={data.outputAssets} />
     </NodeShell>
   );
-}
+}, isSameNodeRender);
 
 export const nodeTypes = {
   prompt: PromptNode,
