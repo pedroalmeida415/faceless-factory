@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
 import {
@@ -40,6 +40,8 @@ const EXTENSION_TO_MIME: Record<string, string> = {
   ".webm": "video/webm",
   ".webp": "image/webp",
 };
+
+type AssetRow = typeof assets.$inferSelect;
 
 type AssetOwner = {
   ownerUserId: string;
@@ -100,6 +102,22 @@ function buildAssetUrl(assetId: string) {
   return `/api/assets/${encodeURIComponent(assetId)}`;
 }
 
+function toWorkflowAsset(row: AssetRow): WorkflowAsset {
+  return {
+    createdAt: row.createdAt.toISOString(),
+    externalUri: row.externalUri,
+    fileName: row.fileName,
+    id: row.id,
+    kind: row.kind,
+    mimeType: row.mimeType,
+    model: row.model,
+    size: row.sizeBytes,
+    source: row.source,
+    storagePath: row.storageKey,
+    url: buildAssetUrl(row.id),
+  } satisfies WorkflowAsset;
+}
+
 function resolveAssetAbsolutePath(storagePath: string) {
   const normalized = path.posix
     .normalize(storagePath)
@@ -158,19 +176,42 @@ async function insertAssetRecord(params: {
     });
   }
 
-  return {
-    createdAt: asset.createdAt.toISOString(),
-    externalUri: asset.externalUri,
-    fileName: asset.fileName,
-    id: asset.id,
-    kind: asset.kind,
-    mimeType: asset.mimeType,
-    model: asset.model,
-    size: asset.sizeBytes,
-    source: asset.source,
-    storagePath: asset.storageKey,
-    url: buildAssetUrl(asset.id),
-  } satisfies WorkflowAsset;
+  return toWorkflowAsset(asset);
+}
+
+function listProjectAssetsEffect(params: {
+  ownerUserId: string;
+  projectId: string;
+}) {
+  return Effect.gen(function* () {
+    yield* Effect.tryPromise({
+      try: () => assertWorkflowProjectAccess(params),
+      catch: (cause) =>
+        toAssetWriteError("Failed to load project assets.", cause),
+    });
+
+    const projectAssets = yield* Effect.tryPromise({
+      try: () =>
+        db
+          .select()
+          .from(assets)
+          .where(
+            and(
+              eq(assets.ownerUserId, params.ownerUserId),
+              eq(assets.projectId, params.projectId),
+              isNull(assets.deletedAt),
+            ),
+          )
+          .orderBy(desc(assets.createdAt)),
+      catch: (cause) =>
+        new WorkflowStorageError({
+          message: "Failed to load project assets.",
+          cause,
+        }),
+    });
+
+    return projectAssets.map(toWorkflowAsset);
+  });
 }
 
 function saveBufferAsAssetEffect({
@@ -247,7 +288,8 @@ function saveBufferAsAssetEffect({
           storageKey,
           storageProvider: "local",
         }),
-      catch: (cause) => toAssetWriteError("Failed to persist asset metadata.", cause),
+      catch: (cause) =>
+        toAssetWriteError("Failed to persist asset metadata.", cause),
     });
   });
 }
@@ -400,6 +442,13 @@ export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
     readonly readStoredAsset: (
       asset: Pick<WorkflowAsset, "storagePath">,
     ) => Effect.Effect<Buffer, WorkflowStorageError>;
+    readonly listProjectAssets: (params: {
+      ownerUserId: string;
+      projectId: string;
+    }) => Effect.Effect<
+      WorkflowAsset[],
+      WorkflowAuthorizationError | WorkflowStorageError
+    >;
     readonly saveBufferAsAsset: (
       options: SaveBufferAsAssetOptions,
     ) => Effect.Effect<
@@ -428,6 +477,7 @@ export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
   static readonly functions = Effect.serviceFunctions(this);
 
   static readonly Live = Layer.succeed(this, {
+    listProjectAssets: listProjectAssetsEffect,
     readAssetById: readAssetByIdEffect,
     readStoredAsset: readStoredAssetEffect,
     saveBufferAsAsset: saveBufferAsAssetEffect,

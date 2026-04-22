@@ -47,6 +47,7 @@ import type {
   GeneratorConfigValue,
   ImageGeneratorModelId,
   VideoGeneratorModelId,
+  WorkflowAsset,
   WorkflowNodeKind,
   WorkflowNodeStatus,
 } from "~/lib/workflow/types";
@@ -428,6 +429,7 @@ type WorkflowStudioState = {
     startHandle: WorkflowHandleReference;
     valueType: WorkflowValueType;
   }) => void;
+  addAssetNodeAt: (position: WorkflowPosition, assets: WorkflowAsset[]) => void;
   clearSelection: () => void;
   deleteSelection: () => void;
   undo: () => void;
@@ -890,6 +892,15 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
         const currentSnapshot = snapshotFromState(state);
         runSnapshotMutation(state, () =>
           WorkflowEngine.addConnectedNode(currentSnapshot, params),
+        );
+      });
+    },
+
+    addAssetNodeAt: (position, assets) => {
+      set((state) => {
+        const currentSnapshot = snapshotFromState(state);
+        runSnapshotMutation(state, () =>
+          WorkflowEngine.addAssetNodeAt(currentSnapshot, position, assets),
         );
       });
     },

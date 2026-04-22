@@ -1,5 +1,6 @@
 "use client";
 
+import { dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import {
   RiArrowGoBackLine,
   RiArrowGoForwardLine,
@@ -28,6 +29,7 @@ import { Card, CardContent } from "~/components/ui/card";
 import {
   createWorkflowNode,
   specializeWorkflowNodeForValueType,
+  snapWorkflowPositionToGrid,
   WORKFLOW_GRID_STEP,
   type WorkflowDocument,
 } from "~/lib/workflow/document";
@@ -42,6 +44,8 @@ import {
 } from "~/lib/workflow/node-definitions";
 import type { WorkflowProject } from "~/lib/workflow/project";
 import type { WorkflowNodeKind } from "~/lib/workflow/types";
+import { AssetLibrary } from "./studio/AssetLibrary";
+import { getWorkflowAssetDropData } from "./studio/asset-dnd";
 import { WorkflowCreditsBadge } from "./studio/CreditsBadge";
 import { StudioContext } from "./studio/context";
 import { isEditableTarget } from "./studio/graph";
@@ -339,6 +343,38 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
   const canRedo = useWorkflowStudioStore((state) => state.canRedo);
   const pendingStartHandleRef = useRef<WorkflowHandleReference | null>(null);
   const didConnectRef = useRef(false);
+  const addAssetNodeAt = useWorkflowStudioStore(
+    (state) => state.addAssetNodeAt,
+  );
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const element = canvasRef.current;
+    if (!element) {
+      return;
+    }
+
+    return dropTargetForElements({
+      canDrop: ({ source }) => Boolean(getWorkflowAssetDropData(source.data)),
+      element,
+      onDrop: ({ location, source }) => {
+        const payload = getWorkflowAssetDropData(source.data);
+        const flow = flowRef.current;
+        if (!payload || !flow) {
+          return;
+        }
+
+        const position = snapWorkflowPositionToGrid(
+          flow.screenToFlowPosition({
+            x: location.current.input.clientX,
+            y: location.current.input.clientY,
+          }),
+        );
+
+        addAssetNodeAt(position, [payload.asset]);
+      },
+    });
+  }, [addAssetNodeAt, flowRef]);
 
   const handleFlowInit = useCallback(
     (instance: ReactFlowInstance) => {
@@ -438,36 +474,38 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
   return (
     <Card className="h-full min-w-0 overflow-hidden rounded-[28px] border-border/60 py-0 md:min-h-[calc(100vh-2.5rem)]">
       <CardContent className="h-full p-0">
-        <ReactFlow
-          connectionLineType={ConnectionLineType.SmoothStep}
-          defaultEdgeOptions={WORKFLOW_DEFAULT_EDGE_OPTIONS}
-          deleteKeyCode={null}
-          edges={edges}
-          fitView
-          isValidConnection={canConnect}
-          nodes={nodes}
-          nodeTypes={nodeTypes}
-          onConnect={handleConnect}
-          onConnectEnd={handleConnectEnd}
-          onConnectStart={handleConnectStart}
-          onEdgesChange={applyEdgeChanges}
-          onInit={handleFlowInit}
-          onNodesChange={applyNodeChanges}
-          proOptions={WORKFLOW_PRO_OPTIONS}
-          snapGrid={WORKFLOW_SNAP_GRID}
-          snapToGrid
-        >
-          <Background
-            color="rgba(148, 163, 184, 0.16)"
-            gap={WORKFLOW_GRID_STEP}
-          />
-          <WorkflowCanvasControls
-            canRedo={canRedo}
-            canUndo={canUndo}
-            onRedo={redo}
-            onUndo={undo}
-          />
-        </ReactFlow>
+        <div className="h-full" ref={canvasRef}>
+          <ReactFlow
+            connectionLineType={ConnectionLineType.SmoothStep}
+            defaultEdgeOptions={WORKFLOW_DEFAULT_EDGE_OPTIONS}
+            deleteKeyCode={null}
+            edges={edges}
+            fitView
+            isValidConnection={canConnect}
+            nodes={nodes}
+            nodeTypes={nodeTypes}
+            onConnect={handleConnect}
+            onConnectEnd={handleConnectEnd}
+            onConnectStart={handleConnectStart}
+            onEdgesChange={applyEdgeChanges}
+            onInit={handleFlowInit}
+            onNodesChange={applyNodeChanges}
+            proOptions={WORKFLOW_PRO_OPTIONS}
+            snapGrid={WORKFLOW_SNAP_GRID}
+            snapToGrid
+          >
+            <Background
+              color="rgba(148, 163, 184, 0.16)"
+              gap={WORKFLOW_GRID_STEP}
+            />
+            <WorkflowCanvasControls
+              canRedo={canRedo}
+              canUndo={canUndo}
+              onRedo={redo}
+              onUndo={undo}
+            />
+          </ReactFlow>
+        </div>
       </CardContent>
     </Card>
   );
@@ -555,6 +593,7 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
       <div className="relative h-screen p-2">
         <WorkflowCreditsBadge />
         <WorkflowSidebar onAddNode={addNodeToCanvas} />
+        <AssetLibrary projectId={project.id} />
         <WorkflowNodeConfigDrawer />
         <WorkflowCanvas
           flowRef={flowRef}

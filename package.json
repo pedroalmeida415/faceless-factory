@@ -21,6 +21,7 @@
     "worker:workflow:dev": "bun --watch src/server/workflow/worker.ts"
   },
   "dependencies": {
+    "@atlaskit/pragmatic-drag-and-drop": "^1.8.0",
     "@auth/drizzle-adapter": "^1.11.2",
     "@base-ui/react": "^1.4.1",
     "@better-auth/stripe": "^1.6.6",

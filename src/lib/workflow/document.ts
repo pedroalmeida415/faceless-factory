@@ -420,7 +420,6 @@ export function specializeWorkflowNodeForValueType(
       }
     : node;
 }
-
 export function createWorkflowNode(
   kind: WorkflowNodeKind,
   index: number,

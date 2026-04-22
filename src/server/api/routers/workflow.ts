@@ -24,6 +24,7 @@ import { WorkflowCreditsService } from "~/server/workflow/credits";
 import { WorkflowExecutionService } from "~/server/workflow/execution-service";
 import { saveWorkflowProjectDocument } from "~/server/workflow/projects";
 import { WorkflowRunStore } from "~/server/workflow/run-store";
+import { WorkflowStorage } from "~/server/workflow/storage";
 import { VertexAi } from "~/server/workflow/vertex";
 
 const workflowAssetSchema = z.object({
@@ -100,6 +101,27 @@ function isTerminalStatus(status: "queued" | "running" | "success" | "error") {
 }
 
 export const workflowRouter = createTRPCRouter({
+  listAssets: protectedProcedure
+    .input(
+      z.object({
+        projectId: z.string(),
+      }),
+    )
+    .output(z.array(workflowAssetSchema))
+    .query(async ({ ctx, input }) =>
+      ServerRuntime.runPromise(
+        Effect.gen(function* () {
+          const workflowStorage = yield* WorkflowStorage;
+          return yield* workflowStorage.listProjectAssets({
+            ownerUserId: ctx.session.user.id,
+            projectId: input.projectId,
+          });
+        }),
+      ).catch((error) => {
+        throw toTRPCError(error);
+      }),
+    ),
+
   saveProject: protectedProcedure
     .input(saveWorkflowProjectSchema)
     .mutation(async ({ ctx, input }) => {
