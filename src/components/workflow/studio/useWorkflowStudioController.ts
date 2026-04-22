@@ -8,6 +8,7 @@ import {
 } from "~/components/workflow/studio/runner";
 import { ClientRuntime } from "~/effect/client/runtime";
 import { estimateWorkflowExecution } from "~/lib/workflow/pricing";
+import { api } from "~/trpc/react";
 import type { StudioContextValue } from "./context";
 import {
   getGeneratorInputHandles,
@@ -16,6 +17,8 @@ import {
 import { useWorkflowStudioStore } from "./store";
 
 export function useWorkflowStudioController() {
+  const utils = api.useUtils();
+  const projectId = useWorkflowStudioStore((state) => state.projectId);
   const setPrompt = useWorkflowStudioStore((state) => state.setPrompt);
   const clearNodeAssets = useWorkflowStudioStore(
     (state) => state.clearNodeAssets,
@@ -65,8 +68,12 @@ export function useWorkflowStudioController() {
   const uploadFilesToNode = useCallback(
     async (nodeId: string, files: File[]) => {
       await ClientRuntime.runPromise(uploadWorkflowFilesToNode(nodeId, files));
+
+      if (projectId) {
+        await utils.workflow.listAssets.invalidate({ projectId });
+      }
     },
-    [],
+    [projectId, utils],
   );
 
   const runNode = useCallback(async (nodeId: string) => {

@@ -25,6 +25,7 @@ import {
   formatNodeTitle,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
+import { WorkflowNodeAssetService } from "~/lib/workflow/services/node-services";
 import {
   buildWorkflowCanvas,
   createWorkflowEditorState,
@@ -36,7 +37,7 @@ import {
   type WorkflowRuntimeState,
   type WorkflowStudioSnapshot,
 } from "~/lib/workflow/studio-state";
-import type { WorkflowNodeKind } from "~/lib/workflow/types";
+import type { WorkflowAsset, WorkflowNodeKind } from "~/lib/workflow/types";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 
 export const DEFAULT_WORKFLOW_ACTIVITY =
@@ -441,6 +442,30 @@ export const WorkflowEngine = {
         ? `${formatNodeTitle(params.kind)} node added.`
         : `${formatNodeTitle(params.kind)} node added and connected.`;
 
+    return nextState;
+  },
+
+  addAssetNodeAt(
+    state: WorkflowEngineState,
+    position: WorkflowPosition,
+    assets: WorkflowAsset[],
+  ) {
+    const nextState = syncEngineState(
+      {
+        ...state.document,
+        nodes: [
+          ...state.document.nodes,
+          WorkflowNodeAssetService.applyUploadedAssets(
+            createWorkflowNode("asset", state.document.nodes.length, position),
+            assets,
+          ),
+        ],
+      },
+      state.editor,
+      state.runtime,
+    );
+
+    nextState.runtime.activity = "Asset node added.";
     return nextState;
   },
 
