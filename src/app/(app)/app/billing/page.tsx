@@ -34,6 +34,14 @@ function formatBillingDate(value?: Date | null) {
   }).format(new Date(value));
 }
 
+function normalizeTopUpPacks(value: number) {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+
+  return Math.min(100, Math.max(1, Math.floor(value)));
+}
+
 export default function BillingPage() {
   const searchParams = useSearchParams();
   const autoCheckoutStartedRef = useRef(false);
@@ -360,10 +368,11 @@ export default function BillingPage() {
                 <div className="space-y-2">
                   <div className="font-medium text-sm">How many packs?</div>
                   <Input
+                    max={100}
                     min={1}
                     onChange={(event) => {
                       const nextValue = Number(event.target.value);
-                      setTopUpPacks(Number.isFinite(nextValue) ? nextValue : 1);
+                      setTopUpPacks(normalizeTopUpPacks(nextValue));
                     }}
                     step={1}
                     type="number"
@@ -392,10 +401,10 @@ export default function BillingPage() {
 
                 <Button
                   className="w-full"
-                  disabled={topUpMutation.isPending || topUpPacks < 1}
+                  disabled={topUpMutation.isPending}
                   onClick={() =>
                     topUpMutation.mutate(
-                      { packs: Math.max(1, Math.floor(topUpPacks)) },
+                      { packs: topUpPacks },
                       {
                         onError: (error) => {
                           setErrorMessage(error.message);
