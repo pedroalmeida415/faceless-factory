@@ -27,6 +27,7 @@ export const user = pgTable("user", {
     .$defaultFn(() => false)
     .notNull(),
   image: text("image"),
+  stripeCustomerId: text("stripe_customer_id"),
   createdAt: timestamp("created_at")
     .$defaultFn(() => /* @__PURE__ */ new Date())
     .notNull(),
@@ -81,6 +82,38 @@ export const verification = pgTable("verification", {
     () => /* @__PURE__ */ new Date(),
   ),
 });
+
+export const subscription = pgTable(
+  "subscription",
+  {
+    id: text("id").primaryKey(),
+    plan: text("plan").notNull(),
+    referenceId: text("reference_id").notNull(),
+    stripeCustomerId: text("stripe_customer_id"),
+    stripeSubscriptionId: text("stripe_subscription_id"),
+    status: text("status").default("incomplete").notNull(),
+    periodStart: timestamp("period_start"),
+    periodEnd: timestamp("period_end"),
+    trialStart: timestamp("trial_start"),
+    trialEnd: timestamp("trial_end"),
+    cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false),
+    cancelAt: timestamp("cancel_at"),
+    canceledAt: timestamp("canceled_at"),
+    endedAt: timestamp("ended_at"),
+    seats: bigint("seats", { mode: "number" }),
+    billingInterval: text("billing_interval"),
+    stripeScheduleId: text("stripe_schedule_id"),
+  },
+  (table) => ({
+    referenceStatusIdx: index("subscription_reference_status_idx").on(
+      table.referenceId,
+      table.status,
+    ),
+    stripeSubscriptionIdIdx: index(
+      "subscription_stripe_subscription_id_idx",
+    ).on(table.stripeSubscriptionId),
+  }),
+);
 
 export const workflowProjects = pgTable(
   "workflow_projects",
@@ -158,6 +191,7 @@ export const creditLedgerEntries = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     executionId: text("execution_id"),
     kind: text("kind").$type<CreditLedgerEntryKind>().notNull(),
+    referenceId: text("reference_id").unique(),
     amount: bigint("amount", { mode: "number" }).notNull(),
     balanceAfter: bigint("balance_after", { mode: "number" }).notNull(),
     reason: text("reason").notNull(),

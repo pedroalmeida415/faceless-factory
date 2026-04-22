@@ -90,6 +90,16 @@ export class WorkflowCreditsService extends Context.Tag(
 )<
   WorkflowCreditsService,
   {
+    readonly creditAccount: (params: {
+      amount: number;
+      kind: "adjustment" | "grant" | "purchase";
+      reason: string;
+      referenceId?: string;
+      userId: string;
+    }) => Effect.Effect<
+      WorkflowCreditsSummary,
+      WorkflowCreditsError | WorkflowInfrastructureError
+    >;
     readonly debitExecution: (params: {
       amount: number;
       executionId: string;
@@ -147,6 +157,96 @@ export class WorkflowCreditsService extends Context.Tag(
   };
 
   static readonly Live = Layer.succeed(this, {
+    creditAccount: ({ amount, kind, reason, referenceId, userId }) =>
+      Effect.tryPromise({
+        try: async () => {
+          if (amount <= 0) {
+            return buildBalanceSummary(await getUserCreditBalance(db, userId));
+          }
+
+          return db.transaction(async (tx) => {
+            const now = new Date();
+
+            if (referenceId) {
+              const [insertedEntry] = await tx
+                .insert(creditLedgerEntries)
+                .values({
+                  amount,
+                  balanceAfter: 0,
+                  createdAt: now,
+                  executionId: null,
+                  id: randomUUID(),
+                  kind,
+                  reason,
+                  referenceId,
+                  userId,
+                })
+                .onConflictDoNothing({
+                  target: creditLedgerEntries.referenceId,
+                })
+                .returning({ id: creditLedgerEntries.id });
+
+              if (!insertedEntry) {
+                return buildBalanceSummary(
+                  await getUserCreditBalance(tx, userId),
+                );
+              }
+
+              const [updatedUser] = await tx
+                .update(user)
+                .set({
+                  creditBalance: sql`${user.creditBalance} + ${amount}`,
+                  updatedAt: now,
+                })
+                .where(eq(user.id, userId))
+                .returning({ creditBalance: user.creditBalance });
+
+              if (!updatedUser) {
+                throw new WorkflowInfrastructureError({
+                  message: `User ${userId} was not found.`,
+                });
+              }
+
+              await tx
+                .update(creditLedgerEntries)
+                .set({ balanceAfter: updatedUser.creditBalance })
+                .where(eq(creditLedgerEntries.id, insertedEntry.id));
+
+              return buildBalanceSummary(updatedUser.creditBalance);
+            }
+
+            const [updatedUser] = await tx
+              .update(user)
+              .set({
+                creditBalance: sql`${user.creditBalance} + ${amount}`,
+                updatedAt: now,
+              })
+              .where(eq(user.id, userId))
+              .returning({ creditBalance: user.creditBalance });
+
+            if (!updatedUser) {
+              throw new WorkflowInfrastructureError({
+                message: `User ${userId} was not found.`,
+              });
+            }
+
+            await tx.insert(creditLedgerEntries).values({
+              amount,
+              balanceAfter: updatedUser.creditBalance,
+              createdAt: now,
+              executionId: null,
+              id: randomUUID(),
+              kind,
+              reason,
+              referenceId: null,
+              userId,
+            });
+
+            return buildBalanceSummary(updatedUser.creditBalance);
+          });
+        },
+        catch: WorkflowCreditsService.toCreditsError,
+      }),
     debitExecution: ({ amount, executionId, reason, userId }) =>
       Effect.tryPromise({
         try: async () => {

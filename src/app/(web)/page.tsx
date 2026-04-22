@@ -12,27 +12,49 @@ import {
   CardHeader,
   CardTitle,
 } from "~/components/ui/card";
+import {
+  BILLING_PLANS,
+  type BillingPlanId,
+  CREDIT_TOP_UP,
+} from "~/lib/billing/plans";
 import { authClient } from "~/server/better-auth/client";
 
 export default function Page() {
-  const { data: session, isPending: isSessionPending } = authClient.useSession();
+  const { data: session, isPending: isSessionPending } =
+    authClient.useSession();
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isAnnualBilling, setIsAnnualBilling] = useState(false);
+  const [pendingPlan, setPendingPlan] = useState<
+    BillingPlanId | "generic" | null
+  >(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const handleGithubSignIn = async () => {
+  const handleGithubSignIn = async (
+    callbackURL: string,
+    pendingValue: BillingPlanId | "generic",
+  ) => {
     setErrorMessage(null);
-    setIsSubmitting(true);
+    setPendingPlan(pendingValue);
 
     const result = await authClient.signIn.social({
+      callbackURL,
       provider: "github",
-      callbackURL: "/app",
     });
 
     if (result.error) {
       setErrorMessage(result.error.message ?? "GitHub sign-in failed.");
-      setIsSubmitting(false);
+      setPendingPlan(null);
     }
+  };
+
+  const handlePlanSignIn = (planId: BillingPlanId) => {
+    const params = new URLSearchParams({
+      annual: isAnnualBilling ? "1" : "0",
+      autoCheckout: "1",
+      plan: planId,
+    });
+
+    void handleGithubSignIn(`/app/billing?${params.toString()}`, planId);
   };
 
   const handleSignOut = async () => {
@@ -60,17 +82,21 @@ export default function Page() {
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
             <p>{session.user.name ?? "Unnamed user"}</p>
-            <p>The `/app` route is now protected and ready to use.</p>
+            <p>Open the workflow studio or manage your Stripe billing.</p>
           </CardContent>
-          <CardFooter className="gap-3">
-            <Button asChild className="flex-1">
+          <CardFooter className="flex flex-col gap-2 sm:flex-row">
+            <Button asChild className="w-full">
               <Link href="/app">Open app</Link>
             </Button>
+            <Button asChild className="w-full" variant="outline">
+              <Link href="/app/billing">Manage billing</Link>
+            </Button>
             <Button
-              variant="outline"
+              className="w-full sm:w-auto"
               onClick={() => {
                 void handleSignOut();
               }}
+              variant="ghost"
             >
               Sign out
             </Button>
@@ -81,38 +107,105 @@ export default function Page() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background px-6 py-10">
-      <Card className="w-full max-w-md border border-border/60 bg-card/95 shadow-2xl shadow-black/20">
+    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-6 py-10">
+      <Card className="border border-border/60 bg-card/95 shadow-2xl shadow-black/20">
         <CardHeader>
-          <CardTitle>Faceless Factory</CardTitle>
+          <CardTitle>Faceless Factory plans</CardTitle>
           <CardDescription>
-            Continue with GitHub to open the protected workflow studio.
+            Sign in with GitHub, then Stripe checkout will continue with the
+            plan you selected.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            The `/app` route redirects back here unless an authenticated session
-            is present.
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+          <p>
+            Top-ups stay available across plan changes ($
+            {CREDIT_TOP_UP.unitAmountUsd} /{" "}
+            {CREDIT_TOP_UP.credits.toLocaleString()} credits).
           </p>
-          {errorMessage ? (
-            <p className="text-sm text-destructive">{errorMessage}</p>
-          ) : null}
-          <Button
-            className="w-full"
-            disabled={isSubmitting}
-            onClick={() => {
-              void handleGithubSignIn();
-            }}
-            type="button"
-            variant="default"
-          >
-            {isSubmitting ? "Redirecting..." : "Continue with GitHub"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={() => setIsAnnualBilling(false)}
+              size="sm"
+              type="button"
+              variant={isAnnualBilling ? "outline" : "default"}
+            >
+              Monthly
+            </Button>
+            <Button
+              onClick={() => setIsAnnualBilling(true)}
+              size="sm"
+              type="button"
+              variant={isAnnualBilling ? "default" : "outline"}
+            >
+              Annual
+            </Button>
+          </div>
         </CardContent>
-        <CardFooter className="text-sm text-muted-foreground">
-          GitHub is the only enabled sign-in method right now.
-        </CardFooter>
       </Card>
+
+      {errorMessage ? (
+        <p className="text-sm text-destructive">{errorMessage}</p>
+      ) : null}
+
+      <section className="grid gap-4 md:grid-cols-3">
+        {BILLING_PLANS.map((plan) => {
+          const planPrice = plan.pricingUsd[isAnnualBilling ? "year" : "month"];
+          const isPlanPending = pendingPlan === plan.id;
+
+          return (
+            <Card className="border border-border/60 bg-card/95" key={plan.id}>
+              <CardHeader>
+                <CardTitle>{plan.name}</CardTitle>
+                <CardDescription>{plan.description}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm text-muted-foreground">
+                <p className="text-2xl font-semibold text-foreground">
+                  ${planPrice}
+                  <span className="ml-1 text-sm font-normal text-muted-foreground">
+                    /month
+                  </span>
+                </p>
+                <p>
+                  {isAnnualBilling
+                    ? "Billed annually"
+                    : "Billed month to month"}
+                </p>
+                <p>
+                  {plan.creditsPerMonth.toLocaleString()} credits included
+                  monthly
+                </p>
+              </CardContent>
+              <CardFooter>
+                <Button
+                  className="w-full"
+                  disabled={pendingPlan !== null}
+                  onClick={() => handlePlanSignIn(plan.id)}
+                  type="button"
+                >
+                  {isPlanPending
+                    ? "Redirecting..."
+                    : `Continue with ${plan.name}`}
+                </Button>
+              </CardFooter>
+            </Card>
+          );
+        })}
+      </section>
+
+      <div className="flex justify-center">
+        <Button
+          disabled={pendingPlan !== null}
+          onClick={() => {
+            void handleGithubSignIn("/app", "generic");
+          }}
+          type="button"
+          variant="ghost"
+        >
+          {pendingPlan === "generic"
+            ? "Redirecting..."
+            : "Continue with GitHub and choose later"}
+        </Button>
+      </div>
     </main>
   );
 }
