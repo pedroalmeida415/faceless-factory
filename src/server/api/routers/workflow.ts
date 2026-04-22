@@ -155,13 +155,9 @@ export const workflowRouter = createTRPCRouter({
     .input(workflowExecutionRequestSchema.omit({ documentRevision: true }))
     .query(async ({ ctx, input }) =>
       ServerRuntime.runPromise(
-        Effect.gen(function* () {
-          const vertexAi = yield* VertexAi;
-          return yield* quoteWorkflowExecution({
-            request: input,
-            userId: ctx.session.user.id,
-            vertexAi,
-          });
+        quoteWorkflowExecution({
+          request: input,
+          userId: ctx.session.user.id,
         }),
       ).catch((error) => {
         throw toTRPCError(error);

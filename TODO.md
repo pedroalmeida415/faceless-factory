@@ -14,6 +14,7 @@
 
 # Application
 - [ ] Any LLM node for text-related functionality.
+- [ ] Extract a provider-agnostic LLM model registry so adding OpenAI/Anthropic models only requires pricing + estimate config + execution adapter wiring.
 - [ ] Human-in-the-loop nodes or something to that require approval before moving forward.
 - [X] ~~Database design (tables, credits, etc...)~~
 - [X] ~~Plans Stripe integration~~

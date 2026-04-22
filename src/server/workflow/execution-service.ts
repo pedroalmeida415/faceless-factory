@@ -200,7 +200,6 @@ export class WorkflowExecutionService extends Context.Tag(
           const priceQuote = yield* quoteWorkflowExecution({
             request: submittedRequest,
             userId,
-            vertexAi,
           });
           const credits = yield* workflowCreditsService.debitExecution({
             amount: priceQuote.totalCost,

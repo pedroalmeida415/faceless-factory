@@ -46,7 +46,6 @@ const TextIcon = () => (
   </svg>
 );
 
-const AssetsDrawerIcon = () => (
 const LlmIcon = () => (
   <svg
     width="20"

@@ -1,3 +1,5 @@
+import { estimateTokenCount } from "tokenx";
+
 import type {
   GeneratorControlDefinition,
   GeneratorHandleDefinition,
@@ -36,7 +38,13 @@ const VALUE_TYPE_COLORS: Record<WorkflowValueType, string> = {
 
 type LlmGeneratorModelDefinition = {
   id: LlmGeneratorModelId;
+  inputUsdPerMillionTokens: number;
   label: string;
+  outputUsdPerMillionTokens: number;
+  tokenEstimate: {
+    defaultCharsPerToken: number;
+    imageInputTokens: number;
+  };
 };
 
 function getConfigNumber(
@@ -145,9 +153,34 @@ const LLM_GENERATOR_MODELS: Record<
 > = {
   [GEMINI_3_FLASH_PREVIEW_MODEL_ID]: {
     id: GEMINI_3_FLASH_PREVIEW_MODEL_ID,
+    inputUsdPerMillionTokens: GEMINI_3_FLASH_INPUT_USD_PER_MILLION_TOKENS,
     label: "Gemini 3 Flash Preview",
+    outputUsdPerMillionTokens: GEMINI_3_FLASH_OUTPUT_USD_PER_MILLION_TOKENS,
+    tokenEstimate: {
+      defaultCharsPerToken: 4,
+      imageInputTokens: 1024,
+    },
   },
 };
+
+function getLlmGeneratorModelDefinition(model: LlmGeneratorModelId) {
+  return LLM_GENERATOR_MODELS[model];
+}
+
+function estimateTextTokenCount(
+  model: LlmGeneratorModelId,
+  text: string | null | undefined,
+) {
+  const value = text?.trim();
+  if (!value) {
+    return 0;
+  }
+
+  return estimateTokenCount(value, {
+    defaultCharsPerToken:
+      getLlmGeneratorModelDefinition(model).tokenEstimate.defaultCharsPerToken,
+  });
+}
 
 export function createDefaultLlmGeneratorSettings(
   model: LlmGeneratorModelId = GEMINI_3_FLASH_PREVIEW_MODEL_ID,
@@ -175,7 +208,7 @@ export function normalizeLlmGeneratorSettings(
 
 export function getLlmGeneratorModelOptions() {
   return LLM_MODEL_IDS.map((model) => ({
-    label: LLM_GENERATOR_MODELS[model].label,
+    label: getLlmGeneratorModelDefinition(model).label,
     value: model,
   }));
 }
@@ -253,18 +286,23 @@ export function setLlmGeneratorConfigValue(
   });
 }
 
+export function estimateLlmRequestInputTokens(request: GenerateLlmRequest) {
+  const modelDefinition = getLlmGeneratorModelDefinition(request.model);
+
+  return (
+    estimateTextTokenCount(request.model, request.prompt) +
+    estimateTextTokenCount(request.model, request.systemPrompt) +
+    (request.referenceImages?.length ?? 0) *
+      modelDefinition.tokenEstimate.imageInputTokens
+  );
+}
+
 export function getLlmInputUsdPerMillionTokens(model: LlmGeneratorModelId) {
-  switch (model) {
-    case GEMINI_3_FLASH_PREVIEW_MODEL_ID:
-      return GEMINI_3_FLASH_INPUT_USD_PER_MILLION_TOKENS;
-  }
+  return getLlmGeneratorModelDefinition(model).inputUsdPerMillionTokens;
 }
 
 export function getLlmOutputUsdPerMillionTokens(model: LlmGeneratorModelId) {
-  switch (model) {
-    case GEMINI_3_FLASH_PREVIEW_MODEL_ID:
-      return GEMINI_3_FLASH_OUTPUT_USD_PER_MILLION_TOKENS;
-  }
+  return getLlmGeneratorModelDefinition(model).outputUsdPerMillionTokens;
 }
 
 export function convertUsdToCredits(usd: number) {
@@ -310,4 +348,14 @@ export function calculateLlmEstimateCreditCost(params: {
     getLlmOutputUsdPerMillionTokens(params.model);
 
   return convertUsdToCredits(inputUsd + outputUsd);
+}
+
+export function calculateLlmRequestEstimateCreditCost(
+  request: GenerateLlmRequest,
+) {
+  return calculateLlmEstimateCreditCost({
+    estimatedInputTokens: estimateLlmRequestInputTokens(request),
+    maxOutputTokens: request.maxOutputTokens ?? 2048,
+    model: request.model,
+  });
 }

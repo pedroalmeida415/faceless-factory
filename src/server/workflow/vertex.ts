@@ -184,17 +184,6 @@ function pollVideosOperation(
 export class VertexAi extends Context.Tag("VertexAi")<
   VertexAi,
   {
-    readonly countTokensForGemini3Flash: (params: {
-      ownerUserId: string;
-      request: GenerateLlmRequest;
-    }) => Effect.Effect<
-      { totalTokens: number },
-      | WorkflowAuthorizationError
-      | WorkflowConfigError
-      | WorkflowGenerationError
-      | WorkflowStorageError
-      | WorkflowValidationError
-    >;
     readonly generateImagesWithNanoBananaPro: (params: {
       ownerUserId: string;
       projectId?: string | null;
@@ -301,65 +290,6 @@ export class VertexAi extends Context.Tag("VertexAi")<
           thoughtsTokenCount: usage?.thoughtsTokenCount ?? 0,
           totalTokenCount: usage?.totalTokenCount ?? 0,
         }) satisfies GenerateLlmUsage;
-
-      const countTokensForGemini3Flash = ({
-        ownerUserId,
-        request: { prompt, referenceImages = [], systemPrompt = null },
-      }: {
-        ownerUserId: string;
-        request: GenerateLlmRequest;
-      }) =>
-        Effect.gen(function* () {
-          const promptText = prompt.trim();
-          if (!promptText) {
-            return yield* Effect.fail(
-              new WorkflowValidationError({
-                message: "Prompt is required for LLM generation.",
-              }),
-            );
-          }
-
-          if (referenceImages.length > 1) {
-            return yield* Effect.fail(
-              new WorkflowValidationError({
-                message: "Only one image can be provided to this LLM node.",
-              }),
-            );
-          }
-
-          const client = yield* createVertexClientEffect(getLlmLocation());
-          const imageParts = yield* Effect.forEach(
-            referenceImages,
-            (asset) => toLlmImagePart(ownerUserId, asset),
-            {
-              concurrency: "unbounded",
-            },
-          );
-          const response = yield* Effect.tryPromise({
-            try: () =>
-              client.models.countTokens({
-                model: GEMINI_3_FLASH_PREVIEW_MODEL_ID,
-                contents: [
-                  {
-                    role: "user",
-                    parts: [{ text: promptText }, ...imageParts],
-                  },
-                ],
-                config: {
-                  systemInstruction: systemPrompt?.trim() || undefined,
-                },
-              }),
-            catch: (cause) =>
-              new WorkflowGenerationError({
-                message: "Vertex AI token counting failed.",
-                cause,
-              }),
-          });
-
-          return {
-            totalTokens: response.totalTokens ?? 0,
-          };
-        });
 
       const generateTextWithGemini3Flash = ({
         ownerUserId,
@@ -708,7 +638,6 @@ export class VertexAi extends Context.Tag("VertexAi")<
         });
 
       return VertexAi.of({
-        countTokensForGemini3Flash,
         generateImagesWithNanoBananaPro,
         generateTextWithGemini3Flash,
         generateVideosWithVeo31,

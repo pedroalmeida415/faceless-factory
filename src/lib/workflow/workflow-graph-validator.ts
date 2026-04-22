@@ -148,8 +148,25 @@ export const WorkflowGraphValidator = {
     validateDocumentAcyclic(document);
   },
 
-  validateExecutionTargets(document: WorkflowDocument, targetIds: string[]) {
+  validateQuoteTargets(document: WorkflowDocument, targetIds: string[]) {
     this.validateDocument(document);
+
+    const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
+
+    for (const targetId of targetIds) {
+      const targetNode = nodeMap.get(targetId);
+      if (!targetNode) {
+        failValidation(`Node ${targetId} not found.`);
+      }
+
+      if (!isGeneratorNodeKind(targetNode.kind)) {
+        failValidation("Only generator nodes can be executed.");
+      }
+    }
+  },
+
+  validateExecutionTargets(document: WorkflowDocument, targetIds: string[]) {
+    this.validateQuoteTargets(document, targetIds);
 
     const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
     const visited = new Set<string>();
