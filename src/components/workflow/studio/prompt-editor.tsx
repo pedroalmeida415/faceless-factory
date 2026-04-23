@@ -495,7 +495,15 @@ export function PromptEditor({
   );
   const lastDisplayModeRef = useRef(displayMode);
   const addVariableFocusRef = useRef(false);
+  const pendingPropValueRef = useRef<string | null>(null);
+  const handleEditorKeyDownRef = useRef<(event: KeyboardEvent) => boolean>(
+    () => false,
+  );
   const [mentionMenu, setMentionMenu] = useState<MentionMenuState | null>(null);
+  const [initialContent] = useState(() => ({
+    content: buildEditorContent(value, variables, displayMode),
+    type: "doc",
+  }));
 
   const filteredVariables = useMemo(() => {
     if (!mentionMenu?.queryText.trim()) {
@@ -699,19 +707,22 @@ export function PromptEditor({
     ],
   );
 
-  const editor = useEditor({
-    content: {
-      content: buildEditorContent(value, variables, displayMode),
-      type: "doc",
-    },
-    editorProps: {
+  handleEditorKeyDownRef.current = handleEditorKeyDown;
+
+  const editorProps = useMemo(
+    () => ({
       attributes: {
         class:
           "tiptap-prompt-editor min-h-40 whitespace-pre-wrap break-words text-sm leading-6 outline-none",
       },
-      handleKeyDown: (_view, event) => handleEditorKeyDown(event),
-    },
-    extensions: [
+      handleKeyDown: (_view: unknown, event: KeyboardEvent) =>
+        handleEditorKeyDownRef.current(event),
+    }),
+    [],
+  );
+
+  const extensions = useMemo(
+    () => [
       TiptapDocument.extend({
         content: "paragraph+",
       }),
@@ -722,6 +733,14 @@ export function PromptEditor({
       Placeholder.configure({ placeholder }),
       CharacterCount.configure({ limit: 20000 }),
     ],
+    [placeholder],
+  );
+
+  const editor = useEditor({
+    content: initialContent,
+    editorProps,
+    extensions,
+    immediatelyRender: false,
     onCreate: ({ editor }) => {
       editorRef.current = editor;
     },
@@ -732,6 +751,7 @@ export function PromptEditor({
       const nextValue = extractTextFromEditor(editor);
       if (nextValue !== lastValueRef.current) {
         lastValueRef.current = nextValue;
+        pendingPropValueRef.current = nextValue;
         onChange(nextValue);
       }
     },
@@ -742,6 +762,8 @@ export function PromptEditor({
       return;
     }
 
+    const currentValue = extractTextFromEditor(editor);
+    const pendingPropValue = pendingPropValueRef.current;
     const variableKeys = variables.map((variable) => variable.key).join("|");
     const variableDisplay = variables
       .map(
@@ -750,12 +772,24 @@ export function PromptEditor({
       )
       .join("|");
     const keysChanged = variableKeys !== lastVariableKeysRef.current;
-    const valueChanged = value !== lastValueRef.current;
+    const valueChanged = value !== currentValue;
+    const isStalePropEcho =
+      pendingPropValue !== null &&
+      currentValue === pendingPropValue &&
+      value !== pendingPropValue;
     const displayChanged =
       variableDisplay !== lastVariableDisplayRef.current ||
       displayMode !== lastDisplayModeRef.current;
 
+    if (pendingPropValue !== null && value === pendingPropValue) {
+      pendingPropValueRef.current = null;
+    }
+
     if (valueChanged || keysChanged) {
+      if (!keysChanged && isStalePropEcho) {
+        return;
+      }
+
       editor.commands.setContent(
         {
           content: buildEditorContent(value, variables, displayMode),
@@ -764,6 +798,7 @@ export function PromptEditor({
         { emitUpdate: false },
       );
       lastValueRef.current = value;
+      pendingPropValueRef.current = null;
     } else if (displayChanged) {
       syncVariableTagDisplays(editor, variables, displayMode);
     }
@@ -774,19 +809,18 @@ export function PromptEditor({
   }, [displayMode, editor, value, variables]);
 
   useEffect(() => {
-    if (!mentionMenu) {
-      return;
-    }
-
     setMentionMenu((current) =>
       current
-        ? {
-            ...current,
-            activeIndex: Math.min(current.activeIndex, menuItems.length - 1),
-          }
+        ? Math.min(current.activeIndex, menuItems.length - 1) ===
+          current.activeIndex
+          ? current
+          : {
+              ...current,
+              activeIndex: Math.min(current.activeIndex, menuItems.length - 1),
+            }
         : current,
     );
-  }, [menuItems.length, mentionMenu]);
+  }, [menuItems.length]);
 
   useEffect(() => {
     if (!mentionMenu) {
