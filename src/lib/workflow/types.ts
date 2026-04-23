@@ -60,6 +60,17 @@ export type PromptVariable = {
   label: string;
 };
 
+export type PromptResolvedVariable = PromptVariable & {
+  value: string | null;
+};
+
+export type PromptInputHandle = {
+  id: string;
+  label: string;
+  labelIndex?: number;
+  color: string;
+};
+
 export type WorkflowAsset = {
   id: string;
   kind: AssetKind;
@@ -116,10 +127,13 @@ type BaseNodeData = {
   error: string | null;
 };
 
-export type PromptNodeData = BaseNodeData &
-  PromptNodeFields & {
-    kind: "prompt";
-  };
+export type PromptNodeData = BaseNodeData & {
+  kind: "prompt";
+  displayMode: PromptDisplayMode;
+  prompt: string;
+  variables: PromptResolvedVariable[];
+  inputs: PromptInputHandle[];
+};
 
 export type AssetNodeData = BaseNodeData &
   AssetNodeFields & {

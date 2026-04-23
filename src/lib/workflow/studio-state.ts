@@ -5,6 +5,8 @@ import type {
   WorkflowDocumentEdge,
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
+import { getPromptVariableValue } from "~/lib/workflow/graph";
+import { PROMPT_VARIABLE_HANDLE_COLOR } from "~/lib/workflow/node-definitions";
 import type {
   WorkflowNodeData,
   WorkflowNodeStatus,
@@ -94,6 +96,7 @@ export function syncWorkflowRuntimeState(
 }
 
 function toWorkflowNodeData(
+  document: WorkflowDocument,
   node: WorkflowDocumentNode,
   runtimeState: WorkflowNodeRuntimeState | undefined,
 ): WorkflowNodeData {
@@ -109,7 +112,16 @@ function toWorkflowNodeData(
         error,
         displayMode: node.displayMode,
         prompt: node.prompt,
-        variables: node.variables,
+        variables: node.variables.map((variable) => ({
+          ...variable,
+          value: getPromptVariableValue(document, node.id, variable.key),
+        })),
+        inputs: node.variables.map((variable, index) => ({
+          color: PROMPT_VARIABLE_HANDLE_COLOR,
+          id: variable.key,
+          label: "Variable",
+          labelIndex: index + 1,
+        })),
       };
     case "asset":
       return {
@@ -163,6 +175,7 @@ function toWorkflowNodeData(
 }
 
 function buildWorkflowCanvasNode(
+  document: WorkflowDocument,
   node: WorkflowDocumentNode,
   selectedNodeIds: Set<string>,
   runtime: WorkflowRuntimeState,
@@ -171,10 +184,47 @@ function buildWorkflowCanvasNode(
     id: node.id,
     type: node.kind,
     position: node.position,
-    data: toWorkflowNodeData(node, runtime.nodeStateById[node.id]),
+    data: toWorkflowNodeData(document, node, runtime.nodeStateById[node.id]),
     selected: selectedNodeIds.has(node.id),
     style: { width: 320 },
   };
+}
+
+function isSamePromptInputs(
+  left: Extract<WorkflowNodeData, { kind: "prompt" }>["inputs"],
+  right: Extract<WorkflowNodeData, { kind: "prompt" }>["inputs"],
+) {
+  return (
+    left.length === right.length &&
+    left.every((input, index) => {
+      const nextInput = right[index];
+      return (
+        nextInput &&
+        input.id === nextInput.id &&
+        input.label === nextInput.label &&
+        input.labelIndex === nextInput.labelIndex &&
+        input.color === nextInput.color
+      );
+    })
+  );
+}
+
+function isSamePromptVariables(
+  left: Extract<WorkflowNodeData, { kind: "prompt" }>["variables"],
+  right: Extract<WorkflowNodeData, { kind: "prompt" }>["variables"],
+) {
+  return (
+    left.length === right.length &&
+    left.every((variable, index) => {
+      const nextVariable = right[index];
+      return (
+        nextVariable &&
+        variable.key === nextVariable.key &&
+        variable.label === nextVariable.label &&
+        variable.value === nextVariable.value
+      );
+    })
+  );
 }
 
 function buildWorkflowCanvasEdge(
@@ -209,7 +259,8 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       right.kind === "prompt" &&
       left.prompt === right.prompt &&
       left.displayMode === right.displayMode &&
-      left.variables === right.variables
+      isSamePromptVariables(left.variables, right.variables) &&
+      isSamePromptInputs(left.inputs, right.inputs)
     );
   }
 
@@ -322,6 +373,7 @@ export function buildWorkflowCanvas(
 
   const nextNodes = snapshot.document.nodes.map((node) => {
     const nextNode = buildWorkflowCanvasNode(
+      snapshot.document,
       node,
       selectedNodeIds,
       snapshot.runtime,
