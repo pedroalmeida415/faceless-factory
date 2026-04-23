@@ -21,10 +21,10 @@ import type {
   WorkflowExecutionPortError,
   WorkflowExecutionStatusResponse,
 } from "~/lib/workflow/execution/types";
+import { estimateWorkflowExecution } from "~/lib/workflow/pricing";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
-import { quoteWorkflowExecution } from "~/server/workflow/pricing";
 import {
   getWorkflowProject,
   persistWorkflowExecutionResults,
@@ -197,10 +197,7 @@ export class WorkflowExecutionService extends Context.Tag(
           const executionNodeIds = submittedRequest.document.nodes
             .filter((node) => isGeneratorNodeKind(node.kind))
             .map((node) => node.id);
-          const priceQuote = yield* quoteWorkflowExecution({
-            request: submittedRequest,
-            userId,
-          });
+          const priceQuote = estimateWorkflowExecution(submittedRequest);
           const credits = yield* workflowCreditsService.debitExecution({
             amount: priceQuote.totalCost,
             executionId: runId,

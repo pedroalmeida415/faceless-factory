@@ -279,16 +279,14 @@ function VideoGeneratorConfigPanel({
 }
 
 function LlmEstimatePanel({ nodeId }: { nodeId: string }) {
-  const { isLoading, priceQuote } = useWorkflowExecutionQuote(nodeId);
+  const { priceQuote } = useWorkflowExecutionQuote(nodeId);
 
   return (
     <NodeFieldCard label="Estimated cost">
       <p className="text-sm">
-        {isLoading
-          ? "Quoting..."
-          : priceQuote
-            ? `${priceQuote.hasEstimate ? "~" : ""}${formatCredits(priceQuote.totalCost)} per run`
-            : "Unavailable"}
+        {priceQuote
+          ? `${priceQuote.hasEstimate ? "~" : ""}${formatCredits(priceQuote.totalCost)} per run`
+          : "Unavailable"}
       </p>
     </NodeFieldCard>
   );

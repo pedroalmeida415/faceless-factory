@@ -24,7 +24,6 @@ import { toTRPCError } from "~/server/api/errors";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
 import { WorkflowExecutionService } from "~/server/workflow/execution-service";
-import { quoteWorkflowExecution } from "~/server/workflow/pricing";
 import { saveWorkflowProjectDocument } from "~/server/workflow/projects";
 import { WorkflowRunStore } from "~/server/workflow/run-store";
 import { WorkflowStorage } from "~/server/workflow/storage";
@@ -150,19 +149,6 @@ export const workflowRouter = createTRPCRouter({
         throw toTRPCError(error);
       }
     }),
-
-  quoteExecution: protectedProcedure
-    .input(workflowExecutionRequestSchema.omit({ documentRevision: true }))
-    .query(async ({ ctx, input }) =>
-      ServerRuntime.runPromise(
-        quoteWorkflowExecution({
-          request: input,
-          userId: ctx.session.user.id,
-        }),
-      ).catch((error) => {
-        throw toTRPCError(error);
-      }),
-    ),
 
   startExecution: protectedProcedure
     .input(workflowExecutionRequestSchema)

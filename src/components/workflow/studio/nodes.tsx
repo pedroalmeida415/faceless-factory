@@ -138,15 +138,13 @@ export function WorkflowExecutionEstimateWarning({
 }: {
   nodeId: string;
 }) {
-  const { isLoading, priceQuote } = useWorkflowExecutionQuote(nodeId);
+  const { priceQuote } = useWorkflowExecutionQuote(nodeId);
 
   return (
     <NodeNotice tone="accent">
-      {isLoading
-        ? "Quoting LLM run estimate..."
-        : priceQuote
-          ? `${formatCredits(priceQuote.totalCost)} estimated. Final cost varies with generated output and reasoning tokens.`
-          : "Estimate only. Final cost varies with generated output and reasoning tokens."}
+      {priceQuote
+        ? `${formatCredits(priceQuote.totalCost)} estimated. Final cost varies with generated output and reasoning tokens.`
+        : "Estimate only. Final cost varies with generated output and reasoning tokens."}
     </NodeNotice>
   );
 }

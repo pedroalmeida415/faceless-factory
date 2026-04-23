@@ -1,5 +1,3 @@
-import { estimateTokenCount } from "tokenx";
-
 import type {
   GeneratorControlDefinition,
   GeneratorHandleDefinition,
@@ -29,7 +27,6 @@ export const SYSTEM_PROMPT_INPUT_HANDLE_ID = "systemPrompt";
 const IMAGE_INPUT_PREFIX = "image-input-";
 const GEMINI_3_FLASH_INPUT_USD_PER_MILLION_TOKENS = 0.5;
 const GEMINI_3_FLASH_OUTPUT_USD_PER_MILLION_TOKENS = 3;
-const DEFAULT_LLM_ESTIMATED_OUTPUT_TOKENS = 2048;
 
 const VALUE_TYPE_COLORS: Record<WorkflowValueType, string> = {
   image: "#38bdf8",
@@ -42,10 +39,6 @@ type LlmGeneratorModelDefinition = {
   inputUsdPerMillionTokens: number;
   label: string;
   outputUsdPerMillionTokens: number;
-  tokenEstimate: {
-    defaultCharsPerToken: number;
-    imageInputTokens: number;
-  };
 };
 
 function getConfigNumber(
@@ -157,30 +150,11 @@ const LLM_GENERATOR_MODELS: Record<
     inputUsdPerMillionTokens: GEMINI_3_FLASH_INPUT_USD_PER_MILLION_TOKENS,
     label: "Gemini 3 Flash Preview",
     outputUsdPerMillionTokens: GEMINI_3_FLASH_OUTPUT_USD_PER_MILLION_TOKENS,
-    tokenEstimate: {
-      defaultCharsPerToken: 4,
-      imageInputTokens: 1024,
-    },
   },
 };
 
 function getLlmGeneratorModelDefinition(model: LlmGeneratorModelId) {
   return LLM_GENERATOR_MODELS[model];
-}
-
-function estimateTextTokenCount(
-  model: LlmGeneratorModelId,
-  text: string | null | undefined,
-) {
-  const value = text?.trim();
-  if (!value) {
-    return 0;
-  }
-
-  return estimateTokenCount(value, {
-    defaultCharsPerToken:
-      getLlmGeneratorModelDefinition(model).tokenEstimate.defaultCharsPerToken,
-  });
 }
 
 export function createDefaultLlmGeneratorSettings(
@@ -287,17 +261,6 @@ export function setLlmGeneratorConfigValue(
   });
 }
 
-export function estimateLlmRequestInputTokens(request: GenerateLlmRequest) {
-  const modelDefinition = getLlmGeneratorModelDefinition(request.model);
-
-  return (
-    estimateTextTokenCount(request.model, request.prompt) +
-    estimateTextTokenCount(request.model, request.systemPrompt) +
-    (request.referenceImages?.length ?? 0) *
-      modelDefinition.tokenEstimate.imageInputTokens
-  );
-}
-
 export function getLlmInputUsdPerMillionTokens(model: LlmGeneratorModelId) {
   return getLlmGeneratorModelDefinition(model).inputUsdPerMillionTokens;
 }
@@ -334,29 +297,4 @@ export function calculateLlmUsageCreditCost(params: {
   usage: GenerateLlmUsage;
 }) {
   return convertUsdToCredits(calculateLlmUsageUsd(params));
-}
-
-export function calculateLlmEstimateCreditCost(params: {
-  estimatedInputTokens: number;
-  maxOutputTokens: number;
-  model: LlmGeneratorModelId;
-}) {
-  const inputUsd =
-    (params.estimatedInputTokens / 1_000_000) *
-    getLlmInputUsdPerMillionTokens(params.model);
-  const outputUsd =
-    (params.maxOutputTokens / 1_000_000) *
-    getLlmOutputUsdPerMillionTokens(params.model);
-
-  return convertUsdToCredits(inputUsd + outputUsd);
-}
-
-export function calculateLlmRequestEstimateCreditCost(
-  request: GenerateLlmRequest,
-) {
-  return calculateLlmEstimateCreditCost({
-    estimatedInputTokens: estimateLlmRequestInputTokens(request),
-    maxOutputTokens: DEFAULT_LLM_ESTIMATED_OUTPUT_TOKENS,
-    model: request.model,
-  });
 }
