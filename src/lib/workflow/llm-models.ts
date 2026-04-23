@@ -29,6 +29,7 @@ export const SYSTEM_PROMPT_INPUT_HANDLE_ID = "systemPrompt";
 const IMAGE_INPUT_PREFIX = "image-input-";
 const GEMINI_3_FLASH_INPUT_USD_PER_MILLION_TOKENS = 0.5;
 const GEMINI_3_FLASH_OUTPUT_USD_PER_MILLION_TOKENS = 3;
+const DEFAULT_LLM_ESTIMATED_OUTPUT_TOKENS = 2048;
 
 const VALUE_TYPE_COLORS: Record<WorkflowValueType, string> = {
   image: "#38bdf8",
@@ -355,7 +356,7 @@ export function calculateLlmRequestEstimateCreditCost(
 ) {
   return calculateLlmEstimateCreditCost({
     estimatedInputTokens: estimateLlmRequestInputTokens(request),
-    maxOutputTokens: request.maxOutputTokens ?? 2048,
+    maxOutputTokens: DEFAULT_LLM_ESTIMATED_OUTPUT_TOKENS,
     model: request.model,
   });
 }
