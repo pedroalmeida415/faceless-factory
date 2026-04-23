@@ -28,6 +28,11 @@ export const LLM_THINKING_LEVELS = [
   "MEDIUM",
   "HIGH",
 ] as const;
+export const PROMPT_DISPLAY_MODES = [
+  "source-value",
+  "value",
+  "source",
+] as const;
 
 export type AssetKind = "image" | "video";
 export type AssetSource = "upload" | "generated";
@@ -48,6 +53,12 @@ export type LlmGeneratorModelId = (typeof LLM_MODEL_IDS)[number];
 export type LlmThinkingLevel = (typeof LLM_THINKING_LEVELS)[number];
 export type GeneratorConfigValue = string | number | boolean | null;
 export type GeneratorConfig = Record<string, GeneratorConfigValue>;
+export type PromptDisplayMode = (typeof PROMPT_DISPLAY_MODES)[number];
+
+export type PromptVariable = {
+  key: string;
+  label: string;
+};
 
 export type WorkflowAsset = {
   id: string;
@@ -65,6 +76,8 @@ export type WorkflowAsset = {
 
 export type PromptNodeFields = {
   prompt: string;
+  displayMode: PromptDisplayMode;
+  variables: PromptVariable[];
 };
 
 export type AssetNodeFields = {

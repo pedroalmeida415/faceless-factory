@@ -3,12 +3,19 @@ import type { GeneratorHandleDefinition } from "~/lib/workflow/generator-models"
 import type {
   GeneratorConfigValue,
   ImageGeneratorModelId,
+  PromptDisplayMode,
+  PromptVariable,
   VideoGeneratorModelId,
 } from "~/lib/workflow/types";
 import type { GeneratorIterationInfo } from "./graph";
 
 export type StudioContextValue = {
   setPrompt: (nodeId: string, prompt: string) => void;
+  setPromptDisplayMode: (
+    nodeId: string,
+    displayMode: PromptDisplayMode,
+  ) => void;
+  addPromptVariable: (nodeId: string) => PromptVariable | null;
   uploadFilesToNode: (nodeId: string, files: File[]) => Promise<void>;
   clearNodeAssets: (nodeId: string) => void;
   getGeneratorIterationInfo: (nodeId: string) => GeneratorIterationInfo;

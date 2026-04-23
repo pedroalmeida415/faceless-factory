@@ -1,6 +1,10 @@
-import type { WorkflowNodeKind } from "~/lib/workflow/types";
+import type { PromptDisplayMode, WorkflowNodeKind } from "~/lib/workflow/types";
 
 export const PROMPT_INPUT_HANDLE_ID = "prompt";
+export const PROMPT_VARIABLE_PATTERN =
+  /\{\{([a-zA-Z][a-zA-Z0-9]*)(?::[^}]*)?\}\}/g;
+export const PROMPT_VARIABLE_HANDLE_COLOR = "#f59e0b";
+export const DEFAULT_PROMPT_DISPLAY_MODE: PromptDisplayMode = "source-value";
 
 export type WorkflowValueType = "text" | "image" | "video";
 

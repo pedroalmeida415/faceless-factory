@@ -107,7 +107,9 @@ function toWorkflowNodeData(
         label: node.label,
         status,
         error,
+        displayMode: node.displayMode,
         prompt: node.prompt,
+        variables: node.variables,
       };
     case "asset":
       return {
@@ -203,7 +205,12 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
   }
 
   if (left.kind === "prompt") {
-    return right.kind === "prompt" && left.prompt === right.prompt;
+    return (
+      right.kind === "prompt" &&
+      left.prompt === right.prompt &&
+      left.displayMode === right.displayMode &&
+      left.variables === right.variables
+    );
   }
 
   if (left.kind === "asset") {
