@@ -120,6 +120,49 @@ function getPromptHandleDefinitions(node: PromptWorkflowNode) {
   }));
 }
 
+function getPromptVariableKeys(node: PromptWorkflowNode) {
+  return new Set(node.variables.map((variable) => variable.key));
+}
+
+export function getPromptNodeReferencedVariableKeys(node: PromptWorkflowNode) {
+  const variableKeys = getPromptVariableKeys(node);
+  const referencedKeys = new Set<string>();
+
+  node.prompt.replace(PROMPT_VARIABLE_PATTERN, (match, key) => {
+    if (variableKeys.has(key)) {
+      referencedKeys.add(key);
+    }
+
+    return match;
+  });
+
+  return Array.from(referencedKeys);
+}
+
+export function resolvePromptNodeText(
+  node: PromptWorkflowNode,
+  resolveVariableValue: (key: string) => string | null,
+): string | null {
+  const variableKeys = getPromptVariableKeys(node);
+  const resolvedByKey = new Map<string, string>();
+  const prompt = node.prompt.replace(PROMPT_VARIABLE_PATTERN, (match, key) => {
+    if (!variableKeys.has(key)) {
+      return match;
+    }
+
+    let value = resolvedByKey.get(key);
+    if (value === undefined) {
+      value = resolveVariableValue(key) ?? "";
+      resolvedByKey.set(key, value);
+    }
+
+    return value;
+  });
+  const resolvedPrompt = prompt.trim();
+
+  return resolvedPrompt ? resolvedPrompt : null;
+}
+
 function resolveTextHandleValue(
   document: WorkflowDocument,
   nodeMap: NodeMap,
@@ -149,39 +192,23 @@ function resolveTextHandleValue(
   return textParts.length ? textParts.join("\n\n") : null;
 }
 
-function resolvePromptNodeText(
+function resolveRuntimePromptNodeText(
   document: WorkflowDocument,
   node: PromptWorkflowNode,
   path: ReadonlySet<string>,
   nodeMap: NodeMap,
   incomingByTarget: IncomingByTarget,
 ): string | null {
-  const variableKeys = new Set(node.variables.map((variable) => variable.key));
-  const resolvedByKey = new Map<string, string>();
-  const prompt = node.prompt.replace(PROMPT_VARIABLE_PATTERN, (match, key) => {
-    if (!variableKeys.has(key)) {
-      return match;
-    }
-
-    let value = resolvedByKey.get(key);
-    if (value === undefined) {
-      value =
-        resolveTextHandleValue(
-          document,
-          nodeMap,
-          incomingByTarget,
-          node.id,
-          key,
-          path,
-        ) ?? "";
-      resolvedByKey.set(key, value);
-    }
-
-    return value;
-  });
-  const resolvedPrompt = prompt.trim();
-
-  return resolvedPrompt ? resolvedPrompt : null;
+  return resolvePromptNodeText(node, (key) =>
+    resolveTextHandleValue(
+      document,
+      nodeMap,
+      incomingByTarget,
+      node.id,
+      key,
+      path,
+    ),
+  );
 }
 
 function getGeneratorRepeatableHandlePrefixes(
@@ -377,7 +404,7 @@ export function getWorkflowNodeRuntimeValue(
 
   switch (node.kind) {
     case "prompt": {
-      const text = resolvePromptNodeText(
+      const text = resolveRuntimePromptNodeText(
         document,
         node,
         nextPath,

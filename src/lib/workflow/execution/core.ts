@@ -1,6 +1,7 @@
 import { Deferred, Effect } from "effect";
 
 import type {
+  PromptWorkflowNode,
   WorkflowDocument,
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
@@ -36,8 +37,10 @@ import {
 } from "~/lib/workflow/generator-models";
 import {
   buildIncomingByTarget,
-  getWorkflowNodeRuntimeValue,
+  getIncomingEdgesForHandle,
+  getPromptNodeReferencedVariableKeys,
   type RuntimeValue,
+  resolvePromptNodeText,
 } from "~/lib/workflow/graph";
 import {
   buildLlmGenerationRequest,
@@ -84,6 +87,50 @@ function cloneExecutionResponse(
   return JSON.parse(
     JSON.stringify(response),
   ) as WorkflowExecutionStatusResponse;
+}
+
+function evaluatePromptNodeText(
+  node: PromptWorkflowNode,
+  path: ReadonlySet<string>,
+  incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
+  evaluateNode: EvaluateNode,
+) {
+  return Effect.gen(function* () {
+    const resolvedVariables = new Map(
+      yield* Effect.forEach(
+        getPromptNodeReferencedVariableKeys(node),
+        (key) =>
+          Effect.gen(function* () {
+            const values = yield* Effect.forEach(
+              getIncomingEdgesForHandle(incomingByTarget, node.id, key),
+              (edge) => evaluateNode(edge.source, path),
+              {
+                concurrency: "unbounded",
+              },
+            );
+
+            return [
+              key,
+              values
+                .flatMap((value) =>
+                  value.type === "text" && value.text.trim()
+                    ? [value.text.trim()]
+                    : [],
+                )
+                .join("\n\n"),
+            ] as const;
+          }),
+        {
+          concurrency: "unbounded",
+        },
+      ),
+    );
+
+    return resolvePromptNodeText(
+      node,
+      (key) => resolvedVariables.get(key) ?? null,
+    );
+  });
 }
 
 export function executeWorkflow(params: {
@@ -185,12 +232,14 @@ export function executeWorkflow(params: {
     switch (node.kind) {
       case "prompt":
         return Effect.gen(function* () {
-          const runtimeValue = getWorkflowNodeRuntimeValue(
-            state.document,
-            currentId,
+          const text = yield* evaluatePromptNodeText(
+            node,
+            nextPath,
+            incomingByTarget,
+            evaluateNode,
           );
 
-          if (!runtimeValue || runtimeValue.type !== "text") {
+          if (!text) {
             return yield* Effect.fail(
               new WorkflowValidationError({
                 message: "Prompt node is empty.",
@@ -199,7 +248,10 @@ export function executeWorkflow(params: {
           }
 
           yield* setNodeRuntime(currentId, "success", null);
-          return runtimeValue satisfies RuntimeValue;
+          return {
+            type: "text",
+            text,
+          } satisfies RuntimeValue;
         });
       case "asset":
         return Effect.gen(function* () {

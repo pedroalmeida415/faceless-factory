@@ -6,8 +6,8 @@ import {
   getGeneratorInputHandles,
   getGeneratorIterationPreview,
   getIncomingEdgesForHandle,
-  getWorkflowNodeRuntimeValue,
   isValidWorkflowEdge,
+  resolvePromptNodeText,
 } from "~/lib/workflow/graph";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
 
@@ -69,7 +69,13 @@ function validateExecutionSubgraph(
 
   switch (node.kind) {
     case "prompt":
-      if (!getWorkflowNodeRuntimeValue(document, node.id)) {
+      if (
+        !resolvePromptNodeText(node, (key) =>
+          getIncomingEdgesForHandle(incomingByTarget, node.id, key).length
+            ? key
+            : null,
+        )
+      ) {
         failValidation("Prompt node is empty.");
       }
       break;
