@@ -19,6 +19,12 @@ export function useWorkflowStudioController() {
   const utils = api.useUtils();
   const projectId = useWorkflowStudioStore((state) => state.projectId);
   const setPrompt = useWorkflowStudioStore((state) => state.setPrompt);
+  const setPromptDisplayMode = useWorkflowStudioStore(
+    (state) => state.setPromptDisplayMode,
+  );
+  const addPromptVariable = useWorkflowStudioStore(
+    (state) => state.addPromptVariable,
+  );
   const clearNodeAssets = useWorkflowStudioStore(
     (state) => state.clearNodeAssets,
   );
@@ -72,6 +78,8 @@ export function useWorkflowStudioController() {
   const contextValue = useMemo<StudioContextValue>(
     () => ({
       setPrompt,
+      setPromptDisplayMode,
+      addPromptVariable,
       uploadFilesToNode,
       clearNodeAssets,
       getGeneratorInputs,
@@ -86,6 +94,7 @@ export function useWorkflowStudioController() {
       runNode,
     }),
     [
+      addPromptVariable,
       clearNodeAssets,
       getGeneratorInputs,
       getGeneratorIterationInfo,
@@ -95,6 +104,7 @@ export function useWorkflowStudioController() {
       setImageGeneratorModel,
       setLlmGeneratorConfigValue,
       setPrompt,
+      setPromptDisplayMode,
       setVideoGeneratorConfigValue,
       setVideoGeneratorMode,
       setVideoGeneratorModel,

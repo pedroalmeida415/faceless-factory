@@ -3,6 +3,8 @@ export {
   type GeneratorIterationInfo,
   getGeneratorInputHandles,
   getGeneratorIterationPreview,
+  getPromptInputHandles,
+  getPromptVariableValue,
   type RuntimeValue,
 } from "~/lib/workflow/graph";
 export {

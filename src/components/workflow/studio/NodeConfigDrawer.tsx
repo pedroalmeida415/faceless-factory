@@ -345,7 +345,12 @@ function isSameNodeConfig(
 
   switch (left.kind) {
     case "prompt":
-      return right.kind === "prompt" && left.prompt === right.prompt;
+      return (
+        right.kind === "prompt" &&
+        left.prompt === right.prompt &&
+        left.displayMode === right.displayMode &&
+        left.variables === right.variables
+      );
     case "asset":
       return (
         right.kind === "asset" &&

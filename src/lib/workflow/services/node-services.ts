@@ -18,6 +18,8 @@ import type {
   AssetKind,
   GeneratorConfigValue,
   ImageGeneratorModelId,
+  PromptDisplayMode,
+  PromptVariable,
   VideoGeneratorModelId,
   WorkflowAsset,
 } from "~/lib/workflow/types";
@@ -55,6 +57,42 @@ export const PromptNodeService = {
     return {
       ...node,
       prompt,
+    };
+  },
+
+  setDisplayMode(
+    node: PromptWorkflowNode,
+    displayMode: PromptDisplayMode,
+  ): PromptWorkflowNode {
+    return {
+      ...node,
+      displayMode,
+    };
+  },
+
+  addVariable(node: PromptWorkflowNode): {
+    node: PromptWorkflowNode;
+    variable: PromptVariable;
+  } {
+    let nextIndex = node.variables.length + 1;
+    let key = `variable${nextIndex}`;
+
+    while (node.variables.some((variable) => variable.key === key)) {
+      nextIndex += 1;
+      key = `variable${nextIndex}`;
+    }
+
+    const variable = {
+      key,
+      label: `Variable ${nextIndex}`,
+    } satisfies PromptVariable;
+
+    return {
+      node: {
+        ...node,
+        variables: [...node.variables, variable],
+      },
+      variable,
     };
   },
 };

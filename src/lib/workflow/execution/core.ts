@@ -34,7 +34,11 @@ import {
   getImageGeneratorModelCreditCost,
   getVideoGeneratorModelCreditCost,
 } from "~/lib/workflow/generator-models";
-import { buildIncomingByTarget, type RuntimeValue } from "~/lib/workflow/graph";
+import {
+  buildIncomingByTarget,
+  getWorkflowNodeRuntimeValue,
+  type RuntimeValue,
+} from "~/lib/workflow/graph";
 import {
   buildLlmGenerationRequest,
   calculateLlmUsageCreditCost,
@@ -181,7 +185,12 @@ export function executeWorkflow(params: {
     switch (node.kind) {
       case "prompt":
         return Effect.gen(function* () {
-          if (!node.prompt.trim()) {
+          const runtimeValue = getWorkflowNodeRuntimeValue(
+            state.document,
+            currentId,
+          );
+
+          if (!runtimeValue || runtimeValue.type !== "text") {
             return yield* Effect.fail(
               new WorkflowValidationError({
                 message: "Prompt node is empty.",
@@ -190,10 +199,7 @@ export function executeWorkflow(params: {
           }
 
           yield* setNodeRuntime(currentId, "success", null);
-          return {
-            type: "text",
-            text: node.prompt.trim(),
-          } satisfies RuntimeValue;
+          return runtimeValue satisfies RuntimeValue;
         });
       case "asset":
         return Effect.gen(function* () {

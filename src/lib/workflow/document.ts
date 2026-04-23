@@ -9,6 +9,7 @@ import {
   normalizeLlmGeneratorSettings,
 } from "~/lib/workflow/llm-models";
 import {
+  DEFAULT_PROMPT_DISPLAY_MODE,
   formatNodeTitle,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
@@ -16,7 +17,9 @@ import type {
   AssetNodeFields,
   ImageGeneratorSettings,
   LlmGeneratorSettings,
+  PromptDisplayMode,
   PromptNodeFields,
+  PromptVariable,
   VideoGeneratorSettings,
   WorkflowAsset,
   WorkflowGeneratorResult,
@@ -24,8 +27,8 @@ import type {
   WorkflowNodeKind,
 } from "~/lib/workflow/types";
 
-export const WORKFLOW_DOCUMENT_VERSION = 4;
-export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v4";
+export const WORKFLOW_DOCUMENT_VERSION = 5;
+export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v5";
 export const WORKFLOW_GRID_STEP = 20;
 
 export type WorkflowPosition = {
@@ -146,8 +149,10 @@ function makeWorkflowNode(
         kind,
         label,
         position,
+        displayMode: DEFAULT_PROMPT_DISPLAY_MODE,
         prompt:
           "Hyperreal studio portrait of a chrome mannequin under cinematic rim light.",
+        variables: [],
       };
     case "asset":
       return {
@@ -218,6 +223,15 @@ function asString(value: unknown, fallback: string) {
   return isString(value) ? value : fallback;
 }
 
+function asPromptDisplayMode(
+  value: unknown,
+  fallback: PromptDisplayMode,
+): PromptDisplayMode {
+  return value === "source-value" || value === "value" || value === "source"
+    ? value
+    : fallback;
+}
+
 function asNullableString(value: unknown, fallback: string | null) {
   return value === null ? null : isString(value) ? value : fallback;
 }
@@ -261,6 +275,34 @@ function asWorkflowAssets(value: unknown) {
     .filter((asset): asset is WorkflowAsset => Boolean(asset));
 }
 
+function asPromptVariables(value: unknown): PromptVariable[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seenKeys = new Set<string>();
+
+  return value.flatMap((entry, index) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+
+    const key = asString(entry.key, "").trim();
+    if (!key || seenKeys.has(key)) {
+      return [];
+    }
+
+    seenKeys.add(key);
+
+    return [
+      {
+        key,
+        label: asString(entry.label, `Variable ${index + 1}`),
+      } satisfies PromptVariable,
+    ];
+  });
+}
+
 function inferAssetKindFromAssets(assets: WorkflowAsset[]) {
   if (!assets.length) {
     return null;
@@ -298,8 +340,13 @@ function normalizeWorkflowNode(
       ) as PromptWorkflowNode;
       return {
         ...baseNode,
+        displayMode: asPromptDisplayMode(
+          value.displayMode,
+          baseNode.displayMode,
+        ),
         label: asString(value.label, baseNode.label),
         prompt: asString(value.prompt, baseNode.prompt),
+        variables: asPromptVariables(value.variables),
       };
     }
     case "asset": {

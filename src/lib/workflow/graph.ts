@@ -1,6 +1,7 @@
 import type { Connection, HandleType } from "reactflow";
 
 import type {
+  PromptWorkflowNode,
   WorkflowDocument,
   WorkflowDocumentEdge,
   WorkflowDocumentNode,
@@ -13,6 +14,8 @@ import {
 import { getLlmGeneratorHandleDefinitions } from "~/lib/workflow/llm-models";
 import {
   getNodeOutputHandleId,
+  PROMPT_VARIABLE_HANDLE_COLOR,
+  PROMPT_VARIABLE_PATTERN,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
 import { isGeneratorNodeKind, type WorkflowAsset } from "~/lib/workflow/types";
@@ -32,6 +35,8 @@ export type WorkflowHandleReference = {
 };
 
 type MediaRuntimeValue = Extract<RuntimeValue, { type: "image" | "video" }>;
+type NodeMap = Map<string, WorkflowDocumentNode>;
+type IncomingByTarget = Map<string, WorkflowDocumentEdge[]>;
 
 type MediaBatchPlan = {
   batches: WorkflowAsset[][];
@@ -105,6 +110,80 @@ function getGeneratorHandleDefinitions(
   }
 }
 
+function getPromptHandleDefinitions(node: PromptWorkflowNode) {
+  return node.variables.map((variable, index) => ({
+    color: PROMPT_VARIABLE_HANDLE_COLOR,
+    id: variable.key,
+    label: "Variable",
+    labelIndex: index + 1,
+    valueType: "text" as const,
+  }));
+}
+
+function resolveTextHandleValue(
+  document: WorkflowDocument,
+  nodeMap: NodeMap,
+  incomingByTarget: IncomingByTarget,
+  targetId: string,
+  handleId: string,
+  path: ReadonlySet<string>,
+): string | null {
+  const textParts = getIncomingEdgesForHandle(
+    incomingByTarget,
+    targetId,
+    handleId,
+  ).flatMap((edge) => {
+    const runtimeValue = getWorkflowNodeRuntimeValue(
+      document,
+      edge.source,
+      new Set(path),
+      nodeMap,
+      incomingByTarget,
+    );
+
+    return runtimeValue?.type === "text" && runtimeValue.text.trim()
+      ? [runtimeValue.text.trim()]
+      : [];
+  });
+
+  return textParts.length ? textParts.join("\n\n") : null;
+}
+
+function resolvePromptNodeText(
+  document: WorkflowDocument,
+  node: PromptWorkflowNode,
+  path: ReadonlySet<string>,
+  nodeMap: NodeMap,
+  incomingByTarget: IncomingByTarget,
+): string | null {
+  const variableKeys = new Set(node.variables.map((variable) => variable.key));
+  const resolvedByKey = new Map<string, string>();
+  const prompt = node.prompt.replace(PROMPT_VARIABLE_PATTERN, (match, key) => {
+    if (!variableKeys.has(key)) {
+      return match;
+    }
+
+    let value = resolvedByKey.get(key);
+    if (value === undefined) {
+      value =
+        resolveTextHandleValue(
+          document,
+          nodeMap,
+          incomingByTarget,
+          node.id,
+          key,
+          path,
+        ) ?? "";
+      resolvedByKey.set(key, value);
+    }
+
+    return value;
+  });
+  const resolvedPrompt = prompt.trim();
+
+  return resolvedPrompt ? resolvedPrompt : null;
+}
+
 function getGeneratorRepeatableHandlePrefixes(
   node: WorkflowDocumentNode,
   edges: WorkflowDocumentEdge[],
@@ -167,6 +246,12 @@ export function findFirstWorkflowHandleIdByValueType(
     const handleId = getNodeOutputHandleId(node.kind);
     return getNodeOutputValueType(node, handleId) === params.valueType
       ? handleId
+      : null;
+  }
+
+  if (node.kind === "prompt") {
+    return params.valueType === "text"
+      ? (getPromptHandleDefinitions(node)[0]?.id ?? null)
       : null;
   }
 
@@ -248,7 +333,19 @@ function getNodeInputValueType(
   handleId: string | null | undefined,
   edges: WorkflowDocumentEdge[],
 ): WorkflowValueType | null {
-  if (!isGeneratorNodeKind(node.kind) || !handleId) {
+  if (!handleId) {
+    return null;
+  }
+
+  if (node.kind === "prompt") {
+    return getPromptHandleDefinitions(node).some(
+      (handle) => handle.id === handleId,
+    )
+      ? "text"
+      : null;
+  }
+
+  if (!isGeneratorNodeKind(node.kind)) {
     return null;
   }
 
@@ -260,16 +357,41 @@ function getNodeInputValueType(
 }
 
 export function getWorkflowNodeRuntimeValue(
-  node: WorkflowDocumentNode,
+  document: WorkflowDocument,
+  nodeId: string,
+  path: ReadonlySet<string> = new Set(),
+  nodeMap = toNodeMap(document),
+  incomingByTarget = buildIncomingByTarget(document.edges),
 ): RuntimeValue | null {
+  if (path.has(nodeId)) {
+    return null;
+  }
+
+  const node = nodeMap.get(nodeId);
+  if (!node) {
+    return null;
+  }
+
+  const nextPath = new Set(path);
+  nextPath.add(nodeId);
+
   switch (node.kind) {
-    case "prompt":
-      return node.prompt.trim()
+    case "prompt": {
+      const text = resolvePromptNodeText(
+        document,
+        node,
+        nextPath,
+        nodeMap,
+        incomingByTarget,
+      );
+
+      return text
         ? {
             type: "text",
-            text: node.prompt.trim(),
+            text,
           }
         : null;
+    }
     case "asset":
       return node.assetKind && node.assets.length
         ? {
@@ -412,7 +534,7 @@ export function getGeneratorIterationPreview(
       (edge) => {
         const sourceNode = nodeMap.get(edge.source);
         const runtimeValue = sourceNode
-          ? getWorkflowNodeRuntimeValue(sourceNode)
+          ? getWorkflowNodeRuntimeValue(document, sourceNode.id)
           : null;
         return runtimeValue?.type === "image" &&
           runtimeValue.iterationMode === "iterator"
@@ -467,7 +589,7 @@ export function getGeneratorMediaValuesByHandle(
             ).flatMap((edge) => {
               const sourceNode = nodeMap.get(edge.source);
               const runtimeValue = sourceNode
-                ? getWorkflowNodeRuntimeValue(sourceNode)
+                ? getWorkflowNodeRuntimeValue(document, sourceNode.id)
                 : null;
 
               if (!runtimeValue || runtimeValue.type !== valueType) {
@@ -592,4 +714,30 @@ export function isValidWorkflowEdge(
   edge: WorkflowDocumentEdge,
 ) {
   return hasCompatibleConnection(document, edge);
+}
+
+export function getPromptInputHandles(
+  document: WorkflowDocument,
+  targetId: string,
+) {
+  const node = document.nodes.find((candidate) => candidate.id === targetId);
+  return node?.kind === "prompt" ? getPromptHandleDefinitions(node) : [];
+}
+
+export function getPromptVariableValue(
+  document: WorkflowDocument,
+  targetId: string,
+  handleId: string,
+) {
+  const nodeMap = toNodeMap(document);
+  const incomingByTarget = buildIncomingByTarget(document.edges);
+
+  return resolveTextHandleValue(
+    document,
+    nodeMap,
+    incomingByTarget,
+    targetId,
+    handleId,
+    new Set([targetId]),
+  );
 }

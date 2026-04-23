@@ -47,6 +47,8 @@ import {
 import type {
   GeneratorConfigValue,
   ImageGeneratorModelId,
+  PromptDisplayMode,
+  PromptVariable,
   VideoGeneratorModelId,
   WorkflowAsset,
   WorkflowNodeKind,
@@ -451,6 +453,11 @@ type WorkflowStudioState = {
     updater: (node: WorkflowDocumentNode) => WorkflowDocumentNode,
   ) => void;
   setPrompt: (nodeId: string, prompt: string) => void;
+  setPromptDisplayMode: (
+    nodeId: string,
+    displayMode: PromptDisplayMode,
+  ) => void;
+  addPromptVariable: (nodeId: string) => PromptVariable | null;
   setImageGeneratorModel: (
     nodeId: string,
     model: ImageGeneratorModelId,
@@ -691,6 +698,44 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           ? PromptNodeService.setPrompt(node, prompt)
           : node,
       );
+    },
+
+    setPromptDisplayMode: (nodeId, displayMode) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "prompt"
+          ? PromptNodeService.setDisplayMode(node, displayMode)
+          : node,
+      );
+    },
+
+    addPromptVariable: (nodeId) => {
+      let createdVariable: PromptVariable | null = null;
+
+      set((state) => {
+        const currentSnapshot = snapshotFromState(state);
+        runSnapshotMutation(state, () => {
+          const document = updateWorkflowDocumentNode(
+            currentSnapshot.document,
+            nodeId,
+            (node) => {
+              if (node.kind !== "prompt") {
+                return node;
+              }
+
+              const result = PromptNodeService.addVariable(node);
+              createdVariable = result.variable;
+              return result.node;
+            },
+          );
+
+          return WorkflowEngine.syncState({
+            ...currentSnapshot,
+            document,
+          });
+        });
+      });
+
+      return createdVariable;
     },
 
     setImageGeneratorModel: (nodeId, model) => {

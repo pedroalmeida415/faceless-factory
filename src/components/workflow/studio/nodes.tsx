@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect } from "react";
+import { memo, useEffect, useMemo } from "react";
 import { type NodeProps, useUpdateNodeInternals } from "reactflow";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardContent } from "~/components/ui/card";
@@ -14,7 +14,6 @@ import {
 } from "~/components/ui/select";
 import { Slider } from "~/components/ui/slider";
 import { Switch } from "~/components/ui/switch";
-import { Textarea } from "~/components/ui/textarea";
 import {
   WORKFLOW_ASSET_UPLOAD_ACCEPT,
   WORKFLOW_IMAGE_UPLOAD_ACCEPT,
@@ -38,6 +37,8 @@ import type {
   WorkflowNodeData,
 } from "~/lib/workflow/types";
 import { useStudioContext } from "./context";
+import { getPromptInputHandles, getPromptVariableValue } from "./graph";
+import { PromptEditor } from "./prompt-editor";
 import {
   FilePickerButton,
   NodeFieldCard,
@@ -46,6 +47,7 @@ import {
   OutputGallery,
   ShellButton,
 } from "./shared";
+import { useWorkflowStudioStore } from "./store";
 import { useWorkflowExecutionQuote } from "./useWorkflowExecutionQuote";
 
 function capitalize(value: string) {
@@ -150,20 +152,47 @@ const PromptNode = memo(function PromptNode({
   data,
   selected,
 }: NodeProps<PromptNodeData>) {
-  const { setPrompt } = useStudioContext();
+  const updateNodeInternals = useUpdateNodeInternals();
+  const { addPromptVariable, setPrompt, setPromptDisplayMode } =
+    useStudioContext();
+  const document = useWorkflowStudioStore((state) => state.document);
+  const inputs = useMemo(
+    () => getPromptInputHandles(document, id),
+    [document, id],
+  );
+  const inputHandleSignature = inputs.map((handle) => handle.id).join("|");
+  const variables = useMemo(
+    () =>
+      data.variables.map((variable) => ({
+        ...variable,
+        value: getPromptVariableValue(document, id, variable.key),
+      })),
+    [data.variables, document, id],
+  );
+
+  useEffect(() => {
+    inputHandleSignature;
+    updateNodeInternals(id);
+  }, [id, inputHandleSignature, updateNodeInternals]);
 
   return (
     <NodeShell
       data={data}
       id={id}
+      inputs={inputs}
       output={{ id: "text", label: "Text", color: "#f59e0b" }}
       selected={selected}
     >
-      <Textarea
-        className="nodrag nopan min-h-40"
-        onChange={(event) => setPrompt(id, event.target.value)}
+      <PromptEditor
+        displayMode={data.displayMode}
+        onAddVariable={() => addPromptVariable(id)}
+        onChange={(prompt) => setPrompt(id, prompt)}
+        onDisplayModeChange={(nextDisplayMode) =>
+          setPromptDisplayMode(id, nextDisplayMode)
+        }
         placeholder="Describe the shot, mood, framing, lens, motion."
         value={data.prompt}
+        variables={variables}
       />
     </NodeShell>
   );
