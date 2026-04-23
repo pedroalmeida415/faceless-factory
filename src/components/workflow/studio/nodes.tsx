@@ -28,10 +28,6 @@ import {
   getVideoGeneratorModelOptions,
   getVideoGeneratorModeOptions,
 } from "~/lib/workflow/generator-models";
-import {
-  getLlmGeneratorControlDefinitions,
-  getLlmGeneratorModelOptions,
-} from "~/lib/workflow/llm-models";
 import type {
   AssetNodeData,
   GeneratorConfigValue,
@@ -531,19 +527,9 @@ const LlmGeneratorNode = memo(function LlmGeneratorNode({
   selected,
 }: NodeProps<LlmGeneratorNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
-  const {
-    getGeneratorInputs,
-    getGeneratorIterationInfo,
-    runNode,
-    setLlmGeneratorConfigValue,
-  } = useStudioContext();
+  const { getGeneratorInputs, runNode } = useStudioContext();
   const inputs = getGeneratorInputs(id);
   const inputHandleSignature = inputs.map((handle) => handle.id).join("|");
-  const iterationInfo = getGeneratorIterationInfo(id);
-  const modelLabel =
-    getLlmGeneratorModelOptions().find((option) => option.value === data.model)
-      ?.label ?? data.model;
-  const controls = getLlmGeneratorControlDefinitions(data.model);
 
   useEffect(() => {
     inputHandleSignature;
@@ -559,31 +545,6 @@ const LlmGeneratorNode = memo(function LlmGeneratorNode({
       output={{ id: "text", label: "Text", color: "#f59e0b" }}
       selected={selected}
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge
-          className="border-border/70 bg-muted/50 text-foreground"
-          variant="outline"
-        >
-          {modelLabel}
-        </Badge>
-      </div>
-
-      <GeneratorControlGrid
-        config={data.config}
-        controls={controls}
-        onConfigChange={(key, value) =>
-          setLlmGeneratorConfigValue(id, key, value)
-        }
-      />
-
-      <WorkflowExecutionEstimateWarning nodeId={id} />
-
-      {iterationInfo.hasIterator ? (
-        <NodeNotice tone="accent">
-          {`Will run ${iterationInfo.iterations} iteration${iterationInfo.iterations === 1 ? "" : "s"}. Each result is merged into one downstream text output.`}
-        </NodeNotice>
-      ) : null}
-
       <GeneratedTextPreview text={data.responseText} />
 
       <ShellButton
