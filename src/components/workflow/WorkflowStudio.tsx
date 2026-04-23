@@ -28,7 +28,6 @@ import {
 import { Card, CardContent } from "~/components/ui/card";
 import {
   createWorkflowNode,
-  snapWorkflowPositionToGrid,
   specializeWorkflowNodeForValueType,
   WORKFLOW_GRID_STEP,
   type WorkflowDocument,
@@ -44,6 +43,7 @@ import {
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
 import type { WorkflowProject } from "~/lib/workflow/project";
+import { PromptNodeService } from "~/lib/workflow/services/node-services";
 import type { WorkflowNodeKind } from "~/lib/workflow/types";
 import { AssetLibrary } from "./studio/AssetLibrary";
 import { getWorkflowAssetDropData } from "./studio/asset-dnd";
@@ -151,7 +151,7 @@ function buildConnectionAutocompleteOptions(params: {
   valueType: WorkflowValueType;
 }) {
   return WORKFLOW_NODE_KINDS.flatMap((kind) => {
-    const candidateNode = specializeWorkflowNodeForValueType(
+    const specializedNode = specializeWorkflowNodeForValueType(
       createWorkflowNode(
         kind,
         params.document.nodes.length,
@@ -159,6 +159,12 @@ function buildConnectionAutocompleteOptions(params: {
       ),
       params.valueType,
     );
+    const candidateNode =
+      specializedNode.kind === "prompt" &&
+      params.startHandle.handleType === "source" &&
+      params.valueType === "text"
+        ? PromptNodeService.seedTextVariable(specializedNode).node
+        : specializedNode;
     const documentWithCandidate = {
       ...params.document,
       nodes: [...params.document.nodes, candidateNode],

@@ -25,7 +25,10 @@ import {
   formatNodeTitle,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
-import { WorkflowNodeAssetService } from "~/lib/workflow/services/node-services";
+import {
+  PromptNodeService,
+  WorkflowNodeAssetService,
+} from "~/lib/workflow/services/node-services";
 import {
   buildWorkflowCanvas,
   createWorkflowEditorState,
@@ -367,7 +370,7 @@ export const WorkflowEngine = {
       valueType: WorkflowValueType;
     },
   ) {
-    const nextNode = specializeWorkflowNodeForValueType(
+    const specializedNode = specializeWorkflowNodeForValueType(
       createWorkflowNode(
         params.kind,
         state.document.nodes.length,
@@ -375,6 +378,12 @@ export const WorkflowEngine = {
       ),
       params.valueType,
     );
+    const nextNode =
+      specializedNode.kind === "prompt" &&
+      params.startHandle.handleType === "source" &&
+      params.valueType === "text"
+        ? PromptNodeService.seedTextVariable(specializedNode).node
+        : specializedNode;
     const documentWithNode = {
       ...state.document,
       nodes: [...state.document.nodes, nextNode],

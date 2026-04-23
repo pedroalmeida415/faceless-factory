@@ -52,6 +52,21 @@ function assertCompatibleAssetKind(
   });
 }
 
+function createPromptVariable(node: PromptWorkflowNode) {
+  let nextIndex = node.variables.length + 1;
+  let key = `variable${nextIndex}`;
+
+  while (node.variables.some((variable) => variable.key === key)) {
+    nextIndex += 1;
+    key = `variable${nextIndex}`;
+  }
+
+  return {
+    key,
+    label: `Variable ${nextIndex}`,
+  } satisfies PromptVariable;
+}
+
 export const PromptNodeService = {
   setPrompt(node: PromptWorkflowNode, prompt: string): PromptWorkflowNode {
     return {
@@ -74,18 +89,7 @@ export const PromptNodeService = {
     node: PromptWorkflowNode;
     variable: PromptVariable;
   } {
-    let nextIndex = node.variables.length + 1;
-    let key = `variable${nextIndex}`;
-
-    while (node.variables.some((variable) => variable.key === key)) {
-      nextIndex += 1;
-      key = `variable${nextIndex}`;
-    }
-
-    const variable = {
-      key,
-      label: `Variable ${nextIndex}`,
-    } satisfies PromptVariable;
+    const variable = createPromptVariable(node);
 
     return {
       node: {
@@ -93,6 +97,21 @@ export const PromptNodeService = {
         variables: [...node.variables, variable],
       },
       variable,
+    };
+  },
+
+  seedTextVariable(node: PromptWorkflowNode): {
+    node: PromptWorkflowNode;
+    variable: PromptVariable;
+  } {
+    const result = PromptNodeService.addVariable(node);
+
+    return {
+      node: {
+        ...result.node,
+        prompt: `{{${result.variable.key}}}`,
+      },
+      variable: result.variable,
     };
   },
 };
