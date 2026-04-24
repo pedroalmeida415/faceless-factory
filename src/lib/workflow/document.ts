@@ -16,6 +16,7 @@ import {
 import type {
   AssetNodeFields,
   ImageGeneratorSettings,
+  ListNodeFields,
   LlmGeneratorSettings,
   PromptDisplayMode,
   PromptNodeFields,
@@ -27,8 +28,8 @@ import type {
   WorkflowNodeKind,
 } from "~/lib/workflow/types";
 
-export const WORKFLOW_DOCUMENT_VERSION = 5;
-export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v5";
+export const WORKFLOW_DOCUMENT_VERSION = 6;
+export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v6";
 export const WORKFLOW_GRID_STEP = 5;
 
 export type WorkflowPosition = {
@@ -53,6 +54,11 @@ export type AssetWorkflowNode = WorkflowDocumentNodeBase &
     kind: "asset";
   };
 
+export type ListWorkflowNode = WorkflowDocumentNodeBase &
+  ListNodeFields & {
+    kind: "list";
+  };
+
 export type ImageGeneratorWorkflowNode = WorkflowDocumentNodeBase &
   ImageGeneratorSettings &
   WorkflowGeneratorResult & {
@@ -73,6 +79,7 @@ export type LlmGeneratorWorkflowNode = WorkflowDocumentNodeBase &
 
 export type WorkflowDocumentNode =
   | PromptWorkflowNode
+  | ListWorkflowNode
   | AssetWorkflowNode
   | ImageGeneratorWorkflowNode
   | VideoGeneratorWorkflowNode
@@ -143,6 +150,14 @@ function makeWorkflowNode(
   const label = formatNodeTitle(kind);
 
   switch (kind) {
+    case "list":
+      return {
+        id,
+        kind,
+        label,
+        position,
+        items: [""],
+      };
     case "prompt":
       return {
         id,
@@ -207,6 +222,7 @@ function isNumber(value: unknown): value is number {
 
 function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
   return (
+    value === "list" ||
     value === "prompt" ||
     value === "asset" ||
     value === "imageGenerator" ||
@@ -275,6 +291,15 @@ function asWorkflowAssets(value: unknown) {
     .filter((asset): asset is WorkflowAsset => Boolean(asset));
 }
 
+function asListItems(value: unknown) {
+  return Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const text = isString(entry) ? entry.trim() : "";
+        return text ? [text] : [];
+      })
+    : [];
+}
+
 function asPromptVariables(value: unknown): PromptVariable[] {
   if (!Array.isArray(value)) {
     return [];
@@ -332,6 +357,19 @@ function normalizeWorkflowNode(
     : nextNodePosition(index);
 
   switch (value.kind) {
+    case "list": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as ListWorkflowNode;
+
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        items: asListItems(value.items),
+      };
+    }
     case "prompt": {
       const baseNode = makeWorkflowNode(
         id,

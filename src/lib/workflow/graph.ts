@@ -20,13 +20,21 @@ import {
 } from "~/lib/workflow/node-definitions";
 import { isGeneratorNodeKind, type WorkflowAsset } from "~/lib/workflow/types";
 
-export type RuntimeValue =
-  | { type: "text"; text: string }
-  | {
-      type: "image" | "video";
-      assets: WorkflowAsset[];
-      iterationMode: "static" | "iterator";
-    };
+type RuntimeIterationMode = "static" | "iterator";
+
+export type TextRuntimeValue = {
+  type: "text";
+  values: string[];
+  iterationMode: RuntimeIterationMode;
+};
+
+export type MediaRuntimeValue = {
+  type: "image" | "video";
+  assets: WorkflowAsset[];
+  iterationMode: RuntimeIterationMode;
+};
+
+export type RuntimeValue = TextRuntimeValue | MediaRuntimeValue;
 
 export type WorkflowHandleReference = {
   nodeId: string;
@@ -34,7 +42,6 @@ export type WorkflowHandleReference = {
   handleType: HandleType;
 };
 
-type MediaRuntimeValue = Extract<RuntimeValue, { type: "image" | "video" }>;
 type NodeMap = Map<string, WorkflowDocumentNode>;
 type IncomingByTarget = Map<string, WorkflowDocumentEdge[]>;
 
@@ -44,8 +51,26 @@ type MediaBatchPlan = {
   iterations: number;
 };
 
+type TextBatchPlan = {
+  values: string[];
+  hasIterator: boolean;
+  iterations: number;
+};
+
 export type GeneratorAssetBatchPlan = {
   batches: Record<string, WorkflowAsset[]>[];
+  hasIterator: boolean;
+  iterations: number;
+};
+
+export type GeneratorExecutionBatch = {
+  mediaInputsByHandle: Record<string, WorkflowAsset[]>;
+  prompt: string;
+  systemPrompt: string | null;
+};
+
+export type GeneratorExecutionBatchPlan = {
+  batches: GeneratorExecutionBatch[];
   hasIterator: boolean;
   iterations: number;
 };
@@ -124,6 +149,87 @@ function getPromptVariableKeys(node: PromptWorkflowNode) {
   return new Set(node.variables.map((variable) => variable.key));
 }
 
+function normalizeTextValues(values: readonly string[]) {
+  return values.map((value) => value.trim()).filter(Boolean);
+}
+
+function joinTextValues(values: readonly string[]) {
+  return normalizeTextValues(values).join("\n\n").trim();
+}
+
+function buildStringCombinations(valueGroups: readonly string[][]) {
+  return valueGroups.reduce<string[][]>(
+    (combinations, values) =>
+      combinations.flatMap((combination) =>
+        values.map((value) => [...combination, value]),
+      ),
+    [[]],
+  );
+}
+
+function toTextRuntimeValue(
+  values: readonly string[],
+  hasIterator: boolean,
+): TextRuntimeValue | null {
+  const normalizedValues = normalizeTextValues(values);
+
+  return normalizedValues.length
+    ? {
+        type: "text",
+        values: normalizedValues,
+        iterationMode: hasIterator ? "iterator" : "static",
+      }
+    : null;
+}
+
+export function buildTextBatchPlan(
+  values: readonly TextRuntimeValue[],
+): TextBatchPlan {
+  const staticText = joinTextValues(
+    values.flatMap((value) =>
+      value.iterationMode === "static" ? value.values : [],
+    ),
+  );
+  const iteratorValueGroups = values
+    .filter((value) => value.iterationMode === "iterator")
+    .map((value) => normalizeTextValues(value.values));
+
+  if (!iteratorValueGroups.length) {
+    return {
+      values: staticText ? [staticText] : [],
+      hasIterator: false,
+      iterations: 1,
+    };
+  }
+
+  for (const iteratorValues of iteratorValueGroups) {
+    if (!iteratorValues.length) {
+      throw new Error("Connected text batch is empty.");
+    }
+  }
+
+  const resolvedValues = buildStringCombinations(iteratorValueGroups)
+    .map((combination) => joinTextValues([staticText, ...combination]))
+    .filter(Boolean);
+
+  if (!resolvedValues.length) {
+    throw new Error("Connected text batch is empty.");
+  }
+
+  return {
+    values: resolvedValues,
+    hasIterator: true,
+    iterations: resolvedValues.length,
+  };
+}
+
+export function buildTextRuntimeValue(
+  values: readonly TextRuntimeValue[],
+): TextRuntimeValue | null {
+  const plan = buildTextBatchPlan(values);
+  return toTextRuntimeValue(plan.values, plan.hasIterator);
+}
+
 export function getPromptNodeReferencedVariableKeys(node: PromptWorkflowNode) {
   const variableKeys = getPromptVariableKeys(node);
   const referencedKeys = new Set<string>();
@@ -163,6 +269,63 @@ export function resolvePromptNodeText(
   return resolvedPrompt ? resolvedPrompt : null;
 }
 
+export function resolvePromptNodeTextBatch(
+  node: PromptWorkflowNode,
+  resolveVariableValue: (key: string) => TextRuntimeValue | null,
+): TextRuntimeValue | null {
+  const variableKeys = getPromptVariableKeys(node);
+  const referencedKeys = getPromptNodeReferencedVariableKeys(node);
+  const resolvedByKey = new Map<string, TextRuntimeValue | null>();
+
+  for (const key of referencedKeys) {
+    resolvedByKey.set(key, resolveVariableValue(key));
+  }
+
+  const iteratorEntries = Array.from(resolvedByKey.entries()).flatMap(
+    ([key, value]) =>
+      value?.iterationMode === "iterator"
+        ? [[key, normalizeTextValues(value.values)] as const]
+        : [],
+  );
+
+  for (const [, values] of iteratorEntries) {
+    if (!values.length) {
+      return null;
+    }
+  }
+
+  const staticByKey = new Map(
+    Array.from(resolvedByKey.entries()).flatMap(([key, value]) =>
+      value?.iterationMode === "static"
+        ? [[key, joinTextValues(value.values)] as const]
+        : [],
+    ),
+  );
+  const combinations = iteratorEntries.length
+    ? buildStringCombinations(iteratorEntries.map(([, values]) => values))
+    : [[]];
+  const resolvedPrompts = combinations.flatMap((combination) => {
+    const iteratorValueByKey = new Map(
+      iteratorEntries.map(([key], index) => [key, combination[index] ?? ""]),
+    );
+    const prompt = node.prompt.replace(
+      PROMPT_VARIABLE_PATTERN,
+      (match, key) => {
+        if (!variableKeys.has(key)) {
+          return match;
+        }
+
+        return iteratorValueByKey.get(key) ?? staticByKey.get(key) ?? "";
+      },
+    );
+    const resolvedPrompt = prompt.trim();
+
+    return resolvedPrompt ? [resolvedPrompt] : [];
+  });
+
+  return toTextRuntimeValue(resolvedPrompts, iteratorEntries.length > 0);
+}
+
 function resolveTextHandleValue(
   document: WorkflowDocument,
   nodeMap: NodeMap,
@@ -170,8 +333,8 @@ function resolveTextHandleValue(
   targetId: string,
   handleId: string,
   path: ReadonlySet<string>,
-): string | null {
-  const textParts = getIncomingEdgesForHandle(
+): TextRuntimeValue | null {
+  const textValues = getIncomingEdgesForHandle(
     incomingByTarget,
     targetId,
     handleId,
@@ -184,12 +347,10 @@ function resolveTextHandleValue(
       incomingByTarget,
     );
 
-    return runtimeValue?.type === "text" && runtimeValue.text.trim()
-      ? [runtimeValue.text.trim()]
-      : [];
+    return runtimeValue?.type === "text" ? [runtimeValue] : [];
   });
 
-  return textParts.length ? textParts.join("\n\n") : null;
+  return buildTextRuntimeValue(textValues);
 }
 
 function resolveRuntimePromptNodeText(
@@ -198,8 +359,8 @@ function resolveRuntimePromptNodeText(
   path: ReadonlySet<string>,
   nodeMap: NodeMap,
   incomingByTarget: IncomingByTarget,
-): string | null {
-  return resolvePromptNodeText(node, (key) =>
+): TextRuntimeValue | null {
+  return resolvePromptNodeTextBatch(node, (key) =>
     resolveTextHandleValue(
       document,
       nodeMap,
@@ -342,6 +503,8 @@ function getNodeOutputValueType(
   const normalizedHandleId = handleId ?? getNodeOutputHandleId(node.kind);
 
   switch (node.kind) {
+    case "list":
+      return normalizedHandleId === "text" ? "text" : null;
     case "prompt":
       return normalizedHandleId === "text" ? "text" : null;
     case "asset":
@@ -372,7 +535,7 @@ function getNodeInputValueType(
       : null;
   }
 
-  if (!isGeneratorNodeKind(node.kind)) {
+  if (node.kind === "list" || !isGeneratorNodeKind(node.kind)) {
     return null;
   }
 
@@ -403,8 +566,13 @@ export function getWorkflowNodeRuntimeValue(
   nextPath.add(nodeId);
 
   switch (node.kind) {
+    case "list":
+      return toTextRuntimeValue(
+        node.items,
+        normalizeTextValues(node.items).length > 1,
+      );
     case "prompt": {
-      const text = resolveRuntimePromptNodeText(
+      const textValue = resolveRuntimePromptNodeText(
         document,
         node,
         nextPath,
@@ -412,12 +580,7 @@ export function getWorkflowNodeRuntimeValue(
         incomingByTarget,
       );
 
-      return text
-        ? {
-            type: "text",
-            text,
-          }
-        : null;
+      return textValue;
     }
     case "asset":
       return node.assetKind && node.assets.length
@@ -445,10 +608,7 @@ export function getWorkflowNodeRuntimeValue(
         : null;
     case "llmGenerator":
       return node.responseText?.trim()
-        ? {
-            type: "text",
-            text: node.responseText.trim(),
-          }
+        ? toTextRuntimeValue([node.responseText], false)
         : null;
   }
 }
@@ -537,6 +697,34 @@ export function buildGeneratorAssetBatchPlan(
   };
 }
 
+export function buildGeneratorExecutionBatchPlan(params: {
+  mediaPlan: GeneratorAssetBatchPlan;
+  prompt: TextRuntimeValue;
+  systemPrompt?: TextRuntimeValue | null;
+}): GeneratorExecutionBatchPlan {
+  const systemPromptValues = params.systemPrompt?.values.length
+    ? params.systemPrompt.values
+    : [null];
+  const batches = params.prompt.values.flatMap((prompt) =>
+    systemPromptValues.flatMap((systemPrompt) =>
+      params.mediaPlan.batches.map((mediaInputsByHandle) => ({
+        mediaInputsByHandle,
+        prompt,
+        systemPrompt,
+      })),
+    ),
+  );
+
+  return {
+    batches,
+    hasIterator:
+      params.prompt.iterationMode === "iterator" ||
+      params.systemPrompt?.iterationMode === "iterator" ||
+      params.mediaPlan.hasIterator,
+    iterations: batches.length,
+  };
+}
+
 export function getGeneratorIterationPreview(
   document: WorkflowDocument,
   targetId: string,
@@ -552,21 +740,30 @@ export function getGeneratorIterationPreview(
   }
 
   const incomingByTarget = buildIncomingByTarget(document.edges);
-  const imageHandles = getGeneratorHandleDefinitions(
+  const iterationCounts = getGeneratorHandleDefinitions(
     targetNode,
     document.edges,
-  ).filter((handle) => handle.valueType === "image");
-  const iterationCounts = imageHandles.flatMap((handle) =>
+  ).flatMap((handle) =>
     getIncomingEdgesForHandle(incomingByTarget, targetId, handle.id).flatMap(
       (edge) => {
         const sourceNode = nodeMap.get(edge.source);
         const runtimeValue = sourceNode
           ? getWorkflowNodeRuntimeValue(document, sourceNode.id)
           : null;
-        return runtimeValue?.type === "image" &&
-          runtimeValue.iterationMode === "iterator"
-          ? [runtimeValue.assets.length]
-          : [];
+
+        if (
+          !runtimeValue ||
+          runtimeValue.type !== handle.valueType ||
+          runtimeValue.iterationMode !== "iterator"
+        ) {
+          return [];
+        }
+
+        return [
+          runtimeValue.type === "text"
+            ? runtimeValue.values.length
+            : runtimeValue.assets.length,
+        ];
       },
     ),
   );
@@ -759,7 +956,7 @@ export function getPromptVariableValue(
   const nodeMap = toNodeMap(document);
   const incomingByTarget = buildIncomingByTarget(document.edges);
 
-  return resolveTextHandleValue(
+  const value = resolveTextHandleValue(
     document,
     nodeMap,
     incomingByTarget,
@@ -767,4 +964,6 @@ export function getPromptVariableValue(
     handleId,
     new Set([targetId]),
   );
+
+  return value ? value.values.join("\n\n") : null;
 }

@@ -104,6 +104,14 @@ function toWorkflowNodeData(
   const error = runtimeState?.error ?? null;
 
   switch (node.kind) {
+    case "list":
+      return {
+        kind: node.kind,
+        label: node.label,
+        status,
+        error,
+        items: node.items,
+      };
     case "prompt":
       return {
         kind: node.kind,
@@ -262,6 +270,10 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       isSamePromptVariables(left.variables, right.variables) &&
       isSamePromptInputs(left.inputs, right.inputs)
     );
+  }
+
+  if (left.kind === "list") {
+    return right.kind === "list" && left.items === right.items;
   }
 
   if (left.kind === "asset") {

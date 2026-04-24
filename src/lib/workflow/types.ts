@@ -38,6 +38,7 @@ export type AssetKind = "image" | "video";
 export type AssetSource = "upload" | "generated";
 export type WorkflowNodeStatus = "idle" | "running" | "success" | "error";
 export type WorkflowNodeKind =
+  | "list"
   | "prompt"
   | "asset"
   | "imageGenerator"
@@ -91,6 +92,10 @@ export type PromptNodeFields = {
   variables: PromptVariable[];
 };
 
+export type ListNodeFields = {
+  items: string[];
+};
+
 export type AssetNodeFields = {
   assetKind: AssetKind | null;
   assets: WorkflowAsset[];
@@ -135,6 +140,11 @@ export type PromptNodeData = BaseNodeData & {
   inputs: PromptInputHandle[];
 };
 
+export type ListNodeData = BaseNodeData &
+  ListNodeFields & {
+    kind: "list";
+  };
+
 export type AssetNodeData = BaseNodeData &
   AssetNodeFields & {
     kind: "asset";
@@ -160,6 +170,7 @@ export type LlmGeneratorNodeData = BaseNodeData &
 
 export type WorkflowNodeData =
   | PromptNodeData
+  | ListNodeData
   | AssetNodeData
   | ImageGeneratorNodeData
   | VideoGeneratorNodeData

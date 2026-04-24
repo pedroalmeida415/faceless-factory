@@ -18,6 +18,7 @@ import { useWorkflowStudioStore } from "./store";
 export function useWorkflowStudioController() {
   const utils = api.useUtils();
   const projectId = useWorkflowStudioStore((state) => state.projectId);
+  const setListItems = useWorkflowStudioStore((state) => state.setListItems);
   const setPrompt = useWorkflowStudioStore((state) => state.setPrompt);
   const setPromptDisplayMode = useWorkflowStudioStore(
     (state) => state.setPromptDisplayMode,
@@ -77,6 +78,7 @@ export function useWorkflowStudioController() {
 
   const contextValue = useMemo<StudioContextValue>(
     () => ({
+      setListItems,
       setPrompt,
       setPromptDisplayMode,
       addPromptVariable,
@@ -105,6 +107,7 @@ export function useWorkflowStudioController() {
       setLlmGeneratorConfigValue,
       setPrompt,
       setPromptDisplayMode,
+      setListItems,
       setVideoGeneratorConfigValue,
       setVideoGeneratorMode,
       setVideoGeneratorModel,

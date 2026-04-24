@@ -10,6 +10,7 @@ import type {
 import type { GeneratorIterationInfo } from "./graph";
 
 export type StudioContextValue = {
+  setListItems: (nodeId: string, items: string[]) => void;
   setPrompt: (nodeId: string, prompt: string) => void;
   setPromptDisplayMode: (
     nodeId: string,

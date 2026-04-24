@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect } from "react";
+import { memo, useEffect, useRef } from "react";
 import { type NodeProps, useUpdateNodeInternals } from "reactflow";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardContent } from "~/components/ui/card";
@@ -31,6 +31,7 @@ import type {
   AssetNodeData,
   GeneratorConfigValue,
   ImageGeneratorNodeData,
+  ListNodeData,
   LlmGeneratorNodeData,
   PromptNodeData,
   VideoGeneratorNodeData,
@@ -74,6 +75,155 @@ function formatNumericValue(value: number, step?: number) {
   }
 
   return String(value);
+}
+
+function updateListItem(items: string[], index: number, value: string) {
+  return items.map((item, itemIndex) => (itemIndex === index ? value : item));
+}
+
+function insertListItem(items: string[], index = items.length) {
+  return [...items.slice(0, index), "", ...items.slice(index)];
+}
+
+function removeListItem(items: string[], index: number) {
+  const nextItems = items.filter((_, itemIndex) => itemIndex !== index);
+  return nextItems.length ? nextItems : [""];
+}
+
+export function ListItemsEditor({
+  items,
+  onItemsChange,
+  nodeId,
+}: {
+  items: string[];
+  onItemsChange: (items: string[]) => void;
+  nodeId: string;
+}) {
+  const editableItems = items.length ? items : [""];
+  const inputRefs = useRef(new Map<string, HTMLInputElement>());
+  const nextRowKey = useRef(0);
+  const pendingFocusTarget = useRef<{ index: number; key: string } | null>(
+    null,
+  );
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const rowKeys = useRef<string[]>([]);
+
+  const createRowKey = () => `${nodeId}:${nextRowKey.current++}`;
+  const getRowKey = (index: number) => {
+    const rowKey = rowKeys.current[index] ?? createRowKey();
+    rowKeys.current[index] = rowKey;
+    return rowKey;
+  };
+
+  if (rowKeys.current.length < editableItems.length) {
+    rowKeys.current.push(
+      ...Array.from(
+        { length: editableItems.length - rowKeys.current.length },
+        createRowKey,
+      ),
+    );
+  } else if (rowKeys.current.length > editableItems.length) {
+    rowKeys.current = rowKeys.current.slice(0, editableItems.length);
+  }
+
+  useEffect(() => {
+    const target = pendingFocusTarget.current;
+    if (!target) {
+      return;
+    }
+
+    const focusTarget = () => {
+      const input =
+        inputRefs.current.get(target.key) ??
+        rootRef.current?.querySelector<HTMLInputElement>(
+          `[data-list-input-index="${target.index}"]`,
+        );
+
+      input?.focus({ preventScroll: true });
+      pendingFocusTarget.current = null;
+    };
+
+    const timeoutId = window.setTimeout(focusTarget, 0);
+    const frameId = window.requestAnimationFrame(focusTarget);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.cancelAnimationFrame(frameId);
+    };
+  });
+
+  const insertAndFocus = (index: number) => {
+    const rowKey = createRowKey();
+    rowKeys.current.splice(index, 0, rowKey);
+    pendingFocusTarget.current = { index, key: rowKey };
+    onItemsChange(insertListItem(editableItems, index));
+  };
+
+  const removeItem = (index: number) => {
+    inputRefs.current.delete(rowKeys.current[index] ?? "");
+    rowKeys.current.splice(index, 1);
+    onItemsChange(removeListItem(editableItems, index));
+  };
+
+  return (
+    <div className="nodrag nopan nowheel space-y-3" ref={rootRef}>
+      <NodeFieldCard label="Items">
+        <div className="space-y-2">
+          {editableItems.map((item, index) => {
+            const rowKey = getRowKey(index);
+
+            return (
+              <div className="flex gap-2" key={rowKey}>
+                <Input
+                  nativeInput
+                  className="nodrag nopan nowheel"
+                  data-list-input-key={rowKey}
+                  data-list-input-index={index}
+                  data-list-node-id={nodeId}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) =>
+                    onItemsChange(
+                      updateListItem(editableItems, index, event.target.value),
+                    )
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      insertAndFocus(index + 1);
+                    }
+                  }}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  placeholder={`Item ${index + 1}`}
+                  ref={(input) => {
+                    if (input) {
+                      inputRefs.current.set(rowKey, input);
+                    } else {
+                      inputRefs.current.delete(rowKey);
+                    }
+                  }}
+                  value={item}
+                />
+                {editableItems.length > 1 ? (
+                  <ShellButton
+                    aria-label={`Remove item ${index + 1}`}
+                    className="shrink-0"
+                    onClick={() => removeItem(index)}
+                  >
+                    Remove
+                  </ShellButton>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </NodeFieldCard>
+      <ShellButton onClick={() => insertAndFocus(editableItems.length)}>
+        Add another item
+      </ShellButton>
+    </div>
+  );
 }
 
 function isSameNodeRender<T extends WorkflowNodeData>(
@@ -179,6 +329,46 @@ const PromptNode = memo(function PromptNode({
         value={data.prompt}
         variables={data.variables}
       />
+    </NodeShell>
+  );
+}, isSameNodeRender);
+
+const ListNode = memo(function ListNode({
+  id,
+  data,
+  selected,
+}: NodeProps<ListNodeData>) {
+  const { setListItems } = useStudioContext();
+  const items = data.items.length ? data.items : [""];
+  const filledItemCount = items.filter((item) => item.trim()).length;
+
+  return (
+    <NodeShell
+      data={data}
+      headerDetail={
+        filledItemCount > 1 ? (
+          <Badge
+            className="border-primary/20 bg-primary/10 text-primary"
+            variant="outline"
+          >
+            Iterator
+          </Badge>
+        ) : null
+      }
+      id={id}
+      output={{ id: "text", label: "Text", color: "#f59e0b" }}
+      selected={selected}
+    >
+      <ListItemsEditor
+        items={items}
+        nodeId={id}
+        onItemsChange={(nextItems) => setListItems(id, nextItems)}
+      />
+      {filledItemCount > 1 ? (
+        <NodeNotice tone="accent">
+          {`${filledItemCount} iterations.`}
+        </NodeNotice>
+      ) : null}
     </NodeShell>
   );
 }, isSameNodeRender);
@@ -572,6 +762,7 @@ const LlmGeneratorNode = memo(function LlmGeneratorNode({
 }, isSameNodeRender);
 
 export const nodeTypes = {
+  list: ListNode,
   prompt: PromptNode,
   asset: AssetNode,
   imageGenerator: ImageGeneratorNode,

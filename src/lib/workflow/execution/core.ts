@@ -13,7 +13,7 @@ import {
 } from "~/lib/workflow/errors";
 import {
   coerceMediaInputBatches,
-  coerceTextInput,
+  coerceTextInputBatch,
 } from "~/lib/workflow/execution/input-coercion";
 import {
   buildWorkflowExecutionStatusResponse,
@@ -36,11 +36,14 @@ import {
   getVideoGeneratorModelCreditCost,
 } from "~/lib/workflow/generator-models";
 import {
+  buildGeneratorExecutionBatchPlan,
   buildIncomingByTarget,
+  buildTextRuntimeValue,
   getIncomingEdgesForHandle,
   getPromptNodeReferencedVariableKeys,
   type RuntimeValue,
-  resolvePromptNodeText,
+  resolvePromptNodeTextBatch,
+  type TextRuntimeValue,
 } from "~/lib/workflow/graph";
 import {
   buildLlmGenerationRequest,
@@ -81,6 +84,16 @@ function formatRunningActivity(
     : `Running ${label}...`;
 }
 
+function formatExecutedText(values: ReadonlyArray<string | null>) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ).join("\n\n");
+}
+
 function cloneExecutionResponse(
   response: WorkflowExecutionStatusResponse,
 ): WorkflowExecutionStatusResponse {
@@ -89,7 +102,7 @@ function cloneExecutionResponse(
   ) as WorkflowExecutionStatusResponse;
 }
 
-function evaluatePromptNodeText(
+function evaluatePromptNodeTextBatch(
   node: PromptWorkflowNode,
   path: ReadonlySet<string>,
   incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
@@ -111,13 +124,11 @@ function evaluatePromptNodeText(
 
             return [
               key,
-              values
-                .flatMap((value) =>
-                  value.type === "text" && value.text.trim()
-                    ? [value.text.trim()]
-                    : [],
-                )
-                .join("\n\n"),
+              buildTextRuntimeValue(
+                values.flatMap((value) =>
+                  value.type === "text" ? [value] : [],
+                ),
+              ),
             ] as const;
           }),
         {
@@ -126,7 +137,7 @@ function evaluatePromptNodeText(
       ),
     );
 
-    return resolvePromptNodeText(
+    return resolvePromptNodeTextBatch(
       node,
       (key) => resolvedVariables.get(key) ?? null,
     );
@@ -230,16 +241,40 @@ export function executeWorkflow(params: {
     evaluateNode: EvaluateNode,
   ): Effect.Effect<RuntimeValue, ExecutionError> => {
     switch (node.kind) {
+      case "list":
+        return Effect.gen(function* () {
+          const textValues = node.items
+            .map((value) => value.trim())
+            .filter(Boolean);
+          const textValue = buildTextRuntimeValue([
+            {
+              type: "text",
+              values: textValues,
+              iterationMode: textValues.length > 1 ? "iterator" : "static",
+            },
+          ]);
+
+          if (!textValue) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "List node is empty.",
+              }),
+            );
+          }
+
+          yield* setNodeRuntime(currentId, "success", null);
+          return textValue satisfies RuntimeValue;
+        });
       case "prompt":
         return Effect.gen(function* () {
-          const text = yield* evaluatePromptNodeText(
+          const textValue = yield* evaluatePromptNodeTextBatch(
             node,
             nextPath,
             incomingByTarget,
             evaluateNode,
           );
 
-          if (!text) {
+          if (!textValue) {
             return yield* Effect.fail(
               new WorkflowValidationError({
                 message: "Prompt node is empty.",
@@ -248,10 +283,7 @@ export function executeWorkflow(params: {
           }
 
           yield* setNodeRuntime(currentId, "success", null);
-          return {
-            type: "text",
-            text,
-          } satisfies RuntimeValue;
+          return textValue satisfies RuntimeValue;
         });
       case "asset":
         return Effect.gen(function* () {
@@ -274,7 +306,7 @@ export function executeWorkflow(params: {
         return Effect.gen(function* () {
           yield* setNodeRuntime(currentId, "running", null);
 
-          const prompt = (yield* coerceTextInput(
+          const prompt = (yield* coerceTextInputBatch(
             state.document,
             nextPath,
             currentId,
@@ -285,8 +317,8 @@ export function executeWorkflow(params: {
             },
             incomingByTarget,
             evaluateNode,
-          )) as string;
-          const batchPlan = yield* coerceMediaInputBatches(
+          )) as TextRuntimeValue;
+          const mediaPlan = yield* coerceMediaInputBatches(
             state.document,
             nextPath,
             currentId,
@@ -294,6 +326,10 @@ export function executeWorkflow(params: {
             incomingByTarget,
             evaluateNode,
           );
+          const batchPlan = buildGeneratorExecutionBatchPlan({
+            mediaPlan,
+            prompt,
+          });
 
           yield* setActivity(
             formatRunningActivity(
@@ -305,12 +341,12 @@ export function executeWorkflow(params: {
 
           const responses = yield* Effect.forEach(
             batchPlan.batches,
-            (imageInputsByHandle) =>
+            (batch) =>
               params.ports.generateImage(
                 buildImageGenerationRequest({
                   settings: node,
-                  imageInputsByHandle,
-                  prompt,
+                  imageInputsByHandle: batch.mediaInputsByHandle,
+                  prompt: batch.prompt,
                 }),
               ),
             { concurrency: "unbounded" },
@@ -330,7 +366,9 @@ export function executeWorkflow(params: {
           yield* updateDocumentNode(currentId, (currentNode) =>
             currentNode.kind === "imageGenerator"
               ? ImageGeneratorService.setExecutionResult(currentNode, {
-                  lastPrompt: prompt,
+                  lastPrompt: formatExecutedText(
+                    batchPlan.batches.map((batch) => batch.prompt),
+                  ),
                   responseText,
                   outputAssets,
                 })
@@ -348,7 +386,7 @@ export function executeWorkflow(params: {
         return Effect.gen(function* () {
           yield* setNodeRuntime(currentId, "running", null);
 
-          const prompt = (yield* coerceTextInput(
+          const prompt = (yield* coerceTextInputBatch(
             state.document,
             nextPath,
             currentId,
@@ -359,8 +397,8 @@ export function executeWorkflow(params: {
             },
             incomingByTarget,
             evaluateNode,
-          )) as string;
-          const batchPlan = yield* coerceMediaInputBatches(
+          )) as TextRuntimeValue;
+          const mediaPlan = yield* coerceMediaInputBatches(
             state.document,
             nextPath,
             currentId,
@@ -368,6 +406,10 @@ export function executeWorkflow(params: {
             incomingByTarget,
             evaluateNode,
           );
+          const batchPlan = buildGeneratorExecutionBatchPlan({
+            mediaPlan,
+            prompt,
+          });
 
           yield* setActivity(
             formatRunningActivity(
@@ -379,12 +421,12 @@ export function executeWorkflow(params: {
 
           const responses = yield* Effect.forEach(
             batchPlan.batches,
-            (imageInputsByHandle) =>
+            (batch) =>
               params.ports.generateVideo(
                 buildVideoGenerationRequest({
                   settings: node,
-                  imageInputsByHandle,
-                  prompt,
+                  imageInputsByHandle: batch.mediaInputsByHandle,
+                  prompt: batch.prompt,
                 }),
               ),
             { concurrency: "unbounded" },
@@ -398,7 +440,9 @@ export function executeWorkflow(params: {
           yield* updateDocumentNode(currentId, (currentNode) =>
             currentNode.kind === "videoGenerator"
               ? VideoGeneratorService.setExecutionResult(currentNode, {
-                  lastPrompt: prompt,
+                  lastPrompt: formatExecutedText(
+                    batchPlan.batches.map((batch) => batch.prompt),
+                  ),
                   responseText: null,
                   outputAssets,
                 })
@@ -416,7 +460,7 @@ export function executeWorkflow(params: {
         return Effect.gen(function* () {
           yield* setNodeRuntime(currentId, "running", null);
 
-          const prompt = (yield* coerceTextInput(
+          const prompt = (yield* coerceTextInputBatch(
             state.document,
             nextPath,
             currentId,
@@ -427,8 +471,8 @@ export function executeWorkflow(params: {
             },
             incomingByTarget,
             evaluateNode,
-          )) as string;
-          const systemPrompt = yield* coerceTextInput(
+          )) as TextRuntimeValue;
+          const systemPrompt = yield* coerceTextInputBatch(
             state.document,
             nextPath,
             currentId,
@@ -440,7 +484,7 @@ export function executeWorkflow(params: {
             incomingByTarget,
             evaluateNode,
           );
-          const batchPlan = yield* coerceMediaInputBatches(
+          const mediaPlan = yield* coerceMediaInputBatches(
             state.document,
             nextPath,
             currentId,
@@ -448,6 +492,11 @@ export function executeWorkflow(params: {
             incomingByTarget,
             evaluateNode,
           );
+          const batchPlan = buildGeneratorExecutionBatchPlan({
+            mediaPlan,
+            prompt,
+            systemPrompt,
+          });
 
           yield* setActivity(
             formatRunningActivity(
@@ -459,13 +508,13 @@ export function executeWorkflow(params: {
 
           const responses = yield* Effect.forEach(
             batchPlan.batches,
-            (imageInputsByHandle) =>
+            (batch) =>
               params.ports.generateLlm(
                 buildLlmGenerationRequest({
-                  imageInputsByHandle,
-                  prompt,
+                  imageInputsByHandle: batch.mediaInputsByHandle,
+                  prompt: batch.prompt,
                   settings: node,
-                  systemPrompt,
+                  systemPrompt: batch.systemPrompt,
                 }),
               ),
             { concurrency: "unbounded" },
@@ -489,8 +538,12 @@ export function executeWorkflow(params: {
           yield* updateDocumentNode(currentId, (currentNode) =>
             currentNode.kind === "llmGenerator"
               ? LlmGeneratorService.setExecutionResult(currentNode, {
-                  lastPrompt: prompt,
-                  lastSystemPrompt: systemPrompt ?? "",
+                  lastPrompt: formatExecutedText(
+                    batchPlan.batches.map((batch) => batch.prompt),
+                  ),
+                  lastSystemPrompt: formatExecutedText(
+                    batchPlan.batches.map((batch) => batch.systemPrompt),
+                  ),
                   responseText: responseText || null,
                 })
               : currentNode,
@@ -499,7 +552,8 @@ export function executeWorkflow(params: {
 
           return {
             type: "text",
-            text: responseText,
+            values: responseText ? [responseText] : [],
+            iterationMode: "static",
           } satisfies RuntimeValue;
         });
     }

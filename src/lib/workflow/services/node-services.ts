@@ -1,5 +1,6 @@
 import type {
   ImageGeneratorWorkflowNode,
+  ListWorkflowNode,
   LlmGeneratorWorkflowNode,
   PromptWorkflowNode,
   VideoGeneratorWorkflowNode,
@@ -112,6 +113,15 @@ export const PromptNodeService = {
         prompt: `{{${result.variable.key}}}`,
       },
       variable: result.variable,
+    };
+  },
+};
+
+export const ListNodeService = {
+  setItems(node: ListWorkflowNode, items: string[]): ListWorkflowNode {
+    return {
+      ...node,
+      items,
     };
   },
 };

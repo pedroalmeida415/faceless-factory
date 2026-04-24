@@ -8,6 +8,7 @@ import {
 import type { WorkflowExecutionPortError } from "~/lib/workflow/execution/types";
 import {
   buildGeneratorAssetBatchPlan,
+  buildTextRuntimeValue,
   getGeneratorInputHandles,
   getIncomingEdgesForHandle,
   type RuntimeValue,
@@ -54,7 +55,7 @@ function getInputValues(
   );
 }
 
-export function coerceTextInput(
+export function coerceTextInputBatch(
   document: WorkflowDocument,
   path: ReadonlySet<string>,
   targetId: string,
@@ -82,13 +83,20 @@ export function coerceTextInput(
       incomingByTarget,
       evaluateNode,
     );
-    const text = values
-      .flatMap((value) =>
-        value.type === "text" && value.text.trim() ? [value.text.trim()] : [],
-      )
-      .join("\n\n");
+    const textValue = yield* Effect.try({
+      try: () =>
+        buildTextRuntimeValue(
+          values.flatMap((value) => (value.type === "text" ? [value] : [])),
+        ),
+      catch: (cause) =>
+        new WorkflowValidationError({
+          message:
+            cause instanceof Error ? cause.message : "Invalid text batch.",
+          cause,
+        }),
+    });
 
-    if (!text) {
+    if (!textValue) {
       if (!params.required) {
         return null;
       }
@@ -100,7 +108,7 @@ export function coerceTextInput(
       );
     }
 
-    return text;
+    return textValue;
   });
 }
 

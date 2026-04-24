@@ -21,6 +21,7 @@ import { Textarea } from "~/components/ui/textarea";
 import type {
   AssetWorkflowNode,
   ImageGeneratorWorkflowNode,
+  ListWorkflowNode,
   LlmGeneratorWorkflowNode,
   PromptWorkflowNode,
   VideoGeneratorWorkflowNode,
@@ -40,6 +41,7 @@ import {
 } from "~/lib/workflow/llm-models";
 import {
   GeneratorControlGrid,
+  ListItemsEditor,
   WorkflowExecutionEstimateWarning,
 } from "./nodes";
 import { NodeFieldCard, ShellButton } from "./shared";
@@ -64,6 +66,11 @@ function getSelectedNode(nodeIds: string[], nodes: WorkflowDocumentNode[]) {
 
 function getDrawerHeading(node: WorkflowDocumentNode) {
   switch (node.kind) {
+    case "list":
+      return {
+        description: "Manage literal text list items for this workflow branch.",
+        title: "List",
+      } as const;
     case "prompt":
       return {
         description: "Write the upstream text payload used by generators.",
@@ -90,6 +97,27 @@ function getDrawerHeading(node: WorkflowDocumentNode) {
         title: "Run Any LLM",
       } as const;
   }
+}
+
+function ListConfigPanel({ node }: { node: ListWorkflowNode }) {
+  const setListItems = useWorkflowStudioStore((state) => state.setListItems);
+  const items = node.items.length ? node.items : [""];
+  const filledItemCount = items.filter((item) => item.trim()).length;
+
+  return (
+    <div className="space-y-3">
+      <ListItemsEditor
+        items={items}
+        nodeId={node.id}
+        onItemsChange={(nextItems) => setListItems(node.id, nextItems)}
+      />
+      <NodeFieldCard label="Iteration">
+        <p className="text-sm">
+          {filledItemCount > 1 ? `${filledItemCount} iterations` : "Static"}
+        </p>
+      </NodeFieldCard>
+    </div>
+  );
 }
 
 function PromptConfigPanel({ node }: { node: PromptWorkflowNode }) {
@@ -322,6 +350,8 @@ function LlmGeneratorConfigPanel({ node }: { node: LlmGeneratorWorkflowNode }) {
 
 function NodeConfigPanel({ node }: { node: WorkflowDocumentNode }) {
   switch (node.kind) {
+    case "list":
+      return <ListConfigPanel node={node} />;
     case "prompt":
       return <PromptConfigPanel node={node} />;
     case "asset":
@@ -344,6 +374,8 @@ function isSameNodeConfig(
   }
 
   switch (left.kind) {
+    case "list":
+      return right.kind === "list" && left.items === right.items;
     case "prompt":
       return (
         right.kind === "prompt" &&

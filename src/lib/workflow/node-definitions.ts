@@ -17,6 +17,8 @@ export type HandleDefinition = {
 
 export function formatNodeTitle(kind: WorkflowNodeKind) {
   switch (kind) {
+    case "list":
+      return "List";
     case "prompt":
       return "Prompt";
     case "asset":
@@ -32,6 +34,8 @@ export function formatNodeTitle(kind: WorkflowNodeKind) {
 
 export function getNodeOutputHandleId(kind: WorkflowNodeKind) {
   switch (kind) {
+    case "list":
+      return "text";
     case "prompt":
       return "text";
     case "asset":

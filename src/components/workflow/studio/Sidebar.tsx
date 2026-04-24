@@ -105,7 +105,8 @@ const NODE_ACTIONS: Array<{
   label: string;
   icon: React.ComponentType<{ className?: string }>;
 }> = [
-  { kind: "prompt", label: "Text", icon: TextIcon },
+  { kind: "list", label: "List", icon: TextIcon },
+  { kind: "prompt", label: "Prompt", icon: TextIcon },
   { kind: "asset", label: "Asset", icon: RiImageLine },
   { kind: "llmGenerator", label: "Run any LLM", icon: LlmIcon },
   { kind: "videoGenerator", label: "Video generator", icon: RiVideoAiLine },

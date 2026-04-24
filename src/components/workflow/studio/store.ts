@@ -28,6 +28,7 @@ import type { WorkflowValueType } from "~/lib/workflow/node-definitions";
 import type { WorkflowProject } from "~/lib/workflow/project";
 import {
   ImageGeneratorService,
+  ListNodeService,
   LlmGeneratorService,
   PromptNodeService,
   VideoGeneratorService,
@@ -452,6 +453,7 @@ type WorkflowStudioState = {
     nodeId: string,
     updater: (node: WorkflowDocumentNode) => WorkflowDocumentNode,
   ) => void;
+  setListItems: (nodeId: string, items: string[]) => void;
   setPrompt: (nodeId: string, prompt: string) => void;
   setPromptDisplayMode: (
     nodeId: string,
@@ -693,6 +695,12 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           }),
         );
       });
+    },
+
+    setListItems: (nodeId, items) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "list" ? ListNodeService.setItems(node, items) : node,
+      );
     },
 
     setPrompt: (nodeId, prompt) => {
