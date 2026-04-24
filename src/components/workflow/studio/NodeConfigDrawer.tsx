@@ -1,7 +1,7 @@
 "use client";
 
 import { RiCloseLine } from "@remixicon/react";
-import { memo } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   Drawer,
   DrawerClose,
@@ -50,6 +50,119 @@ import { useWorkflowExecutionQuote } from "./useWorkflowExecutionQuote";
 
 function formatCredits(value: number) {
   return `${value} credit${value === 1 ? "" : "s"}`;
+}
+
+const TEXT_INPUT_COMMIT_DELAY_MS = 150;
+
+function useBufferedTextInput(
+  value: string,
+  onCommit: (value: string) => void,
+) {
+  const [draftValue, setDraftValue] = useState(value);
+  const commitTimerRef = useRef<number | null>(null);
+  const focusedRef = useRef(false);
+  const lastValueRef = useRef(value);
+  const onCommitRef = useRef(onCommit);
+  const pendingValueRef = useRef<string | null>(null);
+  // Stale store updates can arrive before the committed draft echoes back.
+  const pendingPropValueRef = useRef<string | null>(null);
+
+  onCommitRef.current = onCommit;
+
+  const clearCommitTimer = useCallback(() => {
+    if (commitTimerRef.current === null) {
+      return;
+    }
+
+    window.clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = null;
+  }, []);
+
+  const flushValue = useCallback(() => {
+    const pendingValue = pendingValueRef.current;
+    if (pendingValue === null) {
+      return;
+    }
+
+    pendingValueRef.current = null;
+    clearCommitTimer();
+
+    if (pendingValue === lastValueRef.current) {
+      pendingPropValueRef.current = null;
+      return;
+    }
+
+    pendingPropValueRef.current = pendingValue;
+    onCommitRef.current(pendingValue);
+  }, [clearCommitTimer]);
+
+  const setValue = useCallback(
+    (nextValue: string) => {
+      setDraftValue(nextValue);
+      clearCommitTimer();
+
+      if (nextValue === lastValueRef.current) {
+        pendingValueRef.current = null;
+        pendingPropValueRef.current = null;
+        return;
+      }
+
+      pendingValueRef.current = nextValue;
+      pendingPropValueRef.current = nextValue;
+      if (focusedRef.current) {
+        return;
+      }
+
+      commitTimerRef.current = window.setTimeout(
+        flushValue,
+        TEXT_INPUT_COMMIT_DELAY_MS,
+      );
+    },
+    [clearCommitTimer, flushValue],
+  );
+
+  useEffect(() => {
+    if (value === lastValueRef.current) {
+      return;
+    }
+
+    lastValueRef.current = value;
+
+    if (pendingValueRef.current === value) {
+      pendingValueRef.current = null;
+      pendingPropValueRef.current = null;
+      clearCommitTimer();
+      return;
+    }
+
+    if (pendingPropValueRef.current === value) {
+      pendingPropValueRef.current = null;
+      return;
+    }
+
+    if (
+      pendingValueRef.current !== null ||
+      pendingPropValueRef.current !== null
+    ) {
+      return;
+    }
+
+    setDraftValue(value);
+  }, [clearCommitTimer, value]);
+
+  useEffect(() => () => flushValue(), [flushValue]);
+
+  const handleFocus = useCallback(() => {
+    focusedRef.current = true;
+    clearCommitTimer();
+  }, [clearCommitTimer]);
+
+  const handleBlur = useCallback(() => {
+    focusedRef.current = false;
+    flushValue();
+  }, [flushValue]);
+
+  return [draftValue, setValue, handleFocus, handleBlur] as const;
 }
 
 function getSelectedNode(nodeIds: string[], nodes: WorkflowDocumentNode[]) {
@@ -122,14 +235,22 @@ function ListConfigPanel({ node }: { node: ListWorkflowNode }) {
 
 function PromptConfigPanel({ node }: { node: PromptWorkflowNode }) {
   const setPrompt = useWorkflowStudioStore((state) => state.setPrompt);
+  const commitPrompt = useCallback(
+    (prompt: string) => setPrompt(node.id, prompt),
+    [node.id, setPrompt],
+  );
+  const [prompt, setPromptDraft, focusPrompt, blurPrompt] =
+    useBufferedTextInput(node.prompt, commitPrompt);
 
   return (
     <NodeFieldCard label="Prompt text">
       <Textarea
         className="min-h-56"
-        onChange={(event) => setPrompt(node.id, event.target.value)}
+        onBlur={blurPrompt}
+        onChange={(event) => setPromptDraft(event.target.value)}
+        onFocus={focusPrompt}
         placeholder="Describe the shot, mood, framing, lens, motion."
-        value={node.prompt}
+        value={prompt}
       />
     </NodeFieldCard>
   );
@@ -465,7 +586,10 @@ export const WorkflowNodeConfigDrawer = memo(
                 </div>
               </DrawerHeader>
               <div className="nodrag nopan nowheel flex-1 overflow-y-auto px-5 py-4">
-                <MemoizedNodeConfigPanel node={selectedNode} />
+                <MemoizedNodeConfigPanel
+                  key={selectedNode.id}
+                  node={selectedNode}
+                />
               </div>
             </>
           ) : null}

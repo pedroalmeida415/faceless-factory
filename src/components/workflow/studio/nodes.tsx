@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { type NodeProps, useUpdateNodeInternals } from "reactflow";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardContent } from "~/components/ui/card";
@@ -81,6 +81,17 @@ function updateListItem(items: string[], index: number, value: string) {
   return items.map((item, itemIndex) => (itemIndex === index ? value : item));
 }
 
+function normalizeListItems(items: string[]) {
+  return items.length ? items : [""];
+}
+
+function areSameListItems(left: string[], right: string[]) {
+  return (
+    left.length === right.length &&
+    left.every((item, index) => item === right[index])
+  );
+}
+
 function insertListItem(items: string[], index = items.length) {
   return [...items.slice(0, index), "", ...items.slice(index)];
 }
@@ -99,14 +110,96 @@ export function ListItemsEditor({
   onItemsChange: (items: string[]) => void;
   nodeId: string;
 }) {
-  const editableItems = items.length ? items : [""];
+  const propItems = normalizeListItems(items);
+  const [draftItems, setDraftItems] = useState(propItems);
+  const editableItems = normalizeListItems(draftItems);
+  const commitFrameRef = useRef<number | null>(null);
+  const commitTimerRef = useRef<number | null>(null);
+  const draftItemsRef = useRef(editableItems);
+  const focusedWithinRef = useRef(false);
   const inputRefs = useRef(new Map<string, HTMLInputElement>());
+  const lastPropItemsRef = useRef(propItems);
   const nextRowKey = useRef(0);
   const pendingFocusTarget = useRef<{ index: number; key: string } | null>(
     null,
   );
+  const pendingItemsRef = useRef<string[] | null>(null);
+  // Stale React Flow/store updates can arrive before the committed draft echoes back.
+  const pendingPropItemsRef = useRef<string[] | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const rowKeys = useRef<string[]>([]);
+  const onItemsChangeRef = useRef(onItemsChange);
+
+  onItemsChangeRef.current = onItemsChange;
+
+  const clearScheduledCommit = useCallback(() => {
+    if (commitFrameRef.current !== null) {
+      window.cancelAnimationFrame(commitFrameRef.current);
+      commitFrameRef.current = null;
+    }
+
+    if (commitTimerRef.current !== null) {
+      window.clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = null;
+    }
+  }, []);
+
+  const flushItemsChange = useCallback(() => {
+    const pendingItems = pendingItemsRef.current;
+    if (!pendingItems) {
+      return;
+    }
+
+    pendingItemsRef.current = null;
+    clearScheduledCommit();
+
+    if (areSameListItems(pendingItems, lastPropItemsRef.current)) {
+      pendingPropItemsRef.current = null;
+      return;
+    }
+
+    pendingPropItemsRef.current = pendingItems;
+    onItemsChangeRef.current(pendingItems);
+  }, [clearScheduledCommit]);
+
+  const scheduleItemsCommit = useCallback(() => {
+    clearScheduledCommit();
+    commitFrameRef.current = window.requestAnimationFrame(() => {
+      commitFrameRef.current = null;
+      commitTimerRef.current = window.setTimeout(() => {
+        commitTimerRef.current = null;
+        flushItemsChange();
+      }, 0);
+    });
+  }, [clearScheduledCommit, flushItemsChange]);
+
+  const updateDraftItems = useCallback(
+    (nextItems: string[]) => {
+      const previousItems = draftItemsRef.current;
+      const normalizedItems = normalizeListItems(nextItems);
+
+      draftItemsRef.current = normalizedItems;
+      setDraftItems(normalizedItems);
+
+      if (areSameListItems(normalizedItems, lastPropItemsRef.current)) {
+        pendingItemsRef.current = null;
+        pendingPropItemsRef.current = null;
+        clearScheduledCommit();
+        return;
+      }
+
+      pendingItemsRef.current = normalizedItems;
+      pendingPropItemsRef.current = normalizedItems;
+
+      if (
+        !focusedWithinRef.current ||
+        previousItems.length !== normalizedItems.length
+      ) {
+        scheduleItemsCommit();
+      }
+    },
+    [clearScheduledCommit, scheduleItemsCommit],
+  );
 
   const createRowKey = () => `${nodeId}:${nextRowKey.current++}`;
   const getRowKey = (index: number) => {
@@ -125,6 +218,38 @@ export function ListItemsEditor({
   } else if (rowKeys.current.length > editableItems.length) {
     rowKeys.current = rowKeys.current.slice(0, editableItems.length);
   }
+
+  useEffect(() => {
+    if (areSameListItems(propItems, lastPropItemsRef.current)) {
+      return;
+    }
+
+    lastPropItemsRef.current = propItems;
+
+    const pendingItems = pendingItemsRef.current;
+    const pendingPropItems = pendingPropItemsRef.current;
+
+    if (pendingItems && areSameListItems(propItems, pendingItems)) {
+      pendingItemsRef.current = null;
+      pendingPropItemsRef.current = null;
+      clearScheduledCommit();
+      return;
+    }
+
+    if (pendingPropItems && areSameListItems(propItems, pendingPropItems)) {
+      pendingPropItemsRef.current = null;
+      return;
+    }
+
+    if (pendingItems || pendingPropItems) {
+      return;
+    }
+
+    draftItemsRef.current = propItems;
+    setDraftItems(propItems);
+  }, [clearScheduledCommit, propItems]);
+
+  useEffect(() => () => flushItemsChange(), [flushItemsChange]);
 
   useEffect(() => {
     const target = pendingFocusTarget.current;
@@ -156,17 +281,34 @@ export function ListItemsEditor({
     const rowKey = createRowKey();
     rowKeys.current.splice(index, 0, rowKey);
     pendingFocusTarget.current = { index, key: rowKey };
-    onItemsChange(insertListItem(editableItems, index));
+    updateDraftItems(insertListItem(draftItemsRef.current, index));
   };
 
   const removeItem = (index: number) => {
     inputRefs.current.delete(rowKeys.current[index] ?? "");
     rowKeys.current.splice(index, 1);
-    onItemsChange(removeListItem(editableItems, index));
+    updateDraftItems(removeListItem(draftItemsRef.current, index));
   };
 
   return (
-    <div className="nodrag nopan nowheel space-y-3" ref={rootRef}>
+    <div
+      className="nodrag nopan nowheel space-y-3"
+      onBlurCapture={(event) => {
+        scheduleItemsCommit();
+
+        const nextTarget = event.relatedTarget;
+        if (
+          !(nextTarget instanceof globalThis.Node) ||
+          !rootRef.current?.contains(nextTarget)
+        ) {
+          focusedWithinRef.current = false;
+        }
+      }}
+      onFocusCapture={() => {
+        focusedWithinRef.current = true;
+      }}
+      ref={rootRef}
+    >
       <NodeFieldCard label="Items">
         <div className="space-y-2">
           {editableItems.map((item, index) => {
@@ -182,8 +324,12 @@ export function ListItemsEditor({
                   data-list-node-id={nodeId}
                   onClick={(event) => event.stopPropagation()}
                   onChange={(event) =>
-                    onItemsChange(
-                      updateListItem(editableItems, index, event.target.value),
+                    updateDraftItems(
+                      updateListItem(
+                        draftItemsRef.current,
+                        index,
+                        event.target.value,
+                      ),
                     )
                   }
                   onKeyDown={(event) => {

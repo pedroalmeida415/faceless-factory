@@ -31,6 +31,7 @@ const TAG_LABEL_ATTR = "data-prompt-variable-label";
 const TAG_VALUE_ATTR = "data-prompt-variable-value";
 const TAG_SHOW_LABEL_ATTR = "data-prompt-variable-show-label";
 const TAG_SHOW_VALUE_ATTR = "data-prompt-variable-show-value";
+const PROMPT_CHANGE_COMMIT_DELAY_MS = 150;
 
 type PromptEditorVariable = PromptVariable & {
   value: string | null;
@@ -481,6 +482,9 @@ export function PromptEditor({
 }) {
   const editorRef = useRef<Editor | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const commitTimerRef = useRef<ReturnType<
+    typeof globalThis.setTimeout
+  > | null>(null);
   const lastValueRef = useRef(value);
   const lastVariableKeysRef = useRef(
     variables.map((variable) => variable.key).join("|"),
@@ -495,6 +499,10 @@ export function PromptEditor({
   );
   const lastDisplayModeRef = useRef(displayMode);
   const addVariableFocusRef = useRef(false);
+  const focusedRef = useRef(false);
+  const onChangeRef = useRef(onChange);
+  const propValueRef = useRef(value);
+  const pendingChangeRef = useRef<string | null>(null);
   const pendingPropValueRef = useRef<string | null>(null);
   const handleEditorKeyDownRef = useRef<(event: KeyboardEvent) => boolean>(
     () => false,
@@ -504,6 +512,59 @@ export function PromptEditor({
     content: buildEditorContent(value, variables, displayMode),
     type: "doc",
   }));
+
+  onChangeRef.current = onChange;
+  propValueRef.current = value;
+
+  const clearCommitTimer = useCallback(() => {
+    if (commitTimerRef.current === null) {
+      return;
+    }
+
+    globalThis.clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = null;
+  }, []);
+
+  const flushPendingChange = useCallback(() => {
+    const pendingChange = pendingChangeRef.current;
+    if (pendingChange === null) {
+      return;
+    }
+
+    pendingChangeRef.current = null;
+    clearCommitTimer();
+
+    if (pendingChange === propValueRef.current) {
+      pendingPropValueRef.current = null;
+      return;
+    }
+
+    onChangeRef.current(pendingChange);
+  }, [clearCommitTimer]);
+
+  const scheduleChange = useCallback(
+    (nextValue: string) => {
+      if (nextValue === propValueRef.current) {
+        pendingChangeRef.current = null;
+        pendingPropValueRef.current = null;
+        clearCommitTimer();
+        return;
+      }
+
+      pendingChangeRef.current = nextValue;
+      pendingPropValueRef.current = nextValue;
+      clearCommitTimer();
+      if (focusedRef.current) {
+        return;
+      }
+
+      commitTimerRef.current = globalThis.setTimeout(
+        flushPendingChange,
+        PROMPT_CHANGE_COMMIT_DELAY_MS,
+      );
+    },
+    [clearCommitTimer, flushPendingChange],
+  );
 
   const filteredVariables = useMemo(() => {
     if (!mentionMenu?.queryText.trim()) {
@@ -551,6 +612,7 @@ export function PromptEditor({
       if (item.type === "variable") {
         insertVariableTagAtMention(editor, item.variable, displayMode);
       } else {
+        flushPendingChange();
         const createdVariable = onAddVariable();
         if (!createdVariable) {
           closeMentionMenu(true);
@@ -569,7 +631,13 @@ export function PromptEditor({
 
       setMentionMenu(null);
     },
-    [closeMentionMenu, displayMode, menuItems, onAddVariable],
+    [
+      closeMentionMenu,
+      displayMode,
+      flushPendingChange,
+      menuItems,
+      onAddVariable,
+    ],
   );
 
   const openMentionMenu = useCallback(() => {
@@ -747,15 +815,24 @@ export function PromptEditor({
     onDestroy: () => {
       editorRef.current = null;
     },
+    onBlur: () => {
+      focusedRef.current = false;
+      flushPendingChange();
+    },
+    onFocus: () => {
+      focusedRef.current = true;
+      clearCommitTimer();
+    },
     onUpdate: ({ editor }) => {
       const nextValue = extractTextFromEditor(editor);
       if (nextValue !== lastValueRef.current) {
         lastValueRef.current = nextValue;
-        pendingPropValueRef.current = nextValue;
-        onChange(nextValue);
+        scheduleChange(nextValue);
       }
     },
   });
+
+  useEffect(() => () => flushPendingChange(), [flushPendingChange]);
 
   useEffect(() => {
     if (!editor) {
@@ -786,7 +863,23 @@ export function PromptEditor({
     }
 
     if (valueChanged || keysChanged) {
-      if (!keysChanged && isStalePropEcho) {
+      if (focusedRef.current && valueChanged) {
+        if (keysChanged || displayChanged) {
+          syncVariableTagDisplays(editor, variables, displayMode);
+        }
+        lastVariableKeysRef.current = variableKeys;
+        lastVariableDisplayRef.current = variableDisplay;
+        lastDisplayModeRef.current = displayMode;
+        return;
+      }
+
+      if (isStalePropEcho) {
+        if (keysChanged || displayChanged) {
+          syncVariableTagDisplays(editor, variables, displayMode);
+        }
+        lastVariableKeysRef.current = variableKeys;
+        lastVariableDisplayRef.current = variableDisplay;
+        lastDisplayModeRef.current = displayMode;
         return;
       }
 
@@ -849,6 +942,7 @@ export function PromptEditor({
       return;
     }
 
+    flushPendingChange();
     const createdVariable = onAddVariable();
     if (!createdVariable) {
       return;
@@ -863,7 +957,7 @@ export function PromptEditor({
       displayMode,
       !addVariableFocusRef.current,
     );
-  }, [displayMode, onAddVariable]);
+  }, [displayMode, flushPendingChange, onAddVariable]);
 
   return (
     <div className="nodrag nopan space-y-3" ref={wrapperRef}>
@@ -944,9 +1038,10 @@ export function PromptEditor({
               Display
             </span>
             <Select
-              onValueChange={(nextValue) =>
-                onDisplayModeChange(nextValue as PromptDisplayMode)
-              }
+              onValueChange={(nextValue) => {
+                flushPendingChange();
+                onDisplayModeChange(nextValue as PromptDisplayMode);
+              }}
               value={displayMode}
             >
               <SelectTrigger className="h-8 w-[160px] text-xs">
