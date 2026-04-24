@@ -29,7 +29,7 @@ import type {
 
 export const WORKFLOW_DOCUMENT_VERSION = 5;
 export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v5";
-export const WORKFLOW_GRID_STEP = 20;
+export const WORKFLOW_GRID_STEP = 5;
 
 export type WorkflowPosition = {
   x: number;

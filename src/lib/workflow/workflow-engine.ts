@@ -344,13 +344,17 @@ export const WorkflowEngine = {
     return getGeneratorInputHandles(document, nodeId);
   },
 
-  addNode(state: WorkflowEngineState, kind: WorkflowNodeKind) {
+  addNode(
+    state: WorkflowEngineState,
+    kind: WorkflowNodeKind,
+    position?: WorkflowPosition,
+  ) {
     const nextState = syncEngineState(
       {
         ...state.document,
         nodes: [
           ...state.document.nodes,
-          createWorkflowNode(kind, state.document.nodes.length),
+          createWorkflowNode(kind, state.document.nodes.length, position),
         ],
       },
       state.editor,

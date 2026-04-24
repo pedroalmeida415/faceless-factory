@@ -495,7 +495,10 @@ type WorkflowStudioState = {
   applyEdgeChanges: (changes: EdgeChange[]) => void;
   connect: (connection: Connection) => void;
   canConnect: (connection: Connection) => boolean;
-  addNode: (kind: WorkflowNodeKind) => void;
+  addNode: (
+    kind: WorkflowNodeKind,
+    position?: WorkflowPosition,
+  ) => string | null;
   addConnectedNode: (params: {
     kind: WorkflowNodeKind;
     position: WorkflowPosition;
@@ -1049,13 +1052,25 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     canConnect: (connection) =>
       WorkflowEngine.canConnect(get().document, connection),
 
-    addNode: (kind) => {
+    addNode: (kind, position) => {
+      let addedNodeId: string | null = null;
+
       set((state) => {
         const currentSnapshot = snapshotFromState(state);
-        runSnapshotMutation(state, () =>
-          WorkflowEngine.addNode(currentSnapshot, kind),
+        const previousNodeIds = new Set(
+          currentSnapshot.document.nodes.map((node) => node.id),
         );
+
+        runSnapshotMutation(state, () =>
+          WorkflowEngine.addNode(currentSnapshot, kind, position),
+        );
+
+        addedNodeId =
+          state.document.nodes.find((node) => !previousNodeIds.has(node.id))
+            ?.id ?? null;
       });
+
+      return addedNodeId;
     },
 
     addConnectedNode: (params) => {

@@ -28,6 +28,7 @@ import {
 import { Card, CardContent } from "~/components/ui/card";
 import {
   createWorkflowNode,
+  snapWorkflowPositionToGrid,
   specializeWorkflowNodeForValueType,
   WORKFLOW_GRID_STEP,
   type WorkflowDocument,
@@ -98,7 +99,7 @@ type ConnectionAutocompleteState = {
   valueType: WorkflowValueType;
 };
 
-type PendingAssetDropCenter = {
+type PendingNodeCenter = {
   center: WorkflowPosition;
   nodeId: string;
 };
@@ -331,10 +332,14 @@ function WorkflowCanvasControls({
 }
 
 const WorkflowCanvas = memo(function WorkflowCanvas({
+  canvasRef,
   flowRef,
+  queueNodeCenter,
   onRequestConnectionAutocomplete,
 }: {
+  canvasRef: { current: HTMLDivElement | null };
   flowRef: { current: ReactFlowInstance | null };
+  queueNodeCenter: (center: WorkflowPosition, nodeId: string) => void;
   onRequestConnectionAutocomplete: (
     state: ConnectionAutocompleteState | null,
   ) => void;
@@ -359,59 +364,6 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
   const addAssetNodeAt = useWorkflowStudioStore(
     (state) => state.addAssetNodeAt,
   );
-  const setNodePosition = useWorkflowStudioStore(
-    (state) => state.setNodePosition,
-  );
-  const nodeDimensionsById = useWorkflowStudioStore(
-    (state) => state.editor.nodeDimensionsById,
-  );
-  const canvasRef = useRef<HTMLDivElement | null>(null);
-  const [pendingAssetDropCenters, setPendingAssetDropCenters] = useState<
-    PendingAssetDropCenter[]
-  >([]);
-
-  useEffect(() => {
-    if (!pendingAssetDropCenters.length) {
-      return;
-    }
-
-    const canvasNodeIds = new Set(nodes.map((node) => node.id));
-    const readyNodeIds = new Set(
-      pendingAssetDropCenters.flatMap(({ nodeId }) =>
-        !canvasNodeIds.has(nodeId) || nodeDimensionsById[nodeId]
-          ? [nodeId]
-          : [],
-      ),
-    );
-
-    if (!readyNodeIds.size) {
-      return;
-    }
-
-    setPendingAssetDropCenters((currentDrops) =>
-      currentDrops.filter(({ nodeId }) => !readyNodeIds.has(nodeId)),
-    );
-
-    for (const { center, nodeId } of pendingAssetDropCenters) {
-      if (!readyNodeIds.has(nodeId)) {
-        continue;
-      }
-
-      const dimensions = nodeDimensionsById[nodeId];
-      if (!dimensions) {
-        continue;
-      }
-
-      setNodePosition(
-        nodeId,
-        {
-          x: center.x - dimensions.width / 2,
-          y: center.y - dimensions.height / 2,
-        },
-        { recordHistory: false },
-      );
-    }
-  }, [nodeDimensionsById, nodes, pendingAssetDropCenters, setNodePosition]);
 
   useEffect(() => {
     const element = canvasRef.current;
@@ -439,13 +391,10 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
           return;
         }
 
-        setPendingAssetDropCenters((currentDrops) => [
-          ...currentDrops,
-          { center, nodeId },
-        ]);
+        queueNodeCenter(center, nodeId);
       },
     });
-  }, [addAssetNodeAt, flowRef]);
+  }, [addAssetNodeAt, canvasRef.current, flowRef, queueNodeCenter]);
 
   const handleFlowInit = useCallback(
     (instance: ReactFlowInstance) => {
@@ -585,14 +534,25 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
 export function WorkflowStudio({ project }: { project: WorkflowProject }) {
   useWorkflowStudioPersistence(project);
 
+  const canvasRef = useRef<HTMLDivElement | null>(null);
   const flowRef = useRef<ReactFlowInstance | null>(null);
   const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
   const addNode = useWorkflowStudioStore((state) => state.addNode);
   const addConnectedNode = useWorkflowStudioStore(
     (state) => state.addConnectedNode,
   );
+  const nodes = useWorkflowStudioStore((state) => state.nodes);
+  const setNodePosition = useWorkflowStudioStore(
+    (state) => state.setNodePosition,
+  );
+  const nodeDimensionsById = useWorkflowStudioStore(
+    (state) => state.editor.nodeDimensionsById,
+  );
   const [connectionAutocomplete, setConnectionAutocomplete] =
     useState<ConnectionAutocompleteState | null>(null);
+  const [pendingNodeCenters, setPendingNodeCenters] = useState<
+    PendingNodeCenter[]
+  >([]);
   const { contextValue } = useWorkflowStudioController();
 
   useEffect(() => {
@@ -634,13 +594,84 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  useEffect(() => {
+    if (!pendingNodeCenters.length) {
+      return;
+    }
+
+    const canvasNodeIds = new Set(nodes.map((node) => node.id));
+    const readyNodeIds = new Set(
+      pendingNodeCenters.flatMap(({ nodeId }) =>
+        !canvasNodeIds.has(nodeId) || nodeDimensionsById[nodeId]
+          ? [nodeId]
+          : [],
+      ),
+    );
+
+    if (!readyNodeIds.size) {
+      return;
+    }
+
+    setPendingNodeCenters((currentCenters) =>
+      currentCenters.filter(({ nodeId }) => !readyNodeIds.has(nodeId)),
+    );
+
+    for (const { center, nodeId } of pendingNodeCenters) {
+      if (!readyNodeIds.has(nodeId)) {
+        continue;
+      }
+
+      const dimensions = nodeDimensionsById[nodeId];
+      if (!dimensions) {
+        continue;
+      }
+
+      setNodePosition(
+        nodeId,
+        snapWorkflowPositionToGrid({
+          x: center.x - dimensions.width / 2,
+          y: center.y - dimensions.height / 2,
+        }),
+        { recordHistory: false },
+      );
+    }
+  }, [nodeDimensionsById, nodes, pendingNodeCenters, setNodePosition]);
+
+  const getViewportCenter = useCallback(() => {
+    const flow = flowRef.current;
+    const canvas = canvasRef.current;
+    if (!flow || !canvas) {
+      return null;
+    }
+
+    const bounds = canvas.getBoundingClientRect();
+    return flow.screenToFlowPosition({
+      x: bounds.left + bounds.width / 2,
+      y: bounds.top + bounds.height / 2,
+    });
+  }, []);
+
+  const queueNodeCenter = useCallback(
+    (center: WorkflowPosition, nodeId: string) => {
+      setPendingNodeCenters((currentCenters) => [
+        ...currentCenters,
+        { center, nodeId },
+      ]);
+    },
+    [],
+  );
+
   const addNodeToCanvas = useCallback(
     (kind: Parameters<typeof addNode>[0]) => {
+      const center = getViewportCenter();
       setConnectionAutocomplete(null);
-      addNode(kind);
-      requestAnimationFrame(() => flowRef.current?.fitView({ padding: 0.18 }));
+      const nodeId = addNode(kind, center ?? undefined);
+
+      if (center && nodeId) {
+        queueNodeCenter(center, nodeId);
+      }
     },
-    [addNode],
+    [addNode, getViewportCenter, queueNodeCenter],
   );
 
   const handleConnectionAutocompleteSelect = useCallback(
@@ -678,7 +709,9 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
         />
         <WorkflowNodeConfigDrawer />
         <WorkflowCanvas
+          canvasRef={canvasRef}
           flowRef={flowRef}
+          queueNodeCenter={queueNodeCenter}
           onRequestConnectionAutocomplete={setConnectionAutocomplete}
         />
         {connectionAutocomplete ? (
