@@ -11,6 +11,7 @@
 - [ ] Improve nodes design
 - [ ] Output visualization toggle (focused 1 at a time carousel/gallery grid list)
 - [ ] Generation state feedback
+- [ ] Add support for structured outputs on LLM node
 
 
 # Application
