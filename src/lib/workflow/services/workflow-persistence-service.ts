@@ -8,7 +8,7 @@ import type {
 } from "~/lib/workflow/project";
 import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
 
-const WORKFLOW_SAVE_DEBOUNCE_MS = 800;
+const WORKFLOW_SAVE_DEBOUNCE_MS = 1000;
 
 type WorkflowPersistenceSnapshot = WorkflowProjectSaveRequest;
 
@@ -22,7 +22,11 @@ let debounceTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 let config: WorkflowPersistenceConfig | null = null;
 let drainPromise: Promise<WorkflowProjectSaveResponse | null> | null = null;
 let inFlightSave: Promise<WorkflowProjectSaveResponse> | null = null;
-let isDirty = false;
+let pendingChangeId = 0;
+let debouncedChangeId = 0;
+let savedChangeId = 0;
+let flushRequested = false;
+let serviceGeneration = 0;
 
 function clearDebounceTimer() {
   if (debounceTimer === null) {
@@ -33,26 +37,34 @@ function clearDebounceTimer() {
   debounceTimer = null;
 }
 
-async function runDrainLoop(): Promise<WorkflowProjectSaveResponse | null> {
+async function runDrainLoop(
+  generation: number,
+): Promise<WorkflowProjectSaveResponse | null> {
   let lastResult: WorkflowProjectSaveResponse | null = null;
 
-  while (config) {
+  while (config && generation === serviceGeneration) {
     if (inFlightSave) {
       lastResult = await inFlightSave;
       continue;
     }
 
-    if (!isDirty) {
+    const targetChangeId = flushRequested ? pendingChangeId : debouncedChangeId;
+
+    if (savedChangeId >= targetChangeId) {
+      flushRequested = false;
+      return lastResult;
+    }
+
+    if (!flushRequested && debouncedChangeId !== pendingChangeId) {
       return lastResult;
     }
 
     const snapshot = config.getSnapshot();
     if (!snapshot) {
-      isDirty = false;
+      savedChangeId = targetChangeId;
+      flushRequested = false;
       return lastResult;
     }
-
-    isDirty = false;
 
     const pendingSave = Effect.runPromise(
       WorkflowClientService.saveProject(snapshot),
@@ -61,13 +73,23 @@ async function runDrainLoop(): Promise<WorkflowProjectSaveResponse | null> {
 
     try {
       const result = await pendingSave;
+      if (generation !== serviceGeneration) {
+        return lastResult;
+      }
+
       lastResult = result;
       config?.onSaved(result);
+      savedChangeId = targetChangeId;
+      flushRequested = flushRequested && savedChangeId < pendingChangeId;
     } catch (error) {
+      if (generation !== serviceGeneration) {
+        return lastResult;
+      }
+
       config?.onError(error);
       throw error;
     } finally {
-      if (inFlightSave === pendingSave) {
+      if (generation === serviceGeneration && inFlightSave === pendingSave) {
         inFlightSave = null;
       }
     }
@@ -81,15 +103,19 @@ function drainPendingSave(): Promise<WorkflowProjectSaveResponse | null> {
     return drainPromise;
   }
 
-  drainPromise = runDrainLoop().finally(() => {
-    drainPromise = null;
+  const nextDrainPromise = runDrainLoop(serviceGeneration).finally(() => {
+    if (drainPromise === nextDrainPromise) {
+      drainPromise = null;
+    }
   });
+  drainPromise = nextDrainPromise;
 
   return drainPromise;
 }
 
 export const WorkflowPersistenceService = {
   configure(nextConfig: WorkflowPersistenceConfig) {
+    serviceGeneration += 1;
     config = nextConfig;
   },
 
@@ -98,9 +124,11 @@ export const WorkflowPersistenceService = {
       return;
     }
 
-    isDirty = true;
+    pendingChangeId += 1;
     clearDebounceTimer();
     debounceTimer = globalThis.setTimeout(() => {
+      debounceTimer = null;
+      debouncedChangeId = pendingChangeId;
       void drainPendingSave().catch(() => {
         return undefined;
       });
@@ -113,14 +141,20 @@ export const WorkflowPersistenceService = {
     }
 
     clearDebounceTimer();
+    debouncedChangeId = pendingChangeId;
+    flushRequested = true;
     return drainPendingSave();
   },
 
   reset() {
+    serviceGeneration += 1;
     clearDebounceTimer();
     config = null;
     drainPromise = null;
     inFlightSave = null;
-    isDirty = false;
+    pendingChangeId = 0;
+    debouncedChangeId = 0;
+    savedChangeId = 0;
+    flushRequested = false;
   },
 };
