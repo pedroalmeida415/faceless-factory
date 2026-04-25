@@ -70,6 +70,7 @@ const WORKFLOW_DEFAULT_EDGE_OPTIONS = {
 } as const;
 
 const WORKFLOW_PRO_OPTIONS = { hideAttribution: true } as const;
+const WORKFLOW_DELETE_KEYS = new Set(["Backspace", "Delete"]);
 const WORKFLOW_SNAP_GRID: [number, number] = [
   WORKFLOW_GRID_STEP,
   WORKFLOW_GRID_STEP,
@@ -583,7 +584,7 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
         return;
       }
 
-      if (event.key !== "Delete") {
+      if (!WORKFLOW_DELETE_KEYS.has(event.key)) {
         return;
       }
 
