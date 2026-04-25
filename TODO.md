@@ -12,6 +12,8 @@
 - [ ] Output visualization toggle (focused 1 at a time carousel/gallery grid list)
 - [ ] Generation state feedback
 - [ ] Add support for structured outputs on LLM node
+- [ ] Support pasting images
+- [ ] Support drag/drop images
 
 
 # Application
