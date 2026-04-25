@@ -79,8 +79,7 @@ function validateExecutionSubgraph(
           getIncomingEdgesForHandle(incomingByTarget, node.id, key).length
             ? {
                 type: "text",
-                values: [key],
-                iterationMode: "static",
+                lanes: [key],
               }
             : null,
         )
@@ -110,7 +109,9 @@ function validateExecutionSubgraph(
 
         failValidation(`Connect ${handle.label.toLowerCase()} text.`);
       }
-      getGeneratorIterationPreview(document, node.id);
+      if (getGeneratorIterationPreview(document, node.id).mismatchedIterators) {
+        failValidation("Connected input lane counts do not match.");
+      }
       break;
     }
   }

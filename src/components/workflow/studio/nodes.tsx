@@ -497,7 +497,7 @@ const ListNode = memo(function ListNode({
             className="border-primary/20 bg-primary/10 text-primary"
             variant="outline"
           >
-            Iterator
+            Lanes
           </Badge>
         ) : null
       }
@@ -511,9 +511,7 @@ const ListNode = memo(function ListNode({
         onItemsChange={(nextItems) => setListItems(id, nextItems)}
       />
       {filledItemCount > 1 ? (
-        <NodeNotice tone="accent">
-          {`${filledItemCount} iterations.`}
-        </NodeNotice>
+        <NodeNotice tone="accent">{`${filledItemCount} lanes.`}</NodeNotice>
       ) : null}
     </NodeShell>
   );
@@ -564,7 +562,7 @@ const AssetNode = memo(function AssetNode({
       {!data.assets.length && !data.assetKind ? (
         <Card className="border-dashed py-0">
           <CardContent className="py-8 text-muted-foreground text-sm">
-            One asset node now covers both static files and iterator batches.
+            Each selected asset becomes an isolated execution lane.
           </CardContent>
         </Card>
       ) : null}
@@ -753,7 +751,9 @@ const ImageGeneratorNode = memo(function ImageGeneratorNode({
 
       {iterationInfo.hasIterator ? (
         <NodeNotice tone="accent">
-          {`Will run ${iterationInfo.iterations} iteration${iterationInfo.iterations === 1 ? "" : "s"}. Click here to visualize combinations`}
+          {iterationInfo.mismatchedIterators
+            ? "Connected lane counts do not match. Use one lane for broadcast or matching lane counts for zip."
+            : `Will run ${iterationInfo.iterations} lane${iterationInfo.iterations === 1 ? "" : "s"}.`}
         </NodeNotice>
       ) : null}
 
@@ -855,7 +855,9 @@ const VideoGeneratorNode = memo(function VideoGeneratorNode({
 
       {iterationInfo.hasIterator ? (
         <NodeNotice tone="accent">
-          {`Will run ${iterationInfo.iterations} iteration${iterationInfo.iterations === 1 ? "" : "s"}. Click here to visualize combinations`}
+          {iterationInfo.mismatchedIterators
+            ? "Connected lane counts do not match. Use one lane for broadcast or matching lane counts for zip."
+            : `Will run ${iterationInfo.iterations} lane${iterationInfo.iterations === 1 ? "" : "s"}.`}
         </NodeNotice>
       ) : null}
 

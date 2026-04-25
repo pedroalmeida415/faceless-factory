@@ -20,18 +20,14 @@ import {
 } from "~/lib/workflow/node-definitions";
 import { isGeneratorNodeKind, type WorkflowAsset } from "~/lib/workflow/types";
 
-type RuntimeIterationMode = "static" | "iterator";
-
 export type TextRuntimeValue = {
   type: "text";
-  values: string[];
-  iterationMode: RuntimeIterationMode;
+  lanes: string[];
 };
 
 export type MediaRuntimeValue = {
   type: "image" | "video";
-  assets: WorkflowAsset[];
-  iterationMode: RuntimeIterationMode;
+  lanes: WorkflowAsset[][];
 };
 
 export type RuntimeValue = TextRuntimeValue | MediaRuntimeValue;
@@ -47,19 +43,16 @@ type IncomingByTarget = Map<string, WorkflowDocumentEdge[]>;
 
 type MediaBatchPlan = {
   batches: WorkflowAsset[][];
-  hasIterator: boolean;
   iterations: number;
 };
 
 type TextBatchPlan = {
-  values: string[];
-  hasIterator: boolean;
+  lanes: string[];
   iterations: number;
 };
 
 export type GeneratorAssetBatchPlan = {
   batches: Record<string, WorkflowAsset[]>[];
-  hasIterator: boolean;
   iterations: number;
 };
 
@@ -157,27 +150,46 @@ function joinTextValues(values: readonly string[]) {
   return normalizeTextValues(values).join("\n\n").trim();
 }
 
-function buildStringCombinations(valueGroups: readonly string[][]) {
-  return valueGroups.reduce<string[][]>(
-    (combinations, values) =>
-      combinations.flatMap((combination) =>
-        values.map((value) => [...combination, value]),
-      ),
-    [[]],
+function getAlignedLaneCount(counts: readonly number[]) {
+  const laneCounts = counts.filter((count) => count > 0);
+  if (!laneCounts.length) {
+    return 1;
+  }
+
+  const laneCount = Math.max(...laneCounts);
+  const mismatchedCount = laneCounts.find(
+    (count) => count !== 1 && count !== laneCount,
   );
+
+  if (mismatchedCount !== undefined) {
+    throw new Error("Connected input lane counts do not match.");
+  }
+
+  return laneCount;
+}
+
+function hasMismatchedLaneCounts(counts: readonly number[]) {
+  try {
+    getAlignedLaneCount(counts);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function getBroadcastLane<T>(lanes: readonly T[], index: number) {
+  return lanes.length === 1 ? lanes[0] : lanes[index];
 }
 
 function toTextRuntimeValue(
   values: readonly string[],
-  hasIterator: boolean,
 ): TextRuntimeValue | null {
   const normalizedValues = normalizeTextValues(values);
 
   return normalizedValues.length
     ? {
         type: "text",
-        values: normalizedValues,
-        iterationMode: hasIterator ? "iterator" : "static",
+        lanes: normalizedValues,
       }
     : null;
 }
@@ -185,41 +197,37 @@ function toTextRuntimeValue(
 export function buildTextBatchPlan(
   values: readonly TextRuntimeValue[],
 ): TextBatchPlan {
-  const staticText = joinTextValues(
-    values.flatMap((value) =>
-      value.iterationMode === "static" ? value.values : [],
-    ),
-  );
-  const iteratorValueGroups = values
-    .filter((value) => value.iterationMode === "iterator")
-    .map((value) => normalizeTextValues(value.values));
+  const laneGroups = values.map((value) => normalizeTextValues(value.lanes));
 
-  if (!iteratorValueGroups.length) {
+  if (!laneGroups.length) {
     return {
-      values: staticText ? [staticText] : [],
-      hasIterator: false,
+      lanes: [],
       iterations: 1,
     };
   }
 
-  for (const iteratorValues of iteratorValueGroups) {
-    if (!iteratorValues.length) {
+  for (const lanes of laneGroups) {
+    if (!lanes.length) {
       throw new Error("Connected text batch is empty.");
     }
   }
 
-  const resolvedValues = buildStringCombinations(iteratorValueGroups)
-    .map((combination) => joinTextValues([staticText, ...combination]))
-    .filter(Boolean);
+  const laneCount = getAlignedLaneCount(
+    laneGroups.map((lanes) => lanes.length),
+  );
+  const resolvedLanes = Array.from({ length: laneCount }, (_, index) =>
+    joinTextValues(
+      laneGroups.flatMap((lanes) => getBroadcastLane(lanes, index) ?? []),
+    ),
+  ).filter(Boolean);
 
-  if (!resolvedValues.length) {
+  if (!resolvedLanes.length) {
     throw new Error("Connected text batch is empty.");
   }
 
   return {
-    values: resolvedValues,
-    hasIterator: true,
-    iterations: resolvedValues.length,
+    lanes: resolvedLanes,
+    iterations: resolvedLanes.length,
   };
 }
 
@@ -227,7 +235,7 @@ export function buildTextRuntimeValue(
   values: readonly TextRuntimeValue[],
 ): TextRuntimeValue | null {
   const plan = buildTextBatchPlan(values);
-  return toTextRuntimeValue(plan.values, plan.hasIterator);
+  return toTextRuntimeValue(plan.lanes);
 }
 
 export function getPromptNodeReferencedVariableKeys(node: PromptWorkflowNode) {
@@ -281,33 +289,31 @@ export function resolvePromptNodeTextBatch(
     resolvedByKey.set(key, resolveVariableValue(key));
   }
 
-  const iteratorEntries = Array.from(resolvedByKey.entries()).flatMap(
-    ([key, value]) =>
-      value?.iterationMode === "iterator"
-        ? [[key, normalizeTextValues(value.values)] as const]
-        : [],
-  );
+  const laneEntries = Array.from(resolvedByKey.entries()).flatMap(
+    ([key, value]) => {
+      if (!value) {
+        return [];
+      }
 
-  for (const [, values] of iteratorEntries) {
-    if (!values.length) {
-      return null;
-    }
+      const lanes = normalizeTextValues(value.lanes);
+      if (!lanes.length) {
+        return null;
+      }
+
+      return [[key, lanes] as const];
+    },
+  );
+  if (laneEntries.some((entry) => entry === null)) {
+    return null;
   }
 
-  const staticByKey = new Map(
-    Array.from(resolvedByKey.entries()).flatMap(([key, value]) =>
-      value?.iterationMode === "static"
-        ? [[key, joinTextValues(value.values)] as const]
-        : [],
-    ),
+  const textLaneEntries = laneEntries.filter(
+    (entry): entry is readonly [string, string[]] => entry !== null,
   );
-  const combinations = iteratorEntries.length
-    ? buildStringCombinations(iteratorEntries.map(([, values]) => values))
-    : [[]];
-  const resolvedPrompts = combinations.flatMap((combination) => {
-    const iteratorValueByKey = new Map(
-      iteratorEntries.map(([key], index) => [key, combination[index] ?? ""]),
-    );
+  const laneCount = getAlignedLaneCount(
+    textLaneEntries.map(([, lanes]) => lanes.length),
+  );
+  const resolvedPrompts = Array.from({ length: laneCount }, (_, index) => {
     const prompt = node.prompt.replace(
       PROMPT_VARIABLE_PATTERN,
       (match, key) => {
@@ -315,15 +321,18 @@ export function resolvePromptNodeTextBatch(
           return match;
         }
 
-        return iteratorValueByKey.get(key) ?? staticByKey.get(key) ?? "";
+        const lanes = textLaneEntries.find(
+          ([entryKey]) => entryKey === key,
+        )?.[1];
+        return lanes ? (getBroadcastLane(lanes, index) ?? "") : "";
       },
     );
     const resolvedPrompt = prompt.trim();
 
-    return resolvedPrompt ? [resolvedPrompt] : [];
-  });
+    return resolvedPrompt;
+  }).filter(Boolean);
 
-  return toTextRuntimeValue(resolvedPrompts, iteratorEntries.length > 0);
+  return toTextRuntimeValue(resolvedPrompts);
 }
 
 function resolveTextHandleValue(
@@ -567,10 +576,7 @@ export function getWorkflowNodeRuntimeValue(
 
   switch (node.kind) {
     case "list":
-      return toTextRuntimeValue(
-        node.items,
-        normalizeTextValues(node.items).length > 1,
-      );
+      return toTextRuntimeValue(node.items);
     case "prompt": {
       const textValue = resolveRuntimePromptNodeText(
         document,
@@ -586,72 +592,54 @@ export function getWorkflowNodeRuntimeValue(
       return node.assetKind && node.assets.length
         ? {
             type: node.assetKind,
-            assets: node.assets,
-            iterationMode: node.assets.length > 1 ? "iterator" : "static",
+            lanes: node.assets.map((asset) => [asset]),
           }
         : null;
     case "imageGenerator":
       return node.outputAssets.length
         ? {
             type: "image",
-            assets: node.outputAssets,
-            iterationMode: "static",
+            lanes: [node.outputAssets],
           }
         : null;
     case "videoGenerator":
       return node.outputAssets.length
         ? {
             type: "video",
-            assets: node.outputAssets,
-            iterationMode: "static",
+            lanes: [node.outputAssets],
           }
         : null;
     case "llmGenerator":
       return node.responseText?.trim()
-        ? toTextRuntimeValue([node.responseText], false)
+        ? toTextRuntimeValue([node.responseText])
         : null;
   }
 }
 
 function buildMediaBatchPlan(values: MediaRuntimeValue[]): MediaBatchPlan {
-  const staticAssets = values.flatMap((value) =>
-    value.iterationMode === "static" ? value.assets : [],
-  );
-  const iteratorValues = values.filter(
-    (value) => value.iterationMode === "iterator",
-  );
-
-  if (!iteratorValues.length) {
+  if (!values.length) {
     return {
-      batches: [staticAssets],
-      hasIterator: false,
+      batches: [[]],
       iterations: 1,
     };
   }
 
-  const firstIterator = iteratorValues[0];
-  if (!firstIterator?.assets.length) {
-    throw new Error("Connected asset batch is empty.");
-  }
-
-  for (const iteratorValue of iteratorValues) {
-    if (!iteratorValue.assets.length) {
+  for (const value of values) {
+    if (!value.lanes.length) {
       throw new Error("Connected asset batch is empty.");
     }
   }
 
-  const iteratorCombinations = iteratorValues.reduce<WorkflowAsset[][]>(
-    (combinations, iteratorValue) =>
-      combinations.flatMap((combination) =>
-        iteratorValue.assets.map((asset) => [...combination, asset]),
-      ),
-    [[]],
+  const laneCount = getAlignedLaneCount(
+    values.map((value) => value.lanes.length),
+  );
+  const batches = Array.from({ length: laneCount }, (_, index) =>
+    values.flatMap((value) => getBroadcastLane(value.lanes, index) ?? []),
   );
 
   return {
-    batches: iteratorCombinations.map((assets) => [...staticAssets, ...assets]),
-    hasIterator: true,
-    iterations: iteratorCombinations.length,
+    batches,
+    iterations: batches.length,
   };
 }
 
@@ -662,38 +650,28 @@ export function buildGeneratorAssetBatchPlan(
     ([handleId, values]) => [handleId, buildMediaBatchPlan(values)] as const,
   );
 
-  if (!plansByHandle.some(([, plan]) => plan.hasIterator)) {
+  if (!plansByHandle.length) {
     return {
-      batches: [
-        Object.fromEntries(
-          plansByHandle.map(([handleId, plan]) => [
-            handleId,
-            plan.batches[0] ?? [],
-          ]),
-        ),
-      ],
-      hasIterator: false,
+      batches: [{}],
       iterations: 1,
     };
   }
 
-  const combinations = plansByHandle.reduce<
-    Array<Array<readonly [string, WorkflowAsset[]]>>
-  >(
-    (currentCombinations, [handleId, plan]) =>
-      currentCombinations.flatMap((combination) =>
-        plan.batches.map((batch) => [
-          ...combination,
-          [handleId, batch] as const,
-        ]),
-      ),
-    [[]],
+  const laneCount = getAlignedLaneCount(
+    plansByHandle.map(([, plan]) => plan.iterations),
+  );
+  const batches = Array.from({ length: laneCount }, (_, index) =>
+    Object.fromEntries(
+      plansByHandle.map(([handleId, plan]) => [
+        handleId,
+        getBroadcastLane(plan.batches, index) ?? [],
+      ]),
+    ),
   );
 
   return {
-    batches: combinations.map((combination) => Object.fromEntries(combination)),
-    hasIterator: true,
-    iterations: combinations.length,
+    batches,
+    iterations: batches.length,
   };
 }
 
@@ -702,25 +680,28 @@ export function buildGeneratorExecutionBatchPlan(params: {
   prompt: TextRuntimeValue;
   systemPrompt?: TextRuntimeValue | null;
 }): GeneratorExecutionBatchPlan {
-  const systemPromptValues = params.systemPrompt?.values.length
-    ? params.systemPrompt.values
+  const systemPromptLanes = params.systemPrompt?.lanes.length
+    ? params.systemPrompt.lanes
     : [null];
-  const batches = params.prompt.values.flatMap((prompt) =>
-    systemPromptValues.flatMap((systemPrompt) =>
-      params.mediaPlan.batches.map((mediaInputsByHandle) => ({
-        mediaInputsByHandle,
-        prompt,
-        systemPrompt,
-      })),
-    ),
-  );
+  const laneCount = getAlignedLaneCount([
+    params.prompt.lanes.length,
+    systemPromptLanes.length,
+    params.mediaPlan.iterations,
+  ]);
+  const batches = Array.from({ length: laneCount }, (_, index) => ({
+    mediaInputsByHandle:
+      getBroadcastLane(params.mediaPlan.batches, index) ?? {},
+    prompt: getBroadcastLane(params.prompt.lanes, index) ?? "",
+    systemPrompt: getBroadcastLane(systemPromptLanes, index) ?? null,
+  })).filter((batch) => batch.prompt);
+
+  if (!batches.length) {
+    throw new Error("Connected generator batch is empty.");
+  }
 
   return {
     batches,
-    hasIterator:
-      params.prompt.iterationMode === "iterator" ||
-      params.systemPrompt?.iterationMode === "iterator" ||
-      params.mediaPlan.hasIterator,
+    hasIterator: batches.length > 1,
     iterations: batches.length,
   };
 }
@@ -740,7 +721,7 @@ export function getGeneratorIterationPreview(
   }
 
   const incomingByTarget = buildIncomingByTarget(document.edges);
-  const iterationCounts = getGeneratorHandleDefinitions(
+  const laneCounts = getGeneratorHandleDefinitions(
     targetNode,
     document.edges,
   ).flatMap((handle) =>
@@ -751,24 +732,16 @@ export function getGeneratorIterationPreview(
           ? getWorkflowNodeRuntimeValue(document, sourceNode.id)
           : null;
 
-        if (
-          !runtimeValue ||
-          runtimeValue.type !== handle.valueType ||
-          runtimeValue.iterationMode !== "iterator"
-        ) {
+        if (!runtimeValue || runtimeValue.type !== handle.valueType) {
           return [];
         }
 
-        return [
-          runtimeValue.type === "text"
-            ? runtimeValue.values.length
-            : runtimeValue.assets.length,
-        ];
+        return [runtimeValue.lanes.length];
       },
     ),
   );
 
-  if (!iterationCounts.length) {
+  if (!laneCounts.length) {
     return {
       hasIterator: false,
       iterations: 1,
@@ -776,13 +749,21 @@ export function getGeneratorIterationPreview(
     };
   }
 
+  const mismatchedIterators = hasMismatchedLaneCounts(laneCounts);
+  if (mismatchedIterators) {
+    return {
+      hasIterator: true,
+      iterations: Math.max(...laneCounts),
+      mismatchedIterators,
+    };
+  }
+
+  const iterations = getAlignedLaneCount(laneCounts);
+
   return {
-    hasIterator: true,
-    iterations: iterationCounts.reduce(
-      (totalIterations, count) => totalIterations * count,
-      1,
-    ),
-    mismatchedIterators: false,
+    hasIterator: iterations > 1,
+    iterations,
+    mismatchedIterators,
   };
 }
 
@@ -965,5 +946,5 @@ export function getPromptVariableValue(
     new Set([targetId]),
   );
 
-  return value ? value.values.join("\n\n") : null;
+  return value ? value.lanes.join("\n\n") : null;
 }

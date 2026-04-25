@@ -226,7 +226,7 @@ function ListConfigPanel({ node }: { node: ListWorkflowNode }) {
       />
       <NodeFieldCard label="Iteration">
         <p className="text-sm">
-          {filledItemCount > 1 ? `${filledItemCount} iterations` : "Static"}
+          {filledItemCount > 1 ? `${filledItemCount} lanes` : "1 lane"}
         </p>
       </NodeFieldCard>
     </div>

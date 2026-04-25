@@ -80,7 +80,7 @@ function formatRunningActivity(
   hasIterator: boolean,
 ) {
   return hasIterator
-    ? `Running ${label} (${iterations} iterations)...`
+    ? `Running ${label} (${iterations} lanes)...`
     : `Running ${label}...`;
 }
 
@@ -100,6 +100,20 @@ function cloneExecutionResponse(
   return JSON.parse(
     JSON.stringify(response),
   ) as WorkflowExecutionStatusResponse;
+}
+
+function coerceGeneratorExecutionBatchPlan(
+  input: Parameters<typeof buildGeneratorExecutionBatchPlan>[0],
+) {
+  return Effect.try({
+    try: () => buildGeneratorExecutionBatchPlan(input),
+    catch: (cause) =>
+      new WorkflowValidationError({
+        message:
+          cause instanceof Error ? cause.message : "Invalid generator batch.",
+        cause,
+      }),
+  });
 }
 
 function evaluatePromptNodeTextBatch(
@@ -249,8 +263,7 @@ export function executeWorkflow(params: {
           const textValue = buildTextRuntimeValue([
             {
               type: "text",
-              values: textValues,
-              iterationMode: textValues.length > 1 ? "iterator" : "static",
+              lanes: textValues,
             },
           ]);
 
@@ -298,8 +311,7 @@ export function executeWorkflow(params: {
           yield* setNodeRuntime(currentId, "success", null);
           return {
             type: node.assetKind,
-            assets: node.assets,
-            iterationMode: node.assets.length > 1 ? "iterator" : "static",
+            lanes: node.assets.map((asset) => [asset]),
           } satisfies RuntimeValue;
         });
       case "imageGenerator":
@@ -326,7 +338,7 @@ export function executeWorkflow(params: {
             incomingByTarget,
             evaluateNode,
           );
-          const batchPlan = buildGeneratorExecutionBatchPlan({
+          const batchPlan = yield* coerceGeneratorExecutionBatchPlan({
             mediaPlan,
             prompt,
           });
@@ -355,7 +367,8 @@ export function executeWorkflow(params: {
           finalCostCredits +=
             responses.length * getImageGeneratorModelCreditCost(node.model);
 
-          const outputAssets = responses.flatMap((response) => response.assets);
+          const outputLanes = responses.map((response) => response.assets);
+          const outputAssets = outputLanes.flat();
           const responseTextParts = responses
             .map((response) => response.responseText?.trim())
             .filter((value): value is string => Boolean(value));
@@ -378,8 +391,7 @@ export function executeWorkflow(params: {
 
           return {
             type: "image",
-            assets: outputAssets,
-            iterationMode: "static",
+            lanes: outputLanes,
           } satisfies RuntimeValue;
         });
       case "videoGenerator":
@@ -406,7 +418,7 @@ export function executeWorkflow(params: {
             incomingByTarget,
             evaluateNode,
           );
-          const batchPlan = buildGeneratorExecutionBatchPlan({
+          const batchPlan = yield* coerceGeneratorExecutionBatchPlan({
             mediaPlan,
             prompt,
           });
@@ -435,7 +447,8 @@ export function executeWorkflow(params: {
           finalCostCredits +=
             responses.length * getVideoGeneratorModelCreditCost(node.model);
 
-          const outputAssets = responses.flatMap((response) => response.assets);
+          const outputLanes = responses.map((response) => response.assets);
+          const outputAssets = outputLanes.flat();
 
           yield* updateDocumentNode(currentId, (currentNode) =>
             currentNode.kind === "videoGenerator"
@@ -452,8 +465,7 @@ export function executeWorkflow(params: {
 
           return {
             type: "video",
-            assets: outputAssets,
-            iterationMode: "static",
+            lanes: outputLanes,
           } satisfies RuntimeValue;
         });
       case "llmGenerator":
@@ -492,7 +504,7 @@ export function executeWorkflow(params: {
             incomingByTarget,
             evaluateNode,
           );
-          const batchPlan = buildGeneratorExecutionBatchPlan({
+          const batchPlan = yield* coerceGeneratorExecutionBatchPlan({
             mediaPlan,
             prompt,
             systemPrompt,
@@ -552,8 +564,9 @@ export function executeWorkflow(params: {
 
           return {
             type: "text",
-            values: responseText ? [responseText] : [],
-            iterationMode: "static",
+            lanes: responses
+              .map((response) => response.responseText.trim())
+              .filter(Boolean),
           } satisfies RuntimeValue;
         });
     }
