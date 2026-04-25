@@ -19,7 +19,9 @@ Brevity is an absolute priority. Good code is not measured by volume, but by cla
 * **Complexity Reduction:** Aim for the lowest possible cyclomatic complexity and default to reduce code complexity overall.
 * **Declarative > Imperative:** Use functional pipelines (Effect) over imperative loops.
 
-## 2. Ruthless Bug Fixing & Root Cause Resolution
+## 3. Ruthless Bug Fixing & Root Cause Resolution
+
+Ruthless refactoring applies to the domain path being changed. Do not expand scope into unrelated systems unless they directly participate in the same invariant or failure mode.
 
 Palliative fixes and "band-aid" patches are strictly forbidden. When a bug or suboptimal behavior is identified, you must prioritize the health of the system over the speed of the fix.
 
@@ -28,7 +30,38 @@ Palliative fixes and "band-aid" patches are strictly forbidden. When a bug or su
 * **Systemic Refactoring:** If the underlying architecture is the reason a bug is "hard to fix," do not add more complexity to work around it. Refactor the flawed system entirely. You have permission to rewrite core modules if it results in a more predictable, enterprise-grade implementation.
 * **Anti-Tech Debt:** Every fix must leave the codebase cleaner than you found it. If a "quick fix" adds even a single line of technical debt or an "if" statement that handles a specific edge case that should be handled by the domain model, it is a failure. Expand the domain model instead.
 
-## 3. Rapid Prototyping & Breakage Policy
+### Architecture-First Debugging Protocol
+
+Before writing a bug fix, you must identify whether the bug is caused by duplicated logic, divergent code paths, or missing domain invariants.
+Required pre-fix steps:
+
+* Trace the full data lifecycle across persistence, runtime execution, validation, pricing, preview/UI, and synchronization.
+* Search for every caller that computes or depends on the same domain concept. If more than one subsystem implements the same rule, treat that as the root cause.
+* Prefer extracting or consolidating a shared source of truth over patching a single symptom.
+* Do not add display-only, pricing-only, validation-only, or execution-only fixes when the invariant belongs to the workflow domain model.
+* If the bug crosses subsystem boundaries, stop and design the shared abstraction first. Then wire all consumers to it.
+* Prefer deleting duplicated logic over adding conditionals. A fix that leaves parallel implementations in place is incomplete.
+* If more than one subsystem computes the same domain fact, a fix that updates only one subsystem is incomplete.
+
+### Bug Fix Completion Criteria
+For every non-trivial bug fix, the final response must state:
+* The root cause.
+* The shared invariant or source of truth introduced or reused.
+* Which duplicated or divergent paths were removed.
+* Which subsystems now consume the same logic.
+* The verification that proves the architectural path, not just the symptom.
+* Whether any temporary workaround remains.
+
+### Decision Hierarchy
+
+When directives appear to conflict, follow this priority:
+1. Correctness and root-cause fixes.
+2. Shared domain invariants and architectural simplicity.
+3. Type safety and explicit error modeling.
+4. Minimal code surface area. “Minimal” means the smallest durable architectural fix, not the smallest patch.
+5. Speed of delivery.
+
+## 4. Rapid Prototyping & Breakage Policy
 
 This project is in a high-velocity MVP phase. Speed of iteration is the primary metric; technical debt in the form of "legacy support" is strictly forbidden.
 
@@ -92,7 +125,6 @@ These rules are strict and non-negotiable:
 * **Distributed Tracing:** All background jobs (BullMQ) and node executions must emit standard observability events. The agent must ensure that every complex Effect pipeline includes appropriate logging of input/output data (stripped of sensitive info) for every node execution.
 * **Error Bubbling:** Do not swallow errors at the node level. Propagate specific domain errors (e.g., `NodeExecutionError`, `InvalidInputError`) up to the orchestrator so the UI can highlight the specific failing node.
 * **Strict Error Modeling:** Never throw errors. Use `Effect.fail` with tagged union errors for predictable, type-safe recovery paths.
-
 
 ## 9. System Invariants & Quality Assurance
 
