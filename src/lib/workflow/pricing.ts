@@ -3,14 +3,16 @@ import type {
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
 import { WorkflowValidationError } from "~/lib/workflow/errors";
-import { collectExecutableWorkflowGeneratorNodeIds } from "~/lib/workflow/execution/subgraph";
+import {
+  buildWorkflowExecutionPlan,
+  type GeneratorIterationInfo,
+} from "~/lib/workflow/execution/subgraph";
 import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target-resolution";
 import type { StartWorkflowExecutionRequest } from "~/lib/workflow/execution/types";
 import {
   getImageGeneratorModelCreditCost,
   getVideoGeneratorModelCreditCost,
 } from "~/lib/workflow/generator-models";
-import { getGeneratorIterationPreview } from "~/lib/workflow/graph";
 import type {
   GenerateImageRequest,
   GenerateVideoRequest,
@@ -34,13 +36,10 @@ export type WorkflowExecutionPriceQuote = {
 };
 
 function buildWorkflowExecutionPriceLineItem(
-  document: WorkflowDocument,
   node: WorkflowDocumentNode,
+  iterationInfo: GeneratorIterationInfo,
 ): WorkflowExecutionPriceLineItem | null {
-  const iterations = Math.max(
-    1,
-    getGeneratorIterationPreview(document, node.id).iterations,
-  );
+  const iterations = Math.max(1, iterationInfo.iterations);
 
   switch (node.kind) {
     case "imageGenerator": {
@@ -101,13 +100,22 @@ function buildWorkflowExecutionPriceQuote(
   targetIds: string[],
 ): WorkflowExecutionPriceQuote {
   const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
-  const lineItems = collectExecutableWorkflowGeneratorNodeIds(
-    document,
-    targetIds,
-  )
+  const executionPlan = buildWorkflowExecutionPlan(document, targetIds);
+  const lineItems = executionPlan.executableNodeIds
     .map((nodeId) => nodeMap.get(nodeId))
     .flatMap((node) =>
-      node ? [buildWorkflowExecutionPriceLineItem(document, node)] : [],
+      node
+        ? [
+            buildWorkflowExecutionPriceLineItem(
+              node,
+              executionPlan.generatorIterationById.get(node.id) ?? {
+                hasIterator: false,
+                iterations: 1,
+                mismatchedIterators: false,
+              },
+            ),
+          ]
+        : [],
     )
     .filter(
       (lineItem): lineItem is WorkflowExecutionPriceLineItem =>

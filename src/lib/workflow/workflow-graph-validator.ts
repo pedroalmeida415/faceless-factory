@@ -1,10 +1,10 @@
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import { WorkflowValidationError } from "~/lib/workflow/errors";
+import { buildWorkflowExecutionPlan } from "~/lib/workflow/execution/subgraph";
 import {
   buildIncomingByTarget,
   buildOutgoingBySource,
   getGeneratorInputHandles,
-  getGeneratorIterationPreview,
   getIncomingEdgesForHandle,
   isValidWorkflowEdge,
   resolvePromptNodeTextBatch,
@@ -42,82 +42,78 @@ function validateDocumentAcyclic(document: WorkflowDocument) {
   }
 }
 
-function validateExecutionSubgraph(
+function validateExecutionPlanNodes(
   document: WorkflowDocument,
-  nodeId: string,
-  visited: Set<string>,
-  path: Set<string>,
+  targetIds: string[],
 ) {
-  if (path.has(nodeId)) {
-    failValidation("Cycle detected in workflow graph.");
-  }
-
-  if (visited.has(nodeId)) {
-    return;
-  }
-
   const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
   const incomingByTarget = buildIncomingByTarget(document.edges);
-  const node = nodeMap.get(nodeId);
+  const executionPlan = buildWorkflowExecutionPlan(document, targetIds);
+  const executableNodeIds = new Set(executionPlan.executableNodeIds);
 
-  if (!node) {
-    failValidation(`Node ${nodeId} not found.`);
-  }
+  for (const nodeId of executionPlan.requiredNodeIds) {
+    const node = nodeMap.get(nodeId);
 
-  visited.add(nodeId);
-  path.add(nodeId);
+    if (!node) {
+      failValidation(`Node ${nodeId} not found.`);
+    }
 
-  switch (node.kind) {
-    case "list":
-      if (!node.items.some((value) => value.trim())) {
-        failValidation("List node is empty.");
-      }
-      break;
-    case "prompt":
-      if (
-        !resolvePromptNodeTextBatch(node, (key) =>
-          getIncomingEdgesForHandle(incomingByTarget, node.id, key).length
-            ? {
-                type: "text",
-                lanes: [key],
-              }
-            : null,
-        )
-      ) {
-        failValidation("Prompt node is empty.");
-      }
-      break;
-    case "asset":
-      if (!node.assetKind || !node.assets.length) {
-        failValidation("Asset node is empty.");
-      }
-      break;
-    case "imageGenerator":
-    case "videoGenerator":
-    case "llmGenerator": {
-      const requiredTextHandles = getGeneratorInputHandles(
-        document,
-        node.id,
-      ).filter((handle) => handle.required && handle.valueType === "text");
-
-      for (const handle of requiredTextHandles) {
+    switch (node.kind) {
+      case "list":
+        if (!node.items.some((value) => value.trim())) {
+          failValidation("List node is empty.");
+        }
+        break;
+      case "prompt":
         if (
-          getIncomingEdgesForHandle(incomingByTarget, node.id, handle.id).length
+          !resolvePromptNodeTextBatch(node, (key) =>
+            getIncomingEdgesForHandle(incomingByTarget, node.id, key).length
+              ? {
+                  type: "text",
+                  lanes: [key],
+                }
+              : null,
+          )
         ) {
-          continue;
+          failValidation("Prompt node is empty.");
+        }
+        break;
+      case "asset":
+        if (!node.assetKind || !node.assets.length) {
+          failValidation("Asset node is empty.");
+        }
+        break;
+      case "imageGenerator":
+      case "videoGenerator":
+      case "llmGenerator": {
+        if (!executableNodeIds.has(node.id)) {
+          break;
         }
 
-        failValidation(`Connect ${handle.label.toLowerCase()} text.`);
-      }
-      if (getGeneratorIterationPreview(document, node.id).mismatchedIterators) {
-        failValidation("Connected input lane counts do not match.");
-      }
-      break;
-    }
-  }
+        const requiredTextHandles = getGeneratorInputHandles(
+          document,
+          node.id,
+        ).filter((handle) => handle.required && handle.valueType === "text");
 
-  for (const edge of incomingByTarget.get(nodeId) ?? []) {
-    validateExecutionSubgraph(document, edge.source, visited, new Set(path));
+        for (const handle of requiredTextHandles) {
+          if (
+            getIncomingEdgesForHandle(incomingByTarget, node.id, handle.id)
+              .length
+          ) {
+            continue;
+          }
+
+          failValidation(`Connect ${handle.label.toLowerCase()} text.`);
+        }
+
+        if (
+          executionPlan.generatorIterationById.get(node.id)?.mismatchedIterators
+        ) {
+          failValidation("Connected input lane counts do not match.");
+        }
+        break;
+      }
+    }
   }
 }
 
@@ -184,21 +180,6 @@ export const WorkflowGraphValidator = {
 
   validateExecutionTargets(document: WorkflowDocument, targetIds: string[]) {
     this.validateQuoteTargets(document, targetIds);
-
-    const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
-    const visited = new Set<string>();
-
-    for (const targetId of targetIds) {
-      const targetNode = nodeMap.get(targetId);
-      if (!targetNode) {
-        failValidation(`Node ${targetId} not found.`);
-      }
-
-      if (!isGeneratorNodeKind(targetNode.kind)) {
-        failValidation("Only generator nodes can be executed.");
-      }
-
-      validateExecutionSubgraph(document, targetId, visited, new Set());
-    }
+    validateExecutionPlanNodes(document, targetIds);
   },
 };

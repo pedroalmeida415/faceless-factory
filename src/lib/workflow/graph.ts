@@ -68,12 +68,6 @@ export type GeneratorExecutionBatchPlan = {
   iterations: number;
 };
 
-export type GeneratorIterationInfo = {
-  hasIterator: boolean;
-  iterations: number;
-  mismatchedIterators: boolean;
-};
-
 function toNodeMap(document: WorkflowDocument) {
   return new Map(document.nodes.map((node) => [node.id, node]));
 }
@@ -150,7 +144,7 @@ function joinTextValues(values: readonly string[]) {
   return normalizeTextValues(values).join("\n\n").trim();
 }
 
-function getAlignedLaneCount(counts: readonly number[]) {
+export function getAlignedLaneCount(counts: readonly number[]) {
   const laneCounts = counts.filter((count) => count > 0);
   if (!laneCounts.length) {
     return 1;
@@ -166,15 +160,6 @@ function getAlignedLaneCount(counts: readonly number[]) {
   }
 
   return laneCount;
-}
-
-function hasMismatchedLaneCounts(counts: readonly number[]) {
-  try {
-    getAlignedLaneCount(counts);
-    return false;
-  } catch {
-    return true;
-  }
 }
 
 function getBroadcastLane<T>(lanes: readonly T[], index: number) {
@@ -718,67 +703,6 @@ export function buildGeneratorExecutionBatchPlan(params: {
     batches,
     hasIterator: batches.length > 1,
     iterations: batches.length,
-  };
-}
-
-export function getGeneratorIterationPreview(
-  document: WorkflowDocument,
-  targetId: string,
-): GeneratorIterationInfo {
-  const nodeMap = toNodeMap(document);
-  const targetNode = nodeMap.get(targetId);
-  if (!targetNode || !isGeneratorNodeKind(targetNode.kind)) {
-    return {
-      hasIterator: false,
-      iterations: 1,
-      mismatchedIterators: false,
-    };
-  }
-
-  const incomingByTarget = buildIncomingByTarget(document.edges);
-  const laneCounts = getGeneratorHandleDefinitions(
-    targetNode,
-    document.edges,
-  ).flatMap((handle) =>
-    getIncomingEdgesForHandle(incomingByTarget, targetId, handle.id).flatMap(
-      (edge) => {
-        const sourceNode = nodeMap.get(edge.source);
-        const runtimeValue = sourceNode
-          ? getWorkflowNodeRuntimeValue(document, sourceNode.id)
-          : null;
-
-        if (!runtimeValue || runtimeValue.type !== handle.valueType) {
-          return [];
-        }
-
-        return [runtimeValue.lanes.length];
-      },
-    ),
-  );
-
-  if (!laneCounts.length) {
-    return {
-      hasIterator: false,
-      iterations: 1,
-      mismatchedIterators: false,
-    };
-  }
-
-  const mismatchedIterators = hasMismatchedLaneCounts(laneCounts);
-  if (mismatchedIterators) {
-    return {
-      hasIterator: true,
-      iterations: Math.max(...laneCounts),
-      mismatchedIterators,
-    };
-  }
-
-  const iterations = getAlignedLaneCount(laneCounts);
-
-  return {
-    hasIterator: iterations > 1,
-    iterations,
-    mismatchedIterators,
   };
 }
 

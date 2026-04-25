@@ -20,7 +20,7 @@ import {
   createWorkflowExecutionRuntimeState,
   syncWorkflowExecutionRuntimeState,
 } from "~/lib/workflow/execution/runtime-state";
-import { collectExecutableWorkflowGeneratorNodeIds } from "~/lib/workflow/execution/subgraph";
+import { buildWorkflowExecutionPlan } from "~/lib/workflow/execution/subgraph";
 import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target-resolution";
 import type {
   StartWorkflowExecutionRequest,
@@ -169,11 +169,12 @@ export function executeWorkflow(params: {
     params.request.selection?.nodeIds ?? [],
     params.request.target,
   );
-  const targetNodeIdSet = new Set(targetNodeIds);
-  const executedNodeIds = collectExecutableWorkflowGeneratorNodeIds(
+  const executionPlan = buildWorkflowExecutionPlan(
     params.request.document,
     targetNodeIds,
   );
+  const targetNodeIdSet = new Set(targetNodeIds);
+  const executedNodeIds = executionPlan.executableNodeIds;
 
   const state: ExecutionState = {
     document: params.request.document,
