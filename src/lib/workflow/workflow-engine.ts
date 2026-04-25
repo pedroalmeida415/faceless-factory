@@ -19,10 +19,12 @@ import {
   getGeneratorInputHandles,
   isValidWorkflowConnection,
   normalizeGeneratorTargetHandles,
+  normalizeLaneReorderValueTypes,
   type WorkflowHandleReference,
 } from "~/lib/workflow/graph";
 import {
   formatNodeTitle,
+  LANE_REORDER_OUTPUT_HANDLE_ID,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
 import {
@@ -79,12 +81,31 @@ function syncEngineState(
     document.nodes,
     document.edges,
   );
+  const normalizedNodes = normalizeLaneReorderValueTypes(
+    document.nodes,
+    normalizedEdges,
+  );
+  const untypedLaneReorderNodeIds = new Set(
+    normalizedNodes.flatMap((node) =>
+      node.kind === "laneReorder" && !node.valueType ? [node.id] : [],
+    ),
+  );
+  const normalizedLaneEdges = untypedLaneReorderNodeIds.size
+    ? normalizedEdges.filter(
+        (edge) =>
+          !(
+            untypedLaneReorderNodeIds.has(edge.source) &&
+            edge.sourceHandle === LANE_REORDER_OUTPUT_HANDLE_ID
+          ),
+      )
+    : normalizedEdges;
   const normalizedDocument =
-    normalizedEdges === document.edges
+    normalizedLaneEdges === document.edges && normalizedNodes === document.nodes
       ? document
       : ({
           ...document,
-          edges: normalizedEdges,
+          edges: normalizedLaneEdges,
+          nodes: normalizedNodes,
         } satisfies WorkflowDocument);
 
   WorkflowGraphValidator.validateDocument(normalizedDocument);

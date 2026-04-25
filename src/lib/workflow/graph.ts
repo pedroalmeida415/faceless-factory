@@ -11,26 +11,25 @@ import {
   getImageGeneratorHandleDefinitions,
   getVideoGeneratorHandleDefinitions,
 } from "~/lib/workflow/generator-models";
+import {
+  type MediaRuntimeValue,
+  type RuntimeValue,
+  reorderRuntimeValue,
+  resolveLanePermutation,
+  type TextRuntimeValue,
+} from "~/lib/workflow/lanes";
 import { getLlmGeneratorHandleDefinitions } from "~/lib/workflow/llm-models";
 import {
   getNodeOutputHandleId,
+  LANE_REORDER_INPUT_HANDLE_ID,
+  LANE_REORDER_OUTPUT_HANDLE_ID,
   PROMPT_VARIABLE_HANDLE_COLOR,
   PROMPT_VARIABLE_PATTERN,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
 import { isGeneratorNodeKind, type WorkflowAsset } from "~/lib/workflow/types";
 
-export type TextRuntimeValue = {
-  type: "text";
-  lanes: string[];
-};
-
-export type MediaRuntimeValue = {
-  type: "image" | "video";
-  lanes: WorkflowAsset[][];
-};
-
-export type RuntimeValue = TextRuntimeValue | MediaRuntimeValue;
+export type { MediaRuntimeValue, RuntimeValue, TextRuntimeValue };
 
 export type WorkflowHandleReference = {
   nodeId: string;
@@ -366,6 +365,61 @@ function resolveRuntimePromptNodeText(
   );
 }
 
+export function getLaneReorderInputValue(
+  document: WorkflowDocument,
+  nodeId: string,
+  path: ReadonlySet<string> = new Set(),
+  nodeMap = toNodeMap(document),
+  incomingByTarget = buildIncomingByTarget(document.edges),
+): RuntimeValue | null {
+  const incomingEdges = getIncomingEdgesForHandle(
+    incomingByTarget,
+    nodeId,
+    LANE_REORDER_INPUT_HANDLE_ID,
+  );
+  const edge = incomingEdges[0];
+  if (!edge || incomingEdges.length !== 1) {
+    return null;
+  }
+
+  return getWorkflowNodeRuntimeValue(
+    document,
+    edge.source,
+    new Set(path),
+    nodeMap,
+    incomingByTarget,
+  );
+}
+
+function resolveLaneReorderRuntimeValue(
+  document: WorkflowDocument,
+  node: Extract<WorkflowDocumentNode, { kind: "laneReorder" }>,
+  path: ReadonlySet<string>,
+  nodeMap: NodeMap,
+  incomingByTarget: IncomingByTarget,
+): RuntimeValue | null {
+  const inputValue = getLaneReorderInputValue(
+    document,
+    node.id,
+    path,
+    nodeMap,
+    incomingByTarget,
+  );
+  if (!inputValue || inputValue.type !== node.valueType) {
+    return null;
+  }
+
+  return reorderRuntimeValue(
+    inputValue,
+    resolveLanePermutation({
+      laneCount: inputValue.lanes.length,
+      mode: node.mode,
+      order: node.order,
+      shift: node.shift,
+    }),
+  );
+}
+
 function getGeneratorRepeatableHandlePrefixes(
   node: WorkflowDocumentNode,
   edges: WorkflowDocumentEdge[],
@@ -409,6 +463,47 @@ export function getWorkflowHandleValueType(
     : getNodeInputValueType(node, handle.handleId, document.edges);
 }
 
+export function normalizeLaneReorderValueTypes(
+  nodes: WorkflowDocumentNode[],
+  edges: WorkflowDocumentEdge[],
+) {
+  const incomingByTarget = buildIncomingByTarget(edges);
+  const document = { nodes, edges } as WorkflowDocument;
+  let didChange = false;
+
+  const normalizedNodes = nodes.map((node) => {
+    if (node.kind !== "laneReorder") {
+      return node;
+    }
+
+    const inputEdges = getIncomingEdgesForHandle(
+      incomingByTarget,
+      node.id,
+      LANE_REORDER_INPUT_HANDLE_ID,
+    );
+    const inputEdge = inputEdges.length === 1 ? inputEdges[0] : null;
+    const inputValueType = inputEdge
+      ? getWorkflowHandleValueType(document, {
+          nodeId: inputEdge.source,
+          handleId: inputEdge.sourceHandle,
+          handleType: "source",
+        })
+      : null;
+
+    if (node.valueType === inputValueType) {
+      return node;
+    }
+
+    didChange = true;
+    return {
+      ...node,
+      valueType: inputValueType,
+    };
+  });
+
+  return didChange ? normalizedNodes : nodes;
+}
+
 export function findFirstWorkflowHandleIdByValueType(
   document: WorkflowDocument,
   params: {
@@ -429,6 +524,10 @@ export function findFirstWorkflowHandleIdByValueType(
     return getNodeOutputValueType(node, handleId) === params.valueType
       ? handleId
       : null;
+  }
+
+  if (node.kind === "laneReorder") {
+    return LANE_REORDER_INPUT_HANDLE_ID;
   }
 
   if (node.kind === "prompt") {
@@ -503,6 +602,10 @@ function getNodeOutputValueType(
       return normalizedHandleId === "text" ? "text" : null;
     case "asset":
       return normalizedHandleId === "asset" ? node.assetKind : null;
+    case "laneReorder":
+      return normalizedHandleId === LANE_REORDER_OUTPUT_HANDLE_ID
+        ? node.valueType
+        : null;
     case "imageGenerator":
       return normalizedHandleId === "images" ? "image" : null;
     case "videoGenerator":
@@ -527,6 +630,10 @@ function getNodeInputValueType(
     )
       ? "text"
       : null;
+  }
+
+  if (node.kind === "laneReorder") {
+    return handleId === LANE_REORDER_INPUT_HANDLE_ID ? node.valueType : null;
   }
 
   if (node.kind === "list" || !isGeneratorNodeKind(node.kind)) {
@@ -580,6 +687,14 @@ export function getWorkflowNodeRuntimeValue(
             lanes: node.assets.map((asset) => [asset]),
           }
         : null;
+    case "laneReorder":
+      return resolveLaneReorderRuntimeValue(
+        document,
+        node,
+        nextPath,
+        nodeMap,
+        incomingByTarget,
+      );
     case "imageGenerator":
     case "videoGenerator":
     case "llmGenerator":
@@ -769,6 +884,30 @@ function edgeExists(
   );
 }
 
+function conflictsWithSingleInputHandle(
+  document: WorkflowDocument,
+  connection: Pick<
+    Connection,
+    "source" | "sourceHandle" | "target" | "targetHandle"
+  >,
+) {
+  if (connection.targetHandle !== LANE_REORDER_INPUT_HANDLE_ID) {
+    return false;
+  }
+
+  const targetNode = document.nodes.find(
+    (node) => node.id === connection.target,
+  );
+  return (
+    targetNode?.kind === "laneReorder" &&
+    document.edges.some(
+      (edge) =>
+        edge.target === connection.target &&
+        edge.targetHandle === LANE_REORDER_INPUT_HANDLE_ID,
+    )
+  );
+}
+
 function hasCompatibleConnection(
   document: WorkflowDocument,
   connection: Pick<
@@ -797,6 +936,16 @@ function hasCompatibleConnection(
     connection.targetHandle,
     document.edges,
   );
+
+  if (
+    targetNode.kind === "laneReorder" &&
+    connection.targetHandle === LANE_REORDER_INPUT_HANDLE_ID
+  ) {
+    return Boolean(
+      sourceValueType &&
+        (!targetNode.valueType || targetNode.valueType === sourceValueType),
+    );
+  }
 
   if (!sourceValueType || !targetValueType) {
     return false;
@@ -852,6 +1001,10 @@ export function isValidWorkflowConnection(
   }
 
   if (edgeExists(document.edges, connection)) {
+    return false;
+  }
+
+  if (conflictsWithSingleInputHandle(document, connection)) {
     return false;
   }
 

@@ -6,9 +6,12 @@ import {
   buildOutgoingBySource,
   getGeneratorInputHandles,
   getIncomingEdgesForHandle,
+  getLaneReorderInputValue,
   isValidWorkflowEdge,
   resolvePromptNodeTextBatch,
 } from "~/lib/workflow/graph";
+import { getLanePermutationValidationMessage } from "~/lib/workflow/lanes";
+import { LANE_REORDER_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
 
 function failValidation(message: string): never {
@@ -83,6 +86,35 @@ function validateExecutionPlanNodes(
           failValidation("Asset node is empty.");
         }
         break;
+      case "laneReorder": {
+        const inputEdges = getIncomingEdgesForHandle(
+          incomingByTarget,
+          node.id,
+          LANE_REORDER_INPUT_HANDLE_ID,
+        );
+
+        if (inputEdges.length !== 1) {
+          failValidation("Lane Reorder needs exactly one input.");
+        }
+
+        const inputValue = getLaneReorderInputValue(document, node.id);
+        if (inputValue && inputValue.type !== node.valueType) {
+          failValidation(
+            "Lane Reorder input type does not match its lane type.",
+          );
+        }
+
+        if (node.mode === "manual" && inputValue) {
+          const message = getLanePermutationValidationMessage(
+            node.order,
+            inputValue.lanes.length,
+          );
+          if (message) {
+            failValidation(message);
+          }
+        }
+        break;
+      }
       case "imageGenerator":
       case "videoGenerator":
       case "llmGenerator": {

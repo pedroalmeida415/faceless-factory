@@ -41,6 +41,7 @@ export type WorkflowNodeKind =
   | "list"
   | "prompt"
   | "asset"
+  | "laneReorder"
   | "imageGenerator"
   | "videoGenerator"
   | "llmGenerator";
@@ -55,6 +56,7 @@ export type LlmThinkingLevel = (typeof LLM_THINKING_LEVELS)[number];
 export type GeneratorConfigValue = string | number | boolean | null;
 export type GeneratorConfig = Record<string, GeneratorConfigValue>;
 export type PromptDisplayMode = (typeof PROMPT_DISPLAY_MODES)[number];
+export type LaneReorderMode = "shift" | "manual";
 
 export type PromptVariable = {
   key: string;
@@ -99,6 +101,13 @@ export type ListNodeFields = {
 export type AssetNodeFields = {
   assetKind: AssetKind | null;
   assets: WorkflowAsset[];
+};
+
+export type LaneReorderNodeFields = {
+  mode: LaneReorderMode;
+  order: number[];
+  shift: number;
+  valueType: "text" | "image" | "video" | null;
 };
 
 export type WorkflowGeneratorResult = {
@@ -151,6 +160,11 @@ export type AssetNodeData = BaseNodeData &
     kind: "asset";
   };
 
+export type LaneReorderNodeData = BaseNodeData &
+  LaneReorderNodeFields & {
+    kind: "laneReorder";
+  };
+
 export type ImageGeneratorNodeData = BaseNodeData &
   WorkflowGeneratorResult &
   ImageGeneratorSettings & {
@@ -173,6 +187,7 @@ export type WorkflowNodeData =
   | PromptNodeData
   | ListNodeData
   | AssetNodeData
+  | LaneReorderNodeData
   | ImageGeneratorNodeData
   | VideoGeneratorNodeData
   | LlmGeneratorNodeData;

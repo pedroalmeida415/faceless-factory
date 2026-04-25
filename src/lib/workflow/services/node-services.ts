@@ -1,5 +1,6 @@
 import type {
   ImageGeneratorWorkflowNode,
+  LaneReorderWorkflowNode,
   ListWorkflowNode,
   LlmGeneratorWorkflowNode,
   PromptWorkflowNode,
@@ -15,6 +16,7 @@ import {
   setVideoGeneratorModel,
 } from "~/lib/workflow/generator-models";
 import { setLlmGeneratorConfigValue } from "~/lib/workflow/llm-models";
+import type { WorkflowValueType } from "~/lib/workflow/node-definitions";
 import type {
   AssetKind,
   GeneratorConfigValue,
@@ -122,6 +124,50 @@ export const ListNodeService = {
     return {
       ...node,
       items,
+    };
+  },
+};
+
+export const LaneReorderNodeService = {
+  setMode(
+    node: LaneReorderWorkflowNode,
+    mode: LaneReorderWorkflowNode["mode"],
+  ): LaneReorderWorkflowNode {
+    return {
+      ...node,
+      mode,
+    };
+  },
+
+  setOrder(
+    node: LaneReorderWorkflowNode,
+    order: number[],
+  ): LaneReorderWorkflowNode {
+    return {
+      ...node,
+      mode: "manual",
+      order,
+    };
+  },
+
+  setShift(
+    node: LaneReorderWorkflowNode,
+    shift: number,
+  ): LaneReorderWorkflowNode {
+    return {
+      ...node,
+      mode: "shift",
+      shift: Math.trunc(shift),
+    };
+  },
+
+  setValueType(
+    node: LaneReorderWorkflowNode,
+    valueType: WorkflowValueType | null,
+  ): LaneReorderWorkflowNode {
+    return {
+      ...node,
+      valueType,
     };
   },
 };

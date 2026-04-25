@@ -26,10 +26,16 @@ import {
   getVideoGeneratorModelOptions,
   getVideoGeneratorModeOptions,
 } from "~/lib/workflow/generator-models";
+import { getLaneReorderInputValue } from "~/lib/workflow/graph";
+import {
+  createIdentityLanePermutation,
+  getLanePermutationValidationMessage,
+} from "~/lib/workflow/lanes";
 import type {
   AssetNodeData,
   GeneratorConfigValue,
   ImageGeneratorNodeData,
+  LaneReorderNodeData,
   ListNodeData,
   LlmGeneratorNodeData,
   PromptNodeData,
@@ -46,10 +52,35 @@ import {
   OutputGallery,
   ShellButton,
 } from "./shared";
+import { useWorkflowStudioStore } from "./store";
 import { useWorkflowExecutionQuote } from "./useWorkflowExecutionQuote";
 
 function capitalize(value: string) {
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
+}
+
+function getLaneValueTypeColor(valueType: "text" | "image" | "video" | null) {
+  switch (valueType) {
+    case "text":
+      return "#f59e0b";
+    case "image":
+      return "#22c55e";
+    case "video":
+      return "#a78bfa";
+    default:
+      return "#94a3b8";
+  }
+}
+
+function parseLaneOrder(value: string) {
+  return value
+    .split(/[\s,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .flatMap((entry) => {
+      const laneNumber = Number(entry);
+      return Number.isInteger(laneNumber) ? [laneNumber - 1] : [];
+    });
 }
 
 function coerceConfigValue(
@@ -581,6 +612,151 @@ const AssetNode = memo(function AssetNode({
   );
 }, isSameNodeRender);
 
+const LaneReorderNode = memo(function LaneReorderNode({
+  id,
+  data,
+  selected,
+}: NodeProps<LaneReorderNodeData>) {
+  const { setLaneReorderMode, setLaneReorderOrder, setLaneReorderShift } =
+    useStudioContext();
+  const document = useWorkflowStudioStore((state) => state.document);
+  const inputValue = getLaneReorderInputValue(document, id);
+  const laneCount =
+    inputValue?.type === data.valueType ? inputValue.lanes.length : null;
+  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Lane";
+  const color = getLaneValueTypeColor(data.valueType);
+  const orderText = data.order.map((index) => index + 1).join(", ");
+  const [orderDraft, setOrderDraft] = useState(orderText);
+  const orderLabel =
+    data.mode === "manual" && data.order.length
+      ? data.order.map((index) => index + 1).join(" -> ")
+      : `Shift ${data.shift > 0 ? "+" : ""}${data.shift}`;
+  const orderValidationMessage =
+    data.mode === "manual" && laneCount !== null
+      ? getLanePermutationValidationMessage(data.order, laneCount)
+      : null;
+  const commitOrder = () => setLaneReorderOrder(id, parseLaneOrder(orderDraft));
+
+  useEffect(() => {
+    setOrderDraft(orderText);
+  }, [orderText]);
+
+  return (
+    <NodeShell
+      data={data}
+      id={id}
+      inputs={[
+        {
+          id: "input",
+          label: valueTypeLabel,
+          color,
+        },
+      ]}
+      output={
+        data.valueType ? { id: "output", label: valueTypeLabel, color } : null
+      }
+      selected={selected}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge
+          className="border-border/70 bg-muted/50 text-foreground"
+          variant="outline"
+        >
+          {data.valueType ? `${valueTypeLabel} lanes` : "Connect lanes"}
+        </Badge>
+        <Badge
+          className="border-primary/20 bg-primary/10 text-primary"
+          variant="outline"
+        >
+          {data.mode === "manual" ? "Manual" : "Rotate"}
+        </Badge>
+      </div>
+      {data.valueType ? (
+        <NodeNotice tone="accent">{orderLabel}</NodeNotice>
+      ) : (
+        <Card className="border-dashed py-0">
+          <CardContent className="py-4 text-muted-foreground text-sm">
+            Connect text, image, or video lanes to infer this transform type.
+          </CardContent>
+        </Card>
+      )}
+
+      <NodeFieldCard label="Mode">
+        <Select
+          onValueChange={(value) =>
+            setLaneReorderMode(id, value === "manual" ? "manual" : "shift")
+          }
+          value={data.mode}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="shift">Shift / rotate</SelectItem>
+            <SelectItem value="manual">Manual permutation</SelectItem>
+          </SelectContent>
+        </Select>
+      </NodeFieldCard>
+
+      {data.mode === "shift" ? (
+        <NodeFieldCard label="Shift">
+          <div className="grid grid-cols-3 gap-2">
+            <ShellButton
+              onClick={() => setLaneReorderShift(id, data.shift + 1)}
+            >
+              Left
+            </ShellButton>
+            <ShellButton
+              onClick={() => setLaneReorderShift(id, data.shift - 1)}
+            >
+              Right
+            </ShellButton>
+            <ShellButton onClick={() => setLaneReorderShift(id, 0)}>
+              Reset
+            </ShellButton>
+          </div>
+        </NodeFieldCard>
+      ) : (
+        <NodeFieldCard label="Manual order">
+          <Input
+            nativeInput
+            className="nodrag nopan nowheel"
+            onBlur={commitOrder}
+            onChange={(event) => setOrderDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.currentTarget.blur();
+              }
+            }}
+            placeholder="Example: 2, 3, 1"
+            value={orderDraft}
+          />
+          {laneCount !== null ? (
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-muted-foreground text-xs">
+                {laneCount} lane{laneCount === 1 ? "" : "s"}
+              </p>
+              <ShellButton
+                onClick={() =>
+                  setLaneReorderOrder(
+                    id,
+                    createIdentityLanePermutation(laneCount),
+                  )
+                }
+              >
+                Current order
+              </ShellButton>
+            </div>
+          ) : null}
+          {orderValidationMessage ? (
+            <p className="text-destructive text-xs">{orderValidationMessage}</p>
+          ) : null}
+        </NodeFieldCard>
+      )}
+    </NodeShell>
+  );
+}, isSameNodeRender);
+
 export function GeneratorControlGrid({
   controls,
   config,
@@ -879,6 +1055,7 @@ export const nodeTypes = {
   list: ListNode,
   prompt: PromptNode,
   asset: AssetNode,
+  laneReorder: LaneReorderNode,
   imageGenerator: ImageGeneratorNode,
   videoGenerator: VideoGeneratorNode,
   llmGenerator: LlmGeneratorNode,

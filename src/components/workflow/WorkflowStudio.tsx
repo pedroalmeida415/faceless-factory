@@ -82,6 +82,7 @@ const WORKFLOW_NODE_KINDS: WorkflowNodeKind[] = [
   "list",
   "prompt",
   "asset",
+  "laneReorder",
   "llmGenerator",
   "imageGenerator",
   "videoGenerator",

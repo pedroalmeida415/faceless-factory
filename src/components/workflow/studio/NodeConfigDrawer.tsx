@@ -22,6 +22,7 @@ import { cn } from "~/lib/utils";
 import type {
   AssetWorkflowNode,
   ImageGeneratorWorkflowNode,
+  LaneReorderWorkflowNode,
   ListWorkflowNode,
   LlmGeneratorWorkflowNode,
   PromptWorkflowNode,
@@ -195,6 +196,12 @@ function getDrawerHeading(node: WorkflowDocumentNode) {
         description: "Manage uploaded source media for this workflow branch.",
         title: "Asset",
       } as const;
+    case "laneReorder":
+      return {
+        description:
+          "Reorder lanes on this branch without mutating upstream output.",
+        title: "Lane Reorder",
+      } as const;
     case "imageGenerator":
       return {
         description: "Tune model, mode, and generation controls.",
@@ -283,6 +290,17 @@ function AssetConfigPanel({ node }: { node: AssetWorkflowNode }) {
         </ShellButton>
       ) : null}
     </div>
+  );
+}
+
+function LaneReorderConfigPanel({ node }: { node: LaneReorderWorkflowNode }) {
+  return (
+    <NodeFieldCard label="Inline settings">
+      <p className="text-sm">
+        Adjust {node.label} directly on the node card. Its lane type is inferred
+        from the connected input and resets when disconnected.
+      </p>
+    </NodeFieldCard>
   );
 }
 
@@ -491,6 +509,8 @@ function NodeConfigPanel({ node }: { node: WorkflowDocumentNode }) {
       return <PromptConfigPanel node={node} />;
     case "asset":
       return <AssetConfigPanel node={node} />;
+    case "laneReorder":
+      return <LaneReorderConfigPanel node={node} />;
     case "imageGenerator":
       return <ImageGeneratorConfigPanel node={node} />;
     case "videoGenerator":
@@ -523,6 +543,14 @@ function isSameNodeConfig(
         right.kind === "asset" &&
         left.assetKind === right.assetKind &&
         left.assets === right.assets
+      );
+    case "laneReorder":
+      return (
+        right.kind === "laneReorder" &&
+        left.mode === right.mode &&
+        left.order === right.order &&
+        left.shift === right.shift &&
+        left.valueType === right.valueType
       );
     case "imageGenerator":
       return (

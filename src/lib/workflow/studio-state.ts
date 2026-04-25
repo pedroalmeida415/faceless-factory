@@ -140,6 +140,17 @@ function toWorkflowNodeData(
         assetKind: node.assetKind,
         assets: node.assets,
       };
+    case "laneReorder":
+      return {
+        kind: node.kind,
+        label: node.label,
+        status,
+        error,
+        mode: node.mode,
+        order: node.order,
+        shift: node.shift,
+        valueType: node.valueType,
+      };
     case "imageGenerator":
       return {
         kind: node.kind,
@@ -283,6 +294,16 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       right.kind === "asset" &&
       left.assetKind === right.assetKind &&
       left.assets === right.assets
+    );
+  }
+
+  if (left.kind === "laneReorder") {
+    return (
+      right.kind === "laneReorder" &&
+      left.mode === right.mode &&
+      left.order === right.order &&
+      left.shift === right.shift &&
+      left.valueType === right.valueType
     );
   }
 

@@ -16,6 +16,7 @@ import {
 import type {
   AssetNodeFields,
   ImageGeneratorSettings,
+  LaneReorderNodeFields,
   ListNodeFields,
   LlmGeneratorSettings,
   PromptDisplayMode,
@@ -28,8 +29,8 @@ import type {
   WorkflowNodeKind,
 } from "~/lib/workflow/types";
 
-export const WORKFLOW_DOCUMENT_VERSION = 6;
-export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v6";
+export const WORKFLOW_DOCUMENT_VERSION = 7;
+export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v7";
 export const WORKFLOW_GRID_STEP = 5;
 
 export type WorkflowPosition = {
@@ -59,6 +60,11 @@ export type ListWorkflowNode = WorkflowDocumentNodeBase &
     kind: "list";
   };
 
+export type LaneReorderWorkflowNode = WorkflowDocumentNodeBase &
+  LaneReorderNodeFields & {
+    kind: "laneReorder";
+  };
+
 export type ImageGeneratorWorkflowNode = WorkflowDocumentNodeBase &
   ImageGeneratorSettings &
   WorkflowGeneratorResult & {
@@ -81,6 +87,7 @@ export type WorkflowDocumentNode =
   | PromptWorkflowNode
   | ListWorkflowNode
   | AssetWorkflowNode
+  | LaneReorderWorkflowNode
   | ImageGeneratorWorkflowNode
   | VideoGeneratorWorkflowNode
   | LlmGeneratorWorkflowNode;
@@ -179,6 +186,17 @@ function makeWorkflowNode(
         assetKind: null,
         assets: [],
       };
+    case "laneReorder":
+      return {
+        id,
+        kind,
+        label,
+        position,
+        mode: "shift",
+        order: [],
+        shift: 1,
+        valueType: null,
+      };
     case "imageGenerator":
       return {
         id,
@@ -226,6 +244,7 @@ function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
     value === "list" ||
     value === "prompt" ||
     value === "asset" ||
+    value === "laneReorder" ||
     value === "imageGenerator" ||
     value === "videoGenerator" ||
     value === "llmGenerator"
@@ -300,6 +319,26 @@ function asWorkflowAssetLanes(value: unknown) {
   return value
     .map((lane) => asWorkflowAssets(lane))
     .filter((lane) => lane.length);
+}
+
+function asLaneReorderMode(value: unknown): LaneReorderNodeFields["mode"] {
+  return value === "manual" ? "manual" : "shift";
+}
+
+function asLaneReorderValueType(
+  value: unknown,
+): LaneReorderNodeFields["valueType"] {
+  return value === "text" || value === "image" || value === "video"
+    ? value
+    : null;
+}
+
+function asLanePermutation(value: unknown) {
+  return Array.isArray(value)
+    ? value.flatMap((entry) =>
+        Number.isInteger(entry) && entry >= 0 ? [entry as number] : [],
+      )
+    : [];
 }
 
 function normalizeWorkflowGeneratorResult(
@@ -432,6 +471,22 @@ function normalizeWorkflowNode(
           inferredAssetKind || !assets.length
             ? assets
             : assets.filter((asset) => asset.kind === assets[0]?.kind),
+      };
+    }
+    case "laneReorder": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as LaneReorderWorkflowNode;
+
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        mode: asLaneReorderMode(value.mode),
+        order: asLanePermutation(value.order),
+        shift: isNumber(value.shift) ? Math.trunc(value.shift) : baseNode.shift,
+        valueType: asLaneReorderValueType(value.valueType),
       };
     }
     case "imageGenerator": {
@@ -572,11 +627,20 @@ export function specializeWorkflowNodeForValueType(
   node: WorkflowDocumentNode,
   valueType: WorkflowValueType,
 ) {
-  return node.kind === "asset" &&
+  if (
+    node.kind === "asset" &&
     (valueType === "image" || valueType === "video")
+  ) {
+    return {
+      ...node,
+      assetKind: valueType,
+    };
+  }
+
+  return node.kind === "laneReorder"
     ? {
         ...node,
-        assetKind: valueType,
+        valueType,
       }
     : node;
 }

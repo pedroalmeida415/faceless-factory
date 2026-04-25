@@ -1,6 +1,13 @@
 "use client";
 
-import { RiImageAiLine, RiImageLine, RiVideoAiLine } from "@remixicon/react";
+import {
+  RiFolderImageLine,
+  RiImageAiLine,
+  RiImageLine,
+  RiRobot2Line,
+  RiShuffleLine,
+  RiVideoAiLine,
+} from "@remixicon/react";
 import { Card, CardContent } from "~/components/ui/card";
 import { cn } from "~/lib/utils";
 import type { WorkflowNodeKind } from "~/lib/workflow/types";
@@ -46,74 +53,39 @@ const TextIcon = () => (
   </svg>
 );
 
-const LlmIcon = () => (
-  <svg
-    width="20"
-    height="20"
-    viewBox="0 0 24 24"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    <title>LLM</title>
-    <path
-      d="M12 3L13.9 8.1L19 10L13.9 11.9L12 17L10.1 11.9L5 10L10.1 8.1L12 3Z"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    ></path>
-    <path
-      d="M18 15L18.8 17.2L21 18L18.8 18.8L18 21L17.2 18.8L15 18L17.2 17.2L18 15Z"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    ></path>
-  </svg>
-);
-
-const AssetsDrawerIcon = () => (
-  <svg
-    width="20"
-    height="20"
-    viewBox="0 0 24 24"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    <title>Assets</title>
-    <path
-      d="M7 8.25H16.75C17.9926 8.25 19 9.25736 19 10.5V16.25"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    ></path>
-    <rect
-      x="5"
-      y="5"
-      width="11.75"
-      height="11.75"
-      rx="2.25"
-      stroke="currentColor"
-      strokeWidth="2"
-    ></rect>
-  </svg>
-);
-
-const NODE_ACTIONS: Array<{
-  kind: WorkflowNodeKind;
+const NODE_ACTION_GROUPS: Array<{
   label: string;
-  icon: React.ComponentType<{ className?: string }>;
+  actions: Array<{
+    kind: WorkflowNodeKind;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+  }>;
 }> = [
-  { kind: "list", label: "List", icon: TextIcon },
-  { kind: "prompt", label: "Prompt", icon: TextIcon },
-  { kind: "asset", label: "Asset", icon: RiImageLine },
-  { kind: "llmGenerator", label: "Run any LLM", icon: LlmIcon },
-  { kind: "videoGenerator", label: "Video Gen", icon: RiVideoAiLine },
   {
-    kind: "imageGenerator",
-    label: "Image Gen",
-    icon: RiImageAiLine,
+    label: "Inputs",
+    actions: [
+      { kind: "list", label: "List", icon: TextIcon },
+      { kind: "prompt", label: "Prompt", icon: TextIcon },
+      { kind: "asset", label: "Asset", icon: RiImageLine },
+    ],
+  },
+  {
+    label: "Transforms",
+    actions: [
+      { kind: "laneReorder", label: "Lane Reorder", icon: RiShuffleLine },
+    ],
+  },
+  {
+    label: "Generators",
+    actions: [
+      { kind: "llmGenerator", label: "Run any LLM", icon: RiRobot2Line },
+      { kind: "videoGenerator", label: "Video Gen", icon: RiVideoAiLine },
+      {
+        kind: "imageGenerator",
+        label: "Image Gen",
+        icon: RiImageAiLine,
+      },
+    ],
   },
 ];
 
@@ -130,17 +102,27 @@ export function WorkflowSidebar({
     <aside className="pointer-events-none absolute top-4 left-4 z-[60]">
       <Card className="pointer-events-auto rounded-[32px] border-border/60 bg-background/88 py-2 shadow-2xl backdrop-blur-xl">
         <CardContent className="flex flex-col items-center gap-2 px-2 py-0">
-          {NODE_ACTIONS.map(({ kind, label, icon: Icon }) => (
-            <ShellButton
-              aria-label={label}
-              className="size-11 rounded-full border-border/60 bg-background/70 p-0"
-              key={kind}
-              onClick={() => onAddNode(kind)}
-              size="icon"
-              title={label}
-            >
-              <Icon className="size-4" />
-            </ShellButton>
+          {NODE_ACTION_GROUPS.map((group, groupIndex) => (
+            <div className="contents" key={group.label}>
+              {groupIndex > 0 ? (
+                <div className="h-px w-8 bg-border/60" />
+              ) : null}
+              <div className="py-1 text-[8px] text-muted-foreground uppercase tracking-[0.18em] [writing-mode:vertical-rl]">
+                {group.label}
+              </div>
+              {group.actions.map(({ kind, label, icon: Icon }) => (
+                <ShellButton
+                  aria-label={label}
+                  className="size-11 rounded-full border-border/60 bg-background/70 p-0"
+                  key={kind}
+                  onClick={() => onAddNode(kind)}
+                  size="icon"
+                  title={label}
+                >
+                  <Icon className="size-4" />
+                </ShellButton>
+              ))}
+            </div>
           ))}
           <div className="h-px w-8 bg-border/60" />
           <ShellButton
@@ -156,7 +138,7 @@ export function WorkflowSidebar({
             size="icon"
             title={isAssetLibraryOpen ? "Close assets" : "Open assets"}
           >
-            <AssetsDrawerIcon />
+            <RiFolderImageLine className="size-4" />
           </ShellButton>
         </CardContent>
       </Card>

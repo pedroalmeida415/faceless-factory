@@ -8,6 +8,7 @@ import {
   getWorkflowGeneratorOutputRuntimeValue,
 } from "~/lib/workflow/graph";
 import {
+  LANE_REORDER_INPUT_HANDLE_ID,
   PROMPT_VARIABLE_PATTERN,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
@@ -57,6 +58,8 @@ function getNodeOutputValueType(
       return "text";
     case "asset":
       return node.assetKind;
+    case "laneReorder":
+      return node.valueType;
     case "imageGenerator":
       return "image";
     case "videoGenerator":
@@ -231,6 +234,24 @@ function resolveNodePlan(
             type: node.assetKind,
           }
         : null;
+    case "laneReorder": {
+      const incomingEdges = getIncomingEdgesForHandle(
+        context.incomingByTarget,
+        node.id,
+        LANE_REORDER_INPUT_HANDLE_ID,
+      );
+      if (incomingEdges.length !== 1) {
+        return null;
+      }
+
+      const [incomingEdge] = incomingEdges;
+      if (!incomingEdge) {
+        return null;
+      }
+
+      const value = resolveNodePlan(context, incomingEdge.source, nextPath);
+      return value?.type === node.valueType ? value : null;
+    }
     case "prompt":
       return resolvePromptPlan(context, node, nextPath);
     case "imageGenerator":

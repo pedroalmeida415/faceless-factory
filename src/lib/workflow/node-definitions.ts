@@ -1,6 +1,8 @@
 import type { PromptDisplayMode, WorkflowNodeKind } from "~/lib/workflow/types";
 
 export const PROMPT_INPUT_HANDLE_ID = "prompt";
+export const LANE_REORDER_INPUT_HANDLE_ID = "input";
+export const LANE_REORDER_OUTPUT_HANDLE_ID = "output";
 export const PROMPT_VARIABLE_PATTERN =
   /\{\{([a-zA-Z][a-zA-Z0-9]*)(?::[^}]*)?\}\}/g;
 export const PROMPT_VARIABLE_HANDLE_COLOR = "#f59e0b";
@@ -23,6 +25,8 @@ export function formatNodeTitle(kind: WorkflowNodeKind) {
       return "Prompt";
     case "asset":
       return "Asset";
+    case "laneReorder":
+      return "Lane Reorder";
     case "imageGenerator":
       return "Image Gen";
     case "videoGenerator":
@@ -40,6 +44,8 @@ export function getNodeOutputHandleId(kind: WorkflowNodeKind) {
       return "text";
     case "asset":
       return "asset";
+    case "laneReorder":
+      return LANE_REORDER_OUTPUT_HANDLE_ID;
     case "imageGenerator":
       return "images";
     case "videoGenerator":

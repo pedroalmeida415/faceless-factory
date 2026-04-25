@@ -21,6 +21,9 @@ export type StudioContextValue = {
   clearNodeAssets: (nodeId: string) => void;
   getGeneratorIterationInfo: (nodeId: string) => GeneratorIterationInfo;
   getGeneratorInputs: (nodeId: string) => GeneratorHandleDefinition[];
+  setLaneReorderMode: (nodeId: string, mode: "shift" | "manual") => void;
+  setLaneReorderOrder: (nodeId: string, order: number[]) => void;
+  setLaneReorderShift: (nodeId: string, shift: number) => void;
   setImageGeneratorModel: (
     nodeId: string,
     model: ImageGeneratorModelId,

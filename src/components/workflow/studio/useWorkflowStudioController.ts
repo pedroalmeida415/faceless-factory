@@ -32,6 +32,15 @@ export function useWorkflowStudioController() {
   const setImageGeneratorModel = useWorkflowStudioStore(
     (state) => state.setImageGeneratorModel,
   );
+  const setLaneReorderMode = useWorkflowStudioStore(
+    (state) => state.setLaneReorderMode,
+  );
+  const setLaneReorderOrder = useWorkflowStudioStore(
+    (state) => state.setLaneReorderOrder,
+  );
+  const setLaneReorderShift = useWorkflowStudioStore(
+    (state) => state.setLaneReorderShift,
+  );
   const setVideoGeneratorModel = useWorkflowStudioStore(
     (state) => state.setVideoGeneratorModel,
   );
@@ -86,6 +95,9 @@ export function useWorkflowStudioController() {
       clearNodeAssets,
       getGeneratorInputs,
       getGeneratorIterationInfo,
+      setLaneReorderMode,
+      setLaneReorderOrder,
+      setLaneReorderShift,
       setImageGeneratorModel,
       setVideoGeneratorModel,
       setImageGeneratorMode,
@@ -100,6 +112,9 @@ export function useWorkflowStudioController() {
       clearNodeAssets,
       getGeneratorInputs,
       getGeneratorIterationInfo,
+      setLaneReorderMode,
+      setLaneReorderOrder,
+      setLaneReorderShift,
       runNode,
       setImageGeneratorConfigValue,
       setImageGeneratorMode,

@@ -44,16 +44,23 @@ import {
   getIncomingEdgesForHandle,
   getPromptNodeReferencedVariableKeys,
   getWorkflowGeneratorOutputRuntimeValue,
-  type RuntimeValue,
   resolvePromptNodeTextBatch,
-  type TextRuntimeValue,
 } from "~/lib/workflow/graph";
+import {
+  type RuntimeValue,
+  reorderRuntimeValue,
+  resolveLanePermutation,
+  type TextRuntimeValue,
+} from "~/lib/workflow/lanes";
 import {
   buildLlmGenerationRequest,
   calculateLlmUsageCreditCost,
   SYSTEM_PROMPT_INPUT_HANDLE_ID,
 } from "~/lib/workflow/llm-models";
-import { PROMPT_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
+import {
+  LANE_REORDER_INPUT_HANDLE_ID,
+  PROMPT_INPUT_HANDLE_ID,
+} from "~/lib/workflow/node-definitions";
 import {
   ImageGeneratorService,
   LlmGeneratorService,
@@ -170,6 +177,30 @@ function evaluatePromptNodeTextBatch(
       (key) => resolvedVariables.get(key) ?? null,
     );
   });
+}
+
+function evaluateLaneReorderInput(
+  currentId: string,
+  path: ReadonlySet<string>,
+  incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
+  evaluateNode: EvaluateNode,
+) {
+  const incomingEdges = getIncomingEdgesForHandle(
+    incomingByTarget,
+    currentId,
+    LANE_REORDER_INPUT_HANDLE_ID,
+  );
+  const edge = incomingEdges[0];
+
+  if (!edge || incomingEdges.length !== 1) {
+    return Effect.fail(
+      new WorkflowValidationError({
+        message: "Lane Reorder needs exactly one input.",
+      }),
+    );
+  }
+
+  return evaluateNode(edge.source, path);
 }
 
 export function executeWorkflow(params: {
@@ -338,6 +369,48 @@ export function executeWorkflow(params: {
             type: node.assetKind,
             lanes: node.assets.map((asset) => [asset]),
           } satisfies RuntimeValue;
+        });
+      case "laneReorder":
+        return Effect.gen(function* () {
+          const inputValue = yield* evaluateLaneReorderInput(
+            currentId,
+            nextPath,
+            incomingByTarget,
+            evaluateNode,
+          );
+
+          if (inputValue.type !== node.valueType) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message:
+                  "Lane Reorder input type does not match its lane type.",
+              }),
+            );
+          }
+
+          const laneOrder = yield* Effect.try({
+            try: () =>
+              resolveLanePermutation({
+                laneCount: inputValue.lanes.length,
+                mode: node.mode,
+                order: node.order,
+                shift: node.shift,
+              }),
+            catch: (cause) =>
+              new WorkflowValidationError({
+                message:
+                  cause instanceof Error
+                    ? cause.message
+                    : "Invalid lane order.",
+                cause,
+              }),
+          });
+
+          yield* setNodeRuntime(currentId, "success", null);
+          return reorderRuntimeValue(
+            inputValue,
+            laneOrder,
+          ) satisfies RuntimeValue;
         });
       case "imageGenerator":
         return Effect.gen(function* () {
