@@ -41,6 +41,15 @@ export function useWorkflowStudioController() {
   const setLaneReorderShift = useWorkflowStudioStore(
     (state) => state.setLaneReorderShift,
   );
+  const setLaneSelectIndices = useWorkflowStudioStore(
+    (state) => state.setLaneSelectIndices,
+  );
+  const setLaneSplitCount = useWorkflowStudioStore(
+    (state) => state.setLaneSplitCount,
+  );
+  const setLaneZipAlignMode = useWorkflowStudioStore(
+    (state) => state.setLaneZipAlignMode,
+  );
   const setVideoGeneratorModel = useWorkflowStudioStore(
     (state) => state.setVideoGeneratorModel,
   );
@@ -98,6 +107,9 @@ export function useWorkflowStudioController() {
       setLaneReorderMode,
       setLaneReorderOrder,
       setLaneReorderShift,
+      setLaneSelectIndices,
+      setLaneSplitCount,
+      setLaneZipAlignMode,
       setImageGeneratorModel,
       setVideoGeneratorModel,
       setImageGeneratorMode,
@@ -115,6 +127,9 @@ export function useWorkflowStudioController() {
       setLaneReorderMode,
       setLaneReorderOrder,
       setLaneReorderShift,
+      setLaneSelectIndices,
+      setLaneSplitCount,
+      setLaneZipAlignMode,
       runNode,
       setImageGeneratorConfigValue,
       setImageGeneratorMode,

@@ -16,7 +16,11 @@ import {
 import type {
   AssetNodeFields,
   ImageGeneratorSettings,
+  LaneMergeNodeFields,
   LaneReorderNodeFields,
+  LaneSelectNodeFields,
+  LaneSplitNodeFields,
+  LaneZipAlignNodeFields,
   ListNodeFields,
   LlmGeneratorSettings,
   PromptDisplayMode,
@@ -65,6 +69,26 @@ export type LaneReorderWorkflowNode = WorkflowDocumentNodeBase &
     kind: "laneReorder";
   };
 
+export type LaneSelectWorkflowNode = WorkflowDocumentNodeBase &
+  LaneSelectNodeFields & {
+    kind: "laneSelect";
+  };
+
+export type LaneSplitWorkflowNode = WorkflowDocumentNodeBase &
+  LaneSplitNodeFields & {
+    kind: "laneSplit";
+  };
+
+export type LaneMergeWorkflowNode = WorkflowDocumentNodeBase &
+  LaneMergeNodeFields & {
+    kind: "laneMerge";
+  };
+
+export type LaneZipAlignWorkflowNode = WorkflowDocumentNodeBase &
+  LaneZipAlignNodeFields & {
+    kind: "laneZipAlign";
+  };
+
 export type ImageGeneratorWorkflowNode = WorkflowDocumentNodeBase &
   ImageGeneratorSettings &
   WorkflowGeneratorResult & {
@@ -88,6 +112,10 @@ export type WorkflowDocumentNode =
   | ListWorkflowNode
   | AssetWorkflowNode
   | LaneReorderWorkflowNode
+  | LaneSelectWorkflowNode
+  | LaneSplitWorkflowNode
+  | LaneMergeWorkflowNode
+  | LaneZipAlignWorkflowNode
   | ImageGeneratorWorkflowNode
   | VideoGeneratorWorkflowNode
   | LlmGeneratorWorkflowNode;
@@ -197,6 +225,41 @@ function makeWorkflowNode(
         shift: 1,
         valueType: null,
       };
+    case "laneSelect":
+      return {
+        id,
+        kind,
+        label,
+        position,
+        indices: [0],
+        valueType: null,
+      };
+    case "laneSplit":
+      return {
+        id,
+        kind,
+        label,
+        position,
+        splitCount: 2,
+        valueType: null,
+      };
+    case "laneMerge":
+      return {
+        id,
+        kind,
+        label,
+        position,
+        valueType: null,
+      };
+    case "laneZipAlign":
+      return {
+        id,
+        kind,
+        label,
+        position,
+        mode: "zip",
+        valueType: null,
+      };
     case "imageGenerator":
       return {
         id,
@@ -245,6 +308,10 @@ function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
     value === "prompt" ||
     value === "asset" ||
     value === "laneReorder" ||
+    value === "laneSelect" ||
+    value === "laneSplit" ||
+    value === "laneMerge" ||
+    value === "laneZipAlign" ||
     value === "imageGenerator" ||
     value === "videoGenerator" ||
     value === "llmGenerator"
@@ -331,6 +398,14 @@ function asLaneReorderValueType(
   return value === "text" || value === "image" || value === "video"
     ? value
     : null;
+}
+
+function asLaneZipAlignMode(value: unknown): LaneZipAlignNodeFields["mode"] {
+  return value === "broadcast" ? "broadcast" : "zip";
+}
+
+function asPositiveInteger(value: unknown, fallback: number) {
+  return isNumber(value) && value > 0 ? Math.trunc(value) : fallback;
 }
 
 function asLanePermutation(value: unknown) {
@@ -489,6 +564,61 @@ function normalizeWorkflowNode(
         valueType: asLaneReorderValueType(value.valueType),
       };
     }
+    case "laneSelect": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as LaneSelectWorkflowNode;
+
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        indices: asLanePermutation(value.indices),
+        valueType: asLaneReorderValueType(value.valueType),
+      };
+    }
+    case "laneSplit": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as LaneSplitWorkflowNode;
+
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        splitCount: asPositiveInteger(value.splitCount, baseNode.splitCount),
+        valueType: asLaneReorderValueType(value.valueType),
+      };
+    }
+    case "laneMerge": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as LaneMergeWorkflowNode;
+
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        valueType: asLaneReorderValueType(value.valueType),
+      };
+    }
+    case "laneZipAlign": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as LaneZipAlignWorkflowNode;
+
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        mode: asLaneZipAlignMode(value.mode),
+        valueType: asLaneReorderValueType(value.valueType),
+      };
+    }
     case "imageGenerator": {
       const baseNode = makeWorkflowNode(
         id,
@@ -637,7 +767,11 @@ export function specializeWorkflowNodeForValueType(
     };
   }
 
-  return node.kind === "laneReorder"
+  return node.kind === "laneReorder" ||
+    node.kind === "laneSelect" ||
+    node.kind === "laneSplit" ||
+    node.kind === "laneMerge" ||
+    node.kind === "laneZipAlign"
     ? {
         ...node,
         valueType,

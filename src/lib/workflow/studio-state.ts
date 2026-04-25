@@ -151,6 +151,41 @@ function toWorkflowNodeData(
         shift: node.shift,
         valueType: node.valueType,
       };
+    case "laneSelect":
+      return {
+        kind: node.kind,
+        label: node.label,
+        status,
+        error,
+        indices: node.indices,
+        valueType: node.valueType,
+      };
+    case "laneSplit":
+      return {
+        kind: node.kind,
+        label: node.label,
+        status,
+        error,
+        splitCount: node.splitCount,
+        valueType: node.valueType,
+      };
+    case "laneMerge":
+      return {
+        kind: node.kind,
+        label: node.label,
+        status,
+        error,
+        valueType: node.valueType,
+      };
+    case "laneZipAlign":
+      return {
+        kind: node.kind,
+        label: node.label,
+        status,
+        error,
+        mode: node.mode,
+        valueType: node.valueType,
+      };
     case "imageGenerator":
       return {
         kind: node.kind,
@@ -303,6 +338,34 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       left.mode === right.mode &&
       left.order === right.order &&
       left.shift === right.shift &&
+      left.valueType === right.valueType
+    );
+  }
+
+  if (left.kind === "laneSelect") {
+    return (
+      right.kind === "laneSelect" &&
+      left.indices === right.indices &&
+      left.valueType === right.valueType
+    );
+  }
+
+  if (left.kind === "laneSplit") {
+    return (
+      right.kind === "laneSplit" &&
+      left.splitCount === right.splitCount &&
+      left.valueType === right.valueType
+    );
+  }
+
+  if (left.kind === "laneMerge") {
+    return right.kind === "laneMerge" && left.valueType === right.valueType;
+  }
+
+  if (left.kind === "laneZipAlign") {
+    return (
+      right.kind === "laneZipAlign" &&
+      left.mode === right.mode &&
       left.valueType === right.valueType
     );
   }

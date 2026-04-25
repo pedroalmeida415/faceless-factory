@@ -1,6 +1,10 @@
 import type {
   ImageGeneratorWorkflowNode,
+  LaneMergeWorkflowNode,
   LaneReorderWorkflowNode,
+  LaneSelectWorkflowNode,
+  LaneSplitWorkflowNode,
+  LaneZipAlignWorkflowNode,
   ListWorkflowNode,
   LlmGeneratorWorkflowNode,
   PromptWorkflowNode,
@@ -169,6 +173,39 @@ export const LaneReorderNodeService = {
       ...node,
       valueType,
     };
+  },
+};
+
+export const LaneSelectNodeService = {
+  setIndices(node: LaneSelectWorkflowNode, indices: number[]) {
+    return { ...node, indices } satisfies LaneSelectWorkflowNode;
+  },
+};
+
+export const LaneSplitNodeService = {
+  setSplitCount(node: LaneSplitWorkflowNode, splitCount: number) {
+    return {
+      ...node,
+      splitCount: Math.max(1, Math.trunc(splitCount)),
+    } satisfies LaneSplitWorkflowNode;
+  },
+};
+
+export const LaneMergeNodeService = {
+  setValueType(
+    node: LaneMergeWorkflowNode,
+    valueType: WorkflowValueType | null,
+  ) {
+    return { ...node, valueType } satisfies LaneMergeWorkflowNode;
+  },
+};
+
+export const LaneZipAlignNodeService = {
+  setMode(
+    node: LaneZipAlignWorkflowNode,
+    mode: LaneZipAlignWorkflowNode["mode"],
+  ) {
+    return { ...node, mode } satisfies LaneZipAlignWorkflowNode;
   },
 };
 

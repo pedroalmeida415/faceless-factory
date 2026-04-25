@@ -24,6 +24,9 @@ export type StudioContextValue = {
   setLaneReorderMode: (nodeId: string, mode: "shift" | "manual") => void;
   setLaneReorderOrder: (nodeId: string, order: number[]) => void;
   setLaneReorderShift: (nodeId: string, shift: number) => void;
+  setLaneSelectIndices: (nodeId: string, indices: number[]) => void;
+  setLaneSplitCount: (nodeId: string, splitCount: number) => void;
+  setLaneZipAlignMode: (nodeId: string, mode: "zip" | "broadcast") => void;
   setImageGeneratorModel: (
     nodeId: string,
     model: ImageGeneratorModelId,

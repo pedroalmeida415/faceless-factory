@@ -19,6 +19,28 @@ export function getRuntimeValueLaneCount(value: RuntimeValue) {
   return value.lanes.length;
 }
 
+export function getAlignedLaneCount(counts: readonly number[]) {
+  const laneCounts = counts.filter((count) => count > 0);
+  if (!laneCounts.length) {
+    return 1;
+  }
+
+  const laneCount = Math.max(...laneCounts);
+  const mismatchedCount = laneCounts.find(
+    (count) => count !== 1 && count !== laneCount,
+  );
+
+  if (mismatchedCount !== undefined) {
+    throw new Error("Connected input lane counts do not match.");
+  }
+
+  return laneCount;
+}
+
+export function getBroadcastLane<T>(lanes: readonly T[], index: number) {
+  return lanes.length === 1 ? lanes[0] : lanes[index];
+}
+
 export function createIdentityLanePermutation(laneCount: number) {
   return Array.from({ length: laneCount }, (_, index) => index);
 }
@@ -113,6 +135,181 @@ export function reorderRuntimeValue(
         type: value.type,
         lanes: reorderArray(value.lanes, order),
       };
+  }
+}
+
+export function getLaneSelectionValidationMessage(
+  indices: readonly number[],
+  laneCount: number,
+) {
+  if (!indices.length) {
+    return "Lane selection must include at least one lane.";
+  }
+
+  const seen = new Set<number>();
+  for (const index of indices) {
+    if (!Number.isInteger(index) || index < 0 || index >= laneCount) {
+      return "Lane selection contains an out-of-range lane index.";
+    }
+    if (seen.has(index)) {
+      return "Lane selection cannot contain duplicate lane indices.";
+    }
+    seen.add(index);
+  }
+
+  return null;
+}
+
+export function selectRuntimeValue(
+  value: RuntimeValue,
+  indices: readonly number[],
+): RuntimeValue {
+  const message = getLaneSelectionValidationMessage(
+    indices,
+    value.lanes.length,
+  );
+  if (message) {
+    throw new Error(message);
+  }
+
+  switch (value.type) {
+    case "text":
+      return { type: value.type, lanes: reorderArray(value.lanes, indices) };
+    case "image":
+    case "video":
+      return { type: value.type, lanes: reorderArray(value.lanes, indices) };
+  }
+}
+
+export function splitRuntimeValueLane(
+  value: RuntimeValue,
+  index: number,
+): RuntimeValue | null {
+  switch (value.type) {
+    case "text": {
+      const lane = value.lanes[index];
+      if (lane === undefined) {
+        return null;
+      }
+      return { type: value.type, lanes: [lane] };
+    }
+    case "image":
+    case "video": {
+      const lane = value.lanes[index];
+      if (lane === undefined) {
+        return null;
+      }
+      return { type: value.type, lanes: [lane] };
+    }
+  }
+}
+
+export function getLaneSplitValidationMessage(
+  splitCount: number,
+  laneCount: number,
+) {
+  if (!Number.isInteger(splitCount) || splitCount < 1) {
+    return "Lane split count must be at least one.";
+  }
+
+  if (splitCount > laneCount) {
+    return "Lane split count cannot exceed upstream lane count.";
+  }
+
+  return null;
+}
+
+export function mergeRuntimeValues(values: readonly RuntimeValue[]) {
+  const [firstValue] = values;
+  if (!firstValue) {
+    return null;
+  }
+
+  if (!values.every((value) => value.type === firstValue.type)) {
+    throw new Error("Lane Merge inputs must have the same lane type.");
+  }
+
+  switch (firstValue.type) {
+    case "text":
+      return {
+        type: firstValue.type,
+        lanes: values.flatMap((value) =>
+          value.type === "text" ? value.lanes : [],
+        ),
+      } satisfies RuntimeValue;
+    case "image":
+    case "video":
+      return {
+        type: firstValue.type,
+        lanes: values.flatMap((value) =>
+          value.type === firstValue.type ? value.lanes : [],
+        ),
+      } satisfies RuntimeValue;
+  }
+}
+
+function getExactAlignedLaneCount(counts: readonly number[]) {
+  const laneCounts = counts.filter((count) => count > 0);
+  if (!laneCounts.length) {
+    return 1;
+  }
+
+  const [laneCount] = laneCounts;
+  if (
+    laneCount === undefined ||
+    laneCounts.some((count) => count !== laneCount)
+  ) {
+    throw new Error("Lane Zip inputs must have matching lane counts.");
+  }
+
+  return laneCount;
+}
+
+export function zipAlignRuntimeValues(
+  values: readonly RuntimeValue[],
+  options: { broadcast: boolean },
+) {
+  const [firstValue] = values;
+  if (!firstValue) {
+    return null;
+  }
+
+  if (!values.every((value) => value.type === firstValue.type)) {
+    throw new Error("Lane Zip inputs must have the same lane type.");
+  }
+
+  const laneCounts = values.map((value) => value.lanes.length);
+  const laneCount = options.broadcast
+    ? getAlignedLaneCount(laneCounts)
+    : getExactAlignedLaneCount(laneCounts);
+
+  switch (firstValue.type) {
+    case "text":
+      return {
+        type: firstValue.type,
+        lanes: Array.from({ length: laneCount }, (_, index) =>
+          values
+            .flatMap((value) =>
+              value.type === "text"
+                ? [getBroadcastLane(value.lanes, index)]
+                : [],
+            )
+            .filter((value): value is string => Boolean(value?.trim()))
+            .join("\n\n"),
+        ).filter(Boolean),
+      } satisfies RuntimeValue;
+    case "image":
+    case "video":
+      return {
+        type: firstValue.type,
+        lanes: Array.from({ length: laneCount }, (_, index) =>
+          values.flatMap((value) =>
+            value.type === firstValue.type
+              ? (getBroadcastLane(value.lanes, index) ?? [])
+              : [],
+          ),
+        ),
+      } satisfies RuntimeValue;
   }
 }
 

@@ -7,11 +7,19 @@ import {
   getGeneratorInputHandles,
   getIncomingEdgesForHandle,
   getLaneReorderInputValue,
+  getLaneTransformInputValue,
   isValidWorkflowEdge,
   resolvePromptNodeTextBatch,
 } from "~/lib/workflow/graph";
-import { getLanePermutationValidationMessage } from "~/lib/workflow/lanes";
-import { LANE_REORDER_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
+import {
+  getLanePermutationValidationMessage,
+  getLaneSelectionValidationMessage,
+  getLaneSplitValidationMessage,
+} from "~/lib/workflow/lanes";
+import {
+  LANE_REORDER_INPUT_HANDLE_ID,
+  LANE_TRANSFORM_INPUT_HANDLE_ID,
+} from "~/lib/workflow/node-definitions";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
 
 function failValidation(message: string): never {
@@ -115,6 +123,58 @@ function validateExecutionPlanNodes(
         }
         break;
       }
+      case "laneSelect":
+      case "laneSplit": {
+        if (
+          getIncomingEdgesForHandle(
+            incomingByTarget,
+            node.id,
+            LANE_TRANSFORM_INPUT_HANDLE_ID,
+          ).length !== 1
+        ) {
+          failValidation(`${node.label} needs exactly one input.`);
+        }
+
+        const inputValue = getLaneTransformInputValue(document, node.id);
+        if (inputValue && inputValue.type !== node.valueType) {
+          failValidation(
+            `${node.label} input type does not match its lane type.`,
+          );
+        }
+
+        if (node.kind === "laneSelect" && inputValue) {
+          const message = getLaneSelectionValidationMessage(
+            node.indices,
+            inputValue.lanes.length,
+          );
+          if (message) {
+            failValidation(message);
+          }
+        }
+
+        if (node.kind === "laneSplit" && inputValue) {
+          const message = getLaneSplitValidationMessage(
+            node.splitCount,
+            inputValue.lanes.length,
+          );
+          if (message) {
+            failValidation(message);
+          }
+        }
+        break;
+      }
+      case "laneMerge":
+      case "laneZipAlign":
+        if (
+          !getIncomingEdgesForHandle(
+            incomingByTarget,
+            node.id,
+            LANE_TRANSFORM_INPUT_HANDLE_ID,
+          ).length
+        ) {
+          failValidation(`${node.label} needs at least one input.`);
+        }
+        break;
       case "imageGenerator":
       case "videoGenerator":
       case "llmGenerator": {

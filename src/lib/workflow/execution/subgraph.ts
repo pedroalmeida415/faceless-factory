@@ -8,7 +8,12 @@ import {
   getWorkflowGeneratorOutputRuntimeValue,
 } from "~/lib/workflow/graph";
 import {
+  getLaneSelectionValidationMessage,
+  getLaneSplitValidationMessage,
+} from "~/lib/workflow/lanes";
+import {
   LANE_REORDER_INPUT_HANDLE_ID,
+  LANE_TRANSFORM_INPUT_HANDLE_ID,
   PROMPT_VARIABLE_PATTERN,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
@@ -59,6 +64,10 @@ function getNodeOutputValueType(
     case "asset":
       return node.assetKind;
     case "laneReorder":
+    case "laneSelect":
+    case "laneSplit":
+    case "laneMerge":
+    case "laneZipAlign":
       return node.valueType;
     case "imageGenerator":
       return "image";
@@ -110,6 +119,34 @@ function mergePlannedValues(
   };
 }
 
+function zipAlignPlannedValues(
+  type: WorkflowValueType,
+  values: readonly PlannedValue[],
+  mode: "zip" | "broadcast",
+): PlannedValue | null {
+  const filteredValues = values.filter((value) => value.type === type);
+  if (!filteredValues.length) {
+    return null;
+  }
+
+  if (mode === "broadcast") {
+    return mergePlannedValues(type, filteredValues);
+  }
+
+  const laneCounts = filteredValues.map((value) => value.laneCount);
+  const [laneCount] = laneCounts;
+  const mismatched =
+    laneCount === undefined ||
+    filteredValues.some((value) => value.mismatched) ||
+    laneCounts.some((count) => count !== laneCount);
+
+  return {
+    type,
+    laneCount: mismatched ? Math.max(...laneCounts) : laneCount,
+    mismatched,
+  };
+}
+
 function hasPromptStaticText(
   node: Extract<WorkflowDocument["nodes"][number], { kind: "prompt" }>,
 ) {
@@ -132,7 +169,9 @@ function resolveTextHandlePlan(
   return mergePlannedValues(
     "text",
     getIncomingEdgesForHandle(context.incomingByTarget, targetId, handleId)
-      .map((edge) => resolveNodePlan(context, edge.source, path))
+      .map((edge) =>
+        resolveNodePlan(context, edge.source, path, edge.sourceHandle),
+      )
       .filter((value): value is PlannedValue => Boolean(value)),
   );
 }
@@ -167,7 +206,9 @@ function resolveGeneratorInputPlans(
 ) {
   return getGeneratorInputHandles(context.document, nodeId).flatMap((handle) =>
     getIncomingEdgesForHandle(context.incomingByTarget, nodeId, handle.id)
-      .map((edge) => resolveNodePlan(context, edge.source, path))
+      .map((edge) =>
+        resolveNodePlan(context, edge.source, path, edge.sourceHandle),
+      )
       .filter(
         (value): value is PlannedValue =>
           value !== null && value.type === handle.valueType,
@@ -202,6 +243,7 @@ function resolveNodePlan(
   context: PlanningContext,
   nodeId: string,
   path: ReadonlySet<string>,
+  sourceHandleId?: string | null,
 ): PlannedValue | null {
   if (path.has(nodeId)) {
     return null;
@@ -249,8 +291,97 @@ function resolveNodePlan(
         return null;
       }
 
-      const value = resolveNodePlan(context, incomingEdge.source, nextPath);
+      const value = resolveNodePlan(
+        context,
+        incomingEdge.source,
+        nextPath,
+        incomingEdge.sourceHandle,
+      );
       return value?.type === node.valueType ? value : null;
+    }
+    case "laneSelect": {
+      const incomingEdge = getIncomingEdgesForHandle(
+        context.incomingByTarget,
+        node.id,
+        LANE_TRANSFORM_INPUT_HANDLE_ID,
+      )[0];
+      const value = incomingEdge
+        ? resolveNodePlan(
+            context,
+            incomingEdge.source,
+            nextPath,
+            incomingEdge.sourceHandle,
+          )
+        : null;
+      return value?.type === node.valueType
+        ? {
+            ...value,
+            laneCount: node.indices.length,
+            mismatched:
+              value.mismatched ||
+              Boolean(
+                getLaneSelectionValidationMessage(
+                  node.indices,
+                  value.laneCount,
+                ),
+              ),
+          }
+        : null;
+    }
+    case "laneSplit": {
+      const incomingEdge = getIncomingEdgesForHandle(
+        context.incomingByTarget,
+        node.id,
+        LANE_TRANSFORM_INPUT_HANDLE_ID,
+      )[0];
+      const value = incomingEdge
+        ? resolveNodePlan(
+            context,
+            incomingEdge.source,
+            nextPath,
+            incomingEdge.sourceHandle,
+          )
+        : null;
+      const outputIndex = Number(
+        (sourceHandleId ?? "lane-0").replace("lane-", ""),
+      );
+      return value?.type === node.valueType && Number.isInteger(outputIndex)
+        ? {
+            ...value,
+            laneCount: 1,
+            mismatched:
+              value.mismatched ||
+              Boolean(
+                getLaneSplitValidationMessage(node.splitCount, value.laneCount),
+              ) ||
+              outputIndex >= value.laneCount,
+          }
+        : null;
+    }
+    case "laneMerge":
+    case "laneZipAlign": {
+      const values = getIncomingEdgesForHandle(
+        context.incomingByTarget,
+        node.id,
+        LANE_TRANSFORM_INPUT_HANDLE_ID,
+      )
+        .map((edge) =>
+          resolveNodePlan(context, edge.source, nextPath, edge.sourceHandle),
+        )
+        .filter(
+          (value): value is PlannedValue =>
+            value !== null && value.type === node.valueType,
+        );
+      if (!values.length || !node.valueType) {
+        return null;
+      }
+      return node.kind === "laneMerge"
+        ? {
+            laneCount: values.reduce((sum, value) => sum + value.laneCount, 0),
+            mismatched: values.some((value) => value.mismatched),
+            type: node.valueType,
+          }
+        : zipAlignPlannedValues(node.valueType, values, node.mode);
     }
     case "prompt":
       return resolvePromptPlan(context, node, nextPath);

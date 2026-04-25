@@ -22,7 +22,6 @@ import { cn } from "~/lib/utils";
 import type {
   AssetWorkflowNode,
   ImageGeneratorWorkflowNode,
-  LaneReorderWorkflowNode,
   ListWorkflowNode,
   LlmGeneratorWorkflowNode,
   PromptWorkflowNode,
@@ -197,10 +196,14 @@ function getDrawerHeading(node: WorkflowDocumentNode) {
         title: "Asset",
       } as const;
     case "laneReorder":
+    case "laneSelect":
+    case "laneSplit":
+    case "laneMerge":
+    case "laneZipAlign":
       return {
         description:
-          "Reorder lanes on this branch without mutating upstream output.",
-        title: "Lane Reorder",
+          "Transform lanes on this branch without mutating upstream output.",
+        title: node.label,
       } as const;
     case "imageGenerator":
       return {
@@ -293,7 +296,7 @@ function AssetConfigPanel({ node }: { node: AssetWorkflowNode }) {
   );
 }
 
-function LaneReorderConfigPanel({ node }: { node: LaneReorderWorkflowNode }) {
+function LaneReorderConfigPanel({ node }: { node: WorkflowDocumentNode }) {
   return (
     <NodeFieldCard label="Inline settings">
       <p className="text-sm">
@@ -510,6 +513,10 @@ function NodeConfigPanel({ node }: { node: WorkflowDocumentNode }) {
     case "asset":
       return <AssetConfigPanel node={node} />;
     case "laneReorder":
+    case "laneSelect":
+    case "laneSplit":
+    case "laneMerge":
+    case "laneZipAlign":
       return <LaneReorderConfigPanel node={node} />;
     case "imageGenerator":
       return <ImageGeneratorConfigPanel node={node} />;
@@ -545,12 +552,13 @@ function isSameNodeConfig(
         left.assets === right.assets
       );
     case "laneReorder":
+    case "laneSelect":
+    case "laneSplit":
+    case "laneMerge":
+    case "laneZipAlign":
       return (
-        right.kind === "laneReorder" &&
-        left.mode === right.mode &&
-        left.order === right.order &&
-        left.shift === right.shift &&
-        left.valueType === right.valueType
+        right.kind === left.kind &&
+        JSON.stringify(left) === JSON.stringify(right)
       );
     case "imageGenerator":
       return (

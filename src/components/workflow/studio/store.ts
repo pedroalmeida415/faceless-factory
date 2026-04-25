@@ -29,6 +29,9 @@ import type { WorkflowProject } from "~/lib/workflow/project";
 import {
   ImageGeneratorService,
   LaneReorderNodeService,
+  LaneSelectNodeService,
+  LaneSplitNodeService,
+  LaneZipAlignNodeService,
   ListNodeService,
   LlmGeneratorService,
   PromptNodeService,
@@ -464,6 +467,9 @@ type WorkflowStudioState = {
     nodeId: string,
     valueType: WorkflowValueType | null,
   ) => void;
+  setLaneSelectIndices: (nodeId: string, indices: number[]) => void;
+  setLaneSplitCount: (nodeId: string, splitCount: number) => void;
+  setLaneZipAlignMode: (nodeId: string, mode: "zip" | "broadcast") => void;
   setPrompt: (nodeId: string, prompt: string) => void;
   setPromptDisplayMode: (
     nodeId: string,
@@ -741,6 +747,30 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       get().updateDocumentNode(nodeId, (node) =>
         node.kind === "laneReorder"
           ? LaneReorderNodeService.setValueType(node, valueType)
+          : node,
+      );
+    },
+
+    setLaneSelectIndices: (nodeId, indices) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "laneSelect"
+          ? LaneSelectNodeService.setIndices(node, indices)
+          : node,
+      );
+    },
+
+    setLaneSplitCount: (nodeId, splitCount) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "laneSplit"
+          ? LaneSplitNodeService.setSplitCount(node, splitCount)
+          : node,
+      );
+    },
+
+    setLaneZipAlignMode: (nodeId, mode) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "laneZipAlign"
+          ? LaneZipAlignNodeService.setMode(node, mode)
           : node,
       );
     },

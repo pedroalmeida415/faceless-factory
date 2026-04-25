@@ -26,16 +26,26 @@ import {
   getVideoGeneratorModelOptions,
   getVideoGeneratorModeOptions,
 } from "~/lib/workflow/generator-models";
-import { getLaneReorderInputValue } from "~/lib/workflow/graph";
+import {
+  getLaneReorderInputValue,
+  getLaneTransformInputValue,
+} from "~/lib/workflow/graph";
 import {
   createIdentityLanePermutation,
   getLanePermutationValidationMessage,
+  getLaneSelectionValidationMessage,
+  getLaneSplitValidationMessage,
 } from "~/lib/workflow/lanes";
+import { getLaneSplitOutputHandleId } from "~/lib/workflow/node-definitions";
 import type {
   AssetNodeData,
   GeneratorConfigValue,
   ImageGeneratorNodeData,
+  LaneMergeNodeData,
   LaneReorderNodeData,
+  LaneSelectNodeData,
+  LaneSplitNodeData,
+  LaneZipAlignNodeData,
   ListNodeData,
   LlmGeneratorNodeData,
   PromptNodeData,
@@ -757,6 +767,190 @@ const LaneReorderNode = memo(function LaneReorderNode({
   );
 }, isSameNodeRender);
 
+const LaneSelectNode = memo(function LaneSelectNode({
+  id,
+  data,
+  selected,
+}: NodeProps<LaneSelectNodeData>) {
+  const { setLaneSelectIndices } = useStudioContext();
+  const document = useWorkflowStudioStore((state) => state.document);
+  const inputValue = getLaneTransformInputValue(document, id);
+  const laneCount =
+    inputValue?.type === data.valueType ? inputValue.lanes.length : null;
+  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Lane";
+  const color = getLaneValueTypeColor(data.valueType);
+  const orderText = data.indices.map((index) => index + 1).join(", ");
+  const [draft, setDraft] = useState(orderText);
+  const message =
+    data.valueType && laneCount !== null
+      ? getLaneSelectionValidationMessage(data.indices, laneCount)
+      : null;
+
+  useEffect(() => setDraft(orderText), [orderText]);
+
+  return (
+    <NodeShell
+      data={data}
+      id={id}
+      inputs={[{ id: "input", label: valueTypeLabel, color }]}
+      output={
+        data.valueType ? { id: "output", label: valueTypeLabel, color } : null
+      }
+      selected={selected}
+    >
+      <NodeNotice tone="accent">
+        {data.valueType ? `Select ${orderText || "no"} lanes` : "Connect lanes"}
+      </NodeNotice>
+      <NodeFieldCard label="Selected lanes">
+        <Input
+          nativeInput
+          className="nodrag nopan nowheel"
+          onBlur={() => setLaneSelectIndices(id, parseLaneOrder(draft))}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="Example: 1, 3"
+          value={draft}
+        />
+        {laneCount !== null ? (
+          <p className="text-muted-foreground text-xs">
+            {laneCount} upstream lanes
+          </p>
+        ) : null}
+        {message ? <p className="text-destructive text-xs">{message}</p> : null}
+      </NodeFieldCard>
+    </NodeShell>
+  );
+}, isSameNodeRender);
+
+const LaneSplitNode = memo(function LaneSplitNode({
+  id,
+  data,
+  selected,
+}: NodeProps<LaneSplitNodeData>) {
+  const { setLaneSplitCount } = useStudioContext();
+  const document = useWorkflowStudioStore((state) => state.document);
+  const inputValue = getLaneTransformInputValue(document, id);
+  const laneCount =
+    inputValue?.type === data.valueType ? inputValue.lanes.length : null;
+  const outputCount = data.valueType
+    ? Math.min(data.splitCount, laneCount ?? data.splitCount)
+    : 0;
+  const message =
+    laneCount === null
+      ? null
+      : getLaneSplitValidationMessage(data.splitCount, laneCount);
+  const color = getLaneValueTypeColor(data.valueType);
+  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Lane";
+
+  return (
+    <NodeShell
+      data={data}
+      id={id}
+      inputs={[{ id: "input", label: valueTypeLabel, color }]}
+      outputs={
+        data.valueType
+          ? Array.from({ length: outputCount }, (_, index) => ({
+              id: getLaneSplitOutputHandleId(index),
+              label: `Lane ${index + 1}`,
+              color,
+            }))
+          : []
+      }
+      selected={selected}
+    >
+      <NodeNotice tone="accent">
+        {data.valueType ? `${outputCount} outputs` : "Connect lanes"}
+      </NodeNotice>
+      <NodeFieldCard label="Output count">
+        <Input
+          nativeInput
+          max={laneCount ?? undefined}
+          min={1}
+          onChange={(event) =>
+            setLaneSplitCount(id, Number(event.target.value))
+          }
+          type="number"
+          value={data.splitCount}
+        />
+        {laneCount !== null ? (
+          <p className="text-muted-foreground text-xs">
+            {laneCount} upstream lanes
+          </p>
+        ) : null}
+        {message ? <p className="text-destructive text-xs">{message}</p> : null}
+      </NodeFieldCard>
+    </NodeShell>
+  );
+}, isSameNodeRender);
+
+const LaneMergeNode = memo(function LaneMergeNode({
+  id,
+  data,
+  selected,
+}: NodeProps<LaneMergeNodeData>) {
+  const color = getLaneValueTypeColor(data.valueType);
+  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Lane";
+
+  return (
+    <NodeShell
+      data={data}
+      id={id}
+      inputs={[{ id: "input", label: valueTypeLabel, color }]}
+      output={
+        data.valueType ? { id: "output", label: valueTypeLabel, color } : null
+      }
+      selected={selected}
+    >
+      <NodeNotice tone="accent">
+        {data.valueType
+          ? "Concatenate compatible lane streams"
+          : "Connect lanes"}
+      </NodeNotice>
+    </NodeShell>
+  );
+}, isSameNodeRender);
+
+const LaneZipAlignNode = memo(function LaneZipAlignNode({
+  id,
+  data,
+  selected,
+}: NodeProps<LaneZipAlignNodeData>) {
+  const { setLaneZipAlignMode } = useStudioContext();
+  const color = getLaneValueTypeColor(data.valueType);
+  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Lane";
+
+  return (
+    <NodeShell
+      data={data}
+      id={id}
+      inputs={[{ id: "input", label: valueTypeLabel, color }]}
+      output={
+        data.valueType ? { id: "output", label: valueTypeLabel, color } : null
+      }
+      selected={selected}
+    >
+      <NodeNotice tone="accent">
+        {data.valueType ? "Zip with existing broadcast rules" : "Connect lanes"}
+      </NodeNotice>
+      <NodeFieldCard label="Alignment">
+        <Select
+          onValueChange={(value) =>
+            setLaneZipAlignMode(id, value === "broadcast" ? "broadcast" : "zip")
+          }
+          value={data.mode}
+        >
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="zip">Zip / broadcast</SelectItem>
+            <SelectItem value="broadcast">Broadcast explicit</SelectItem>
+          </SelectContent>
+        </Select>
+      </NodeFieldCard>
+    </NodeShell>
+  );
+}, isSameNodeRender);
+
 export function GeneratorControlGrid({
   controls,
   config,
@@ -1056,6 +1250,10 @@ export const nodeTypes = {
   prompt: PromptNode,
   asset: AssetNode,
   laneReorder: LaneReorderNode,
+  laneSelect: LaneSelectNode,
+  laneSplit: LaneSplitNode,
+  laneMerge: LaneMergeNode,
+  laneZipAlign: LaneZipAlignNode,
   imageGenerator: ImageGeneratorNode,
   videoGenerator: VideoGeneratorNode,
   llmGenerator: LlmGeneratorNode,

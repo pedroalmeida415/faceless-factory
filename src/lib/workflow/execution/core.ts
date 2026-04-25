@@ -47,10 +47,14 @@ import {
   resolvePromptNodeTextBatch,
 } from "~/lib/workflow/graph";
 import {
+  mergeRuntimeValues,
   type RuntimeValue,
   reorderRuntimeValue,
   resolveLanePermutation,
+  selectRuntimeValue,
+  splitRuntimeValueLane,
   type TextRuntimeValue,
+  zipAlignRuntimeValues,
 } from "~/lib/workflow/lanes";
 import {
   buildLlmGenerationRequest,
@@ -59,6 +63,7 @@ import {
 } from "~/lib/workflow/llm-models";
 import {
   LANE_REORDER_INPUT_HANDLE_ID,
+  LANE_TRANSFORM_INPUT_HANDLE_ID,
   PROMPT_INPUT_HANDLE_ID,
 } from "~/lib/workflow/node-definitions";
 import {
@@ -81,6 +86,7 @@ type ExecutionState = {
 type EvaluateNode = (
   currentId: string,
   path: ReadonlySet<string>,
+  sourceHandleId?: string | null,
 ) => Effect.Effect<RuntimeValue, ExecutionError>;
 
 function formatRunningActivity(
@@ -151,7 +157,7 @@ function evaluatePromptNodeTextBatch(
           Effect.gen(function* () {
             const values = yield* Effect.forEach(
               getIncomingEdgesForHandle(incomingByTarget, node.id, key),
-              (edge) => evaluateNode(edge.source, path),
+              (edge) => evaluateNode(edge.source, path, edge.sourceHandle),
               {
                 concurrency: "unbounded",
               },
@@ -200,7 +206,24 @@ function evaluateLaneReorderInput(
     );
   }
 
-  return evaluateNode(edge.source, path);
+  return evaluateNode(edge.source, path, edge.sourceHandle);
+}
+
+function evaluateLaneTransformInputs(
+  currentId: string,
+  path: ReadonlySet<string>,
+  incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
+  evaluateNode: EvaluateNode,
+) {
+  return Effect.forEach(
+    getIncomingEdgesForHandle(
+      incomingByTarget,
+      currentId,
+      LANE_TRANSFORM_INPUT_HANDLE_ID,
+    ),
+    (edge) => evaluateNode(edge.source, path, edge.sourceHandle),
+    { concurrency: "unbounded" },
+  );
 }
 
 export function executeWorkflow(params: {
@@ -301,6 +324,7 @@ export function executeWorkflow(params: {
     nextPath: ReadonlySet<string>,
     incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
     evaluateNode: EvaluateNode,
+    sourceHandleId?: string | null,
   ): Effect.Effect<RuntimeValue, ExecutionError> => {
     const storedOutput = getWorkflowGeneratorOutputRuntimeValue(node);
     if (storedOutput && !targetNodeIdSet.has(currentId)) {
@@ -411,6 +435,99 @@ export function executeWorkflow(params: {
             inputValue,
             laneOrder,
           ) satisfies RuntimeValue;
+        });
+      case "laneSelect":
+        return Effect.gen(function* () {
+          const [inputValue] = yield* evaluateLaneTransformInputs(
+            currentId,
+            nextPath,
+            incomingByTarget,
+            evaluateNode,
+          );
+          if (!inputValue || inputValue.type !== node.valueType) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({ message: "Connect lane input." }),
+            );
+          }
+
+          const selectedValue = yield* Effect.try({
+            try: () => selectRuntimeValue(inputValue, node.indices),
+            catch: (cause) =>
+              new WorkflowValidationError({
+                message:
+                  cause instanceof Error
+                    ? cause.message
+                    : "Invalid lane selection.",
+                cause,
+              }),
+          });
+          yield* setNodeRuntime(currentId, "success", null);
+          return selectedValue satisfies RuntimeValue;
+        });
+      case "laneSplit":
+        return Effect.gen(function* () {
+          const [inputValue] = yield* evaluateLaneTransformInputs(
+            currentId,
+            nextPath,
+            incomingByTarget,
+            evaluateNode,
+          );
+          if (!inputValue || inputValue.type !== node.valueType) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({ message: "Connect lane input." }),
+            );
+          }
+
+          const laneIndex = Number(
+            (sourceHandleId ?? "lane-0").replace("lane-", ""),
+          );
+          const splitValue = Number.isInteger(laneIndex)
+            ? splitRuntimeValueLane(inputValue, laneIndex)
+            : null;
+          if (!splitValue) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Lane split output is empty.",
+              }),
+            );
+          }
+
+          yield* setNodeRuntime(currentId, "success", null);
+          return splitValue satisfies RuntimeValue;
+        });
+      case "laneMerge":
+      case "laneZipAlign":
+        return Effect.gen(function* () {
+          const values = (yield* evaluateLaneTransformInputs(
+            currentId,
+            nextPath,
+            incomingByTarget,
+            evaluateNode,
+          )).filter((value) => value.type === node.valueType);
+          const nextValue = yield* Effect.try({
+            try: () =>
+              node.kind === "laneMerge"
+                ? mergeRuntimeValues(values)
+                : zipAlignRuntimeValues(values, {
+                    broadcast: node.mode === "broadcast",
+                  }),
+            catch: (cause) =>
+              new WorkflowValidationError({
+                message:
+                  cause instanceof Error
+                    ? cause.message
+                    : "Invalid lane transform.",
+                cause,
+              }),
+          });
+          if (!nextValue) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({ message: "Connect lane inputs." }),
+            );
+          }
+
+          yield* setNodeRuntime(currentId, "success", null);
+          return nextValue satisfies RuntimeValue;
         });
       case "imageGenerator":
         return Effect.gen(function* () {
@@ -686,6 +803,7 @@ export function executeWorkflow(params: {
     nodeMap: NodeMap,
     incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
     pending: PendingMap,
+    sourceHandleId?: string | null,
   ): Effect.Effect<RuntimeValue, ExecutionError> =>
     Effect.suspend(() => {
       if (path.has(currentId)) {
@@ -696,17 +814,29 @@ export function executeWorkflow(params: {
         );
       }
 
-      const cached = pending.get(currentId);
+      const pendingKey = `${currentId}:${sourceHandleId ?? ""}`;
+      const cached = pending.get(pendingKey);
       if (cached) {
         return Deferred.await(cached);
       }
 
-      const recursiveEvaluateNode: EvaluateNode = (nextId, nextPath) =>
-        evaluateNode(nextId, nextPath, nodeMap, incomingByTarget, pending);
+      const recursiveEvaluateNode: EvaluateNode = (
+        nextId,
+        nextPath,
+        nextSourceHandleId,
+      ) =>
+        evaluateNode(
+          nextId,
+          nextPath,
+          nodeMap,
+          incomingByTarget,
+          pending,
+          nextSourceHandleId,
+        );
 
       return Effect.gen(function* () {
         const deferred = yield* Deferred.make<RuntimeValue, ExecutionError>();
-        pending.set(currentId, deferred);
+        pending.set(pendingKey, deferred);
 
         const nextPath = new Set(path);
         nextPath.add(currentId);
@@ -728,6 +858,7 @@ export function executeWorkflow(params: {
               nextPath,
               incomingByTarget,
               recursiveEvaluateNode,
+              sourceHandleId,
             );
           }).pipe(
             Effect.tapError((error) =>

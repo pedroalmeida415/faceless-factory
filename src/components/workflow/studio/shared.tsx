@@ -197,6 +197,7 @@ export function NodeShell({
   id,
   inputs = [],
   output = null,
+  outputs,
   selected = false,
 }: PropsWithChildren<{
   data: WorkflowNodeData;
@@ -204,14 +205,11 @@ export function NodeShell({
   id: string;
   inputs?: HandleDefinition[];
   output?: HandleDefinition | null;
+  outputs?: HandleDefinition[];
   selected?: boolean;
 }>) {
   const edges = useWorkflowStudioStore((state) => state.edges);
-  const outputConnected = output
-    ? edges.some(
-        (edge) => edge.source === id && edge.sourceHandle === output.id,
-      )
-    : false;
+  const outputHandles = outputs ?? (output ? [output] : []);
   const socketTop = 64;
   const socketGap = 32;
 
@@ -256,32 +254,39 @@ export function NodeShell({
           </Fragment>
         );
       })}
-      {output ? (
-        <Fragment key={output.id}>
-          <div
-            className={cn(socketLabelClassName, "left-full pl-3")}
-            style={{ color: output.color, top: socketTop }}
-          >
-            <span>{formatHandleLabel(output)}</span>
-          </div>
-          <Handle
-            id={output.id}
-            position={Position.Right}
-            style={{
-              background: outputConnected ? output.color : "transparent",
-              border: "2px solid rgba(255,255,255,0.9)",
-              boxShadow: outputConnected
-                ? undefined
-                : `inset 0 0 0 2px ${output.color}`,
-              height: 14,
-              right: -8,
-              top: socketTop,
-              width: 14,
-            }}
-            type="source"
-          />
-        </Fragment>
-      ) : null}
+      {outputHandles.map((outputHandle, index) => {
+        const top = socketTop + index * socketGap;
+        const isConnected = edges.some(
+          (edge) => edge.source === id && edge.sourceHandle === outputHandle.id,
+        );
+
+        return (
+          <Fragment key={outputHandle.id}>
+            <div
+              className={cn(socketLabelClassName, "left-full pl-3")}
+              style={{ color: outputHandle.color, top }}
+            >
+              <span>{formatHandleLabel(outputHandle)}</span>
+            </div>
+            <Handle
+              id={outputHandle.id}
+              position={Position.Right}
+              style={{
+                background: isConnected ? outputHandle.color : "transparent",
+                border: "2px solid rgba(255,255,255,0.9)",
+                boxShadow: isConnected
+                  ? undefined
+                  : `inset 0 0 0 2px ${outputHandle.color}`,
+                height: 14,
+                right: -8,
+                top,
+                width: 14,
+              }}
+              type="source"
+            />
+          </Fragment>
+        );
+      })}
 
       <CardHeader>
         <div className="flex items-start justify-between gap-4">

@@ -2,10 +2,13 @@
 
 import {
   RiFolderImageLine,
+  RiGitMergeLine,
   RiImageAiLine,
   RiImageLine,
   RiRobot2Line,
+  RiScissorsCutLine,
   RiShuffleLine,
+  RiStackLine,
   RiVideoAiLine,
 } from "@remixicon/react";
 import { Card, CardContent } from "~/components/ui/card";
@@ -73,6 +76,10 @@ const NODE_ACTION_GROUPS: Array<{
     label: "Transforms",
     actions: [
       { kind: "laneReorder", label: "Lane Reorder", icon: RiShuffleLine },
+      { kind: "laneSelect", label: "Lane Select", icon: RiScissorsCutLine },
+      { kind: "laneSplit", label: "Lane Split", icon: RiStackLine },
+      { kind: "laneMerge", label: "Lane Merge", icon: RiGitMergeLine },
+      { kind: "laneZipAlign", label: "Lane Zip", icon: RiShuffleLine },
     ],
   },
   {

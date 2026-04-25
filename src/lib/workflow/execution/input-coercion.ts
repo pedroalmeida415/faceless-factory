@@ -28,6 +28,7 @@ type IncomingByTarget = Map<
 type EvaluateNode = (
   currentId: string,
   path: ReadonlySet<string>,
+  sourceHandleId?: string | null,
 ) => Effect.Effect<
   RuntimeValue,
   WorkflowExecutionError | WorkflowExecutionPortError
@@ -48,7 +49,7 @@ function getInputValues(
 
   return Effect.forEach(
     incomingEdges,
-    (edge) => evaluateNode(edge.source, path),
+    (edge) => evaluateNode(edge.source, path, edge.sourceHandle),
     {
       concurrency: "unbounded",
     },

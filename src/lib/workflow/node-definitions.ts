@@ -3,6 +3,9 @@ import type { PromptDisplayMode, WorkflowNodeKind } from "~/lib/workflow/types";
 export const PROMPT_INPUT_HANDLE_ID = "prompt";
 export const LANE_REORDER_INPUT_HANDLE_ID = "input";
 export const LANE_REORDER_OUTPUT_HANDLE_ID = "output";
+export const LANE_TRANSFORM_INPUT_HANDLE_ID = "input";
+export const LANE_TRANSFORM_OUTPUT_HANDLE_ID = "output";
+export const getLaneSplitOutputHandleId = (index: number) => `lane-${index}`;
 export const PROMPT_VARIABLE_PATTERN =
   /\{\{([a-zA-Z][a-zA-Z0-9]*)(?::[^}]*)?\}\}/g;
 export const PROMPT_VARIABLE_HANDLE_COLOR = "#f59e0b";
@@ -27,6 +30,14 @@ export function formatNodeTitle(kind: WorkflowNodeKind) {
       return "Asset";
     case "laneReorder":
       return "Lane Reorder";
+    case "laneSelect":
+      return "Lane Select";
+    case "laneSplit":
+      return "Lane Split";
+    case "laneMerge":
+      return "Lane Merge";
+    case "laneZipAlign":
+      return "Lane Zip";
     case "imageGenerator":
       return "Image Gen";
     case "videoGenerator":
@@ -46,6 +57,12 @@ export function getNodeOutputHandleId(kind: WorkflowNodeKind) {
       return "asset";
     case "laneReorder":
       return LANE_REORDER_OUTPUT_HANDLE_ID;
+    case "laneSelect":
+    case "laneMerge":
+    case "laneZipAlign":
+      return LANE_TRANSFORM_OUTPUT_HANDLE_ID;
+    case "laneSplit":
+      return getLaneSplitOutputHandleId(0);
     case "imageGenerator":
       return "images";
     case "videoGenerator":

@@ -42,6 +42,10 @@ export type WorkflowNodeKind =
   | "prompt"
   | "asset"
   | "laneReorder"
+  | "laneSelect"
+  | "laneSplit"
+  | "laneMerge"
+  | "laneZipAlign"
   | "imageGenerator"
   | "videoGenerator"
   | "llmGenerator";
@@ -57,6 +61,8 @@ export type GeneratorConfigValue = string | number | boolean | null;
 export type GeneratorConfig = Record<string, GeneratorConfigValue>;
 export type PromptDisplayMode = (typeof PROMPT_DISPLAY_MODES)[number];
 export type LaneReorderMode = "shift" | "manual";
+export type LaneZipAlignMode = "zip" | "broadcast";
+export type LaneTransformValueType = "text" | "image" | "video" | null;
 
 export type PromptVariable = {
   key: string;
@@ -107,7 +113,26 @@ export type LaneReorderNodeFields = {
   mode: LaneReorderMode;
   order: number[];
   shift: number;
-  valueType: "text" | "image" | "video" | null;
+  valueType: LaneTransformValueType;
+};
+
+export type LaneSelectNodeFields = {
+  indices: number[];
+  valueType: LaneTransformValueType;
+};
+
+export type LaneSplitNodeFields = {
+  splitCount: number;
+  valueType: LaneTransformValueType;
+};
+
+export type LaneMergeNodeFields = {
+  valueType: LaneTransformValueType;
+};
+
+export type LaneZipAlignNodeFields = {
+  mode: LaneZipAlignMode;
+  valueType: LaneTransformValueType;
 };
 
 export type WorkflowGeneratorResult = {
@@ -165,6 +190,26 @@ export type LaneReorderNodeData = BaseNodeData &
     kind: "laneReorder";
   };
 
+export type LaneSelectNodeData = BaseNodeData &
+  LaneSelectNodeFields & {
+    kind: "laneSelect";
+  };
+
+export type LaneSplitNodeData = BaseNodeData &
+  LaneSplitNodeFields & {
+    kind: "laneSplit";
+  };
+
+export type LaneMergeNodeData = BaseNodeData &
+  LaneMergeNodeFields & {
+    kind: "laneMerge";
+  };
+
+export type LaneZipAlignNodeData = BaseNodeData &
+  LaneZipAlignNodeFields & {
+    kind: "laneZipAlign";
+  };
+
 export type ImageGeneratorNodeData = BaseNodeData &
   WorkflowGeneratorResult &
   ImageGeneratorSettings & {
@@ -188,6 +233,10 @@ export type WorkflowNodeData =
   | ListNodeData
   | AssetNodeData
   | LaneReorderNodeData
+  | LaneSelectNodeData
+  | LaneSplitNodeData
+  | LaneMergeNodeData
+  | LaneZipAlignNodeData
   | ImageGeneratorNodeData
   | VideoGeneratorNodeData
   | LlmGeneratorNodeData;
