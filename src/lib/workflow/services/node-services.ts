@@ -164,6 +164,7 @@ export const ImageGeneratorService = {
       lastPrompt: string;
       responseText: string | null;
       outputAssets: WorkflowAsset[];
+      outputLanes: WorkflowAsset[][];
     },
   ): ImageGeneratorWorkflowNode {
     return {
@@ -171,6 +172,7 @@ export const ImageGeneratorService = {
       lastPrompt: result.lastPrompt,
       responseText: result.responseText,
       outputAssets: result.outputAssets,
+      outputLanes: result.outputLanes,
     };
   },
 };
@@ -213,6 +215,7 @@ export const VideoGeneratorService = {
       lastPrompt: string;
       responseText: string | null;
       outputAssets: WorkflowAsset[];
+      outputLanes: WorkflowAsset[][];
     },
   ): VideoGeneratorWorkflowNode {
     return {
@@ -220,6 +223,7 @@ export const VideoGeneratorService = {
       lastPrompt: result.lastPrompt,
       responseText: result.responseText,
       outputAssets: result.outputAssets,
+      outputLanes: result.outputLanes,
     };
   },
 };
@@ -266,6 +270,7 @@ export const WorkflowNodeAssetService = {
         return {
           ...node,
           outputAssets: [],
+          outputLanes: [],
           responseText: null,
           lastPrompt: "",
         };

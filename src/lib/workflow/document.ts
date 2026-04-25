@@ -131,6 +131,7 @@ function createWorkflowGeneratorResult(): WorkflowGeneratorResult {
     lastPrompt: "",
     responseText: null,
     outputAssets: [],
+    outputLanes: [],
   };
 }
 
@@ -291,6 +292,30 @@ function asWorkflowAssets(value: unknown) {
     .filter((asset): asset is WorkflowAsset => Boolean(asset));
 }
 
+function asWorkflowAssetLanes(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((lane) => asWorkflowAssets(lane))
+    .filter((lane) => lane.length);
+}
+
+function normalizeWorkflowGeneratorResult(
+  value: Record<string, unknown>,
+  fallback: WorkflowGeneratorResult,
+): WorkflowGeneratorResult {
+  const outputLanes = asWorkflowAssetLanes(value.outputLanes);
+
+  return {
+    lastPrompt: asString(value.lastPrompt, fallback.lastPrompt),
+    responseText: asNullableString(value.responseText, fallback.responseText),
+    outputAssets: outputLanes.flat(),
+    outputLanes,
+  };
+}
+
 function asListItems(value: unknown) {
   return Array.isArray(value)
     ? value.flatMap((entry) => {
@@ -427,12 +452,7 @@ function normalizeWorkflowNode(
         ...baseNode,
         ...settings,
         label: asString(value.label, baseNode.label),
-        lastPrompt: asString(value.lastPrompt, baseNode.lastPrompt),
-        responseText: asNullableString(
-          value.responseText,
-          baseNode.responseText,
-        ),
-        outputAssets: asWorkflowAssets(value.outputAssets),
+        ...normalizeWorkflowGeneratorResult(value, baseNode),
       };
     }
     case "videoGenerator": {
@@ -453,12 +473,7 @@ function normalizeWorkflowNode(
         ...baseNode,
         ...settings,
         label: asString(value.label, baseNode.label),
-        lastPrompt: asString(value.lastPrompt, baseNode.lastPrompt),
-        responseText: asNullableString(
-          value.responseText,
-          baseNode.responseText,
-        ),
-        outputAssets: asWorkflowAssets(value.outputAssets),
+        ...normalizeWorkflowGeneratorResult(value, baseNode),
       };
     }
     case "llmGenerator": {

@@ -395,6 +395,7 @@ export function executeWorkflow(params: {
                   ),
                   responseText,
                   outputAssets,
+                  outputLanes,
                 })
               : currentNode,
           );
@@ -469,6 +470,7 @@ export function executeWorkflow(params: {
                   ),
                   responseText: null,
                   outputAssets,
+                  outputLanes,
                 })
               : currentNode,
           );

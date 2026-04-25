@@ -105,6 +105,7 @@ export type WorkflowGeneratorResult = {
   lastPrompt: string;
   responseText: string | null;
   outputAssets: WorkflowAsset[];
+  outputLanes: WorkflowAsset[][];
 };
 
 export type WorkflowLlmResult = {

@@ -367,6 +367,7 @@ function mergeExecutionTargetResults(
           ...node,
           lastPrompt: executionNode.lastPrompt,
           outputAssets: executionNode.outputAssets,
+          outputLanes: executionNode.outputLanes,
           responseText: executionNode.responseText,
         };
       }
@@ -379,6 +380,7 @@ function mergeExecutionTargetResults(
           ...node,
           lastPrompt: executionNode.lastPrompt,
           outputAssets: executionNode.outputAssets,
+          outputLanes: executionNode.outputLanes,
           responseText: executionNode.responseText,
         };
       }

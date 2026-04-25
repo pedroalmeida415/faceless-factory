@@ -606,20 +606,22 @@ export function getWorkflowGeneratorOutputRuntimeValue(
   node: WorkflowDocumentNode,
 ): RuntimeValue | null {
   switch (node.kind) {
-    case "imageGenerator":
-      return node.outputAssets.length
+    case "imageGenerator": {
+      return node.outputLanes.length
         ? {
             type: "image",
-            lanes: [node.outputAssets],
+            lanes: node.outputLanes,
           }
         : null;
-    case "videoGenerator":
-      return node.outputAssets.length
+    }
+    case "videoGenerator": {
+      return node.outputLanes.length
         ? {
             type: "video",
-            lanes: [node.outputAssets],
+            lanes: node.outputLanes,
           }
         : null;
+    }
     case "llmGenerator":
       return node.responseText?.trim()
         ? toTextRuntimeValue([node.responseText])

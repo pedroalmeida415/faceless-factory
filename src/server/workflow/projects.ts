@@ -101,6 +101,7 @@ function applyExecutionResultsToDocument(params: {
           ...node,
           lastPrompt: executionNode.lastPrompt,
           outputAssets: executionNode.outputAssets,
+          outputLanes: executionNode.outputLanes,
           responseText: executionNode.responseText,
         };
       }
@@ -113,6 +114,7 @@ function applyExecutionResultsToDocument(params: {
           ...node,
           lastPrompt: executionNode.lastPrompt,
           outputAssets: executionNode.outputAssets,
+          outputLanes: executionNode.outputLanes,
           responseText: executionNode.responseText,
         };
       }

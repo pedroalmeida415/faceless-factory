@@ -152,6 +152,7 @@ function toWorkflowNodeData(
         lastPrompt: node.lastPrompt,
         responseText: node.responseText,
         outputAssets: node.outputAssets,
+        outputLanes: node.outputLanes,
       };
     case "videoGenerator":
       return {
@@ -165,6 +166,7 @@ function toWorkflowNodeData(
         lastPrompt: node.lastPrompt,
         responseText: node.responseText,
         outputAssets: node.outputAssets,
+        outputLanes: node.outputLanes,
       };
     case "llmGenerator":
       return {
@@ -292,7 +294,8 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       left.config === right.config &&
       left.lastPrompt === right.lastPrompt &&
       left.responseText === right.responseText &&
-      left.outputAssets === right.outputAssets
+      left.outputAssets === right.outputAssets &&
+      left.outputLanes === right.outputLanes
     );
   }
 
@@ -304,7 +307,8 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       left.config === right.config &&
       left.lastPrompt === right.lastPrompt &&
       left.responseText === right.responseText &&
-      left.outputAssets === right.outputAssets
+      left.outputAssets === right.outputAssets &&
+      left.outputLanes === right.outputLanes
     );
   }
 
