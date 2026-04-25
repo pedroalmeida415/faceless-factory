@@ -596,6 +596,17 @@ export function getWorkflowNodeRuntimeValue(
           }
         : null;
     case "imageGenerator":
+    case "videoGenerator":
+    case "llmGenerator":
+      return getWorkflowGeneratorOutputRuntimeValue(node);
+  }
+}
+
+export function getWorkflowGeneratorOutputRuntimeValue(
+  node: WorkflowDocumentNode,
+): RuntimeValue | null {
+  switch (node.kind) {
+    case "imageGenerator":
       return node.outputAssets.length
         ? {
             type: "image",
@@ -613,6 +624,8 @@ export function getWorkflowNodeRuntimeValue(
       return node.responseText?.trim()
         ? toTextRuntimeValue([node.responseText])
         : null;
+    default:
+      return null;
   }
 }
 

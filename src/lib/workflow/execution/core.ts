@@ -20,6 +20,7 @@ import {
   createWorkflowExecutionRuntimeState,
   syncWorkflowExecutionRuntimeState,
 } from "~/lib/workflow/execution/runtime-state";
+import { collectExecutableWorkflowGeneratorNodeIds } from "~/lib/workflow/execution/subgraph";
 import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target-resolution";
 import type {
   StartWorkflowExecutionRequest,
@@ -41,6 +42,7 @@ import {
   buildTextRuntimeValue,
   getIncomingEdgesForHandle,
   getPromptNodeReferencedVariableKeys,
+  getWorkflowGeneratorOutputRuntimeValue,
   type RuntimeValue,
   resolvePromptNodeTextBatch,
   type TextRuntimeValue,
@@ -56,7 +58,6 @@ import {
   LlmGeneratorService,
   VideoGeneratorService,
 } from "~/lib/workflow/services/node-services";
-import { isGeneratorNodeKind } from "~/lib/workflow/types";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 
 type ExecutionError = WorkflowExecutionError | WorkflowExecutionPortError;
@@ -168,9 +169,11 @@ export function executeWorkflow(params: {
     params.request.selection?.nodeIds ?? [],
     params.request.target,
   );
-  const executedNodeIds = params.request.document.nodes
-    .filter((node) => isGeneratorNodeKind(node.kind))
-    .map((node) => node.id);
+  const targetNodeIdSet = new Set(targetNodeIds);
+  const executedNodeIds = collectExecutableWorkflowGeneratorNodeIds(
+    params.request.document,
+    targetNodeIds,
+  );
 
   const state: ExecutionState = {
     document: params.request.document,
@@ -254,6 +257,14 @@ export function executeWorkflow(params: {
     incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
     evaluateNode: EvaluateNode,
   ): Effect.Effect<RuntimeValue, ExecutionError> => {
+    const storedOutput = getWorkflowGeneratorOutputRuntimeValue(node);
+    if (storedOutput && !targetNodeIdSet.has(currentId)) {
+      return Effect.gen(function* () {
+        yield* setNodeRuntime(currentId, "success", null);
+        return storedOutput;
+      });
+    }
+
     switch (node.kind) {
       case "list":
         return Effect.gen(function* () {

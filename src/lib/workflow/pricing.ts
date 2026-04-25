@@ -3,21 +3,18 @@ import type {
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
 import { WorkflowValidationError } from "~/lib/workflow/errors";
+import { collectExecutableWorkflowGeneratorNodeIds } from "~/lib/workflow/execution/subgraph";
 import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target-resolution";
 import type { StartWorkflowExecutionRequest } from "~/lib/workflow/execution/types";
 import {
   getImageGeneratorModelCreditCost,
   getVideoGeneratorModelCreditCost,
 } from "~/lib/workflow/generator-models";
-import {
-  buildIncomingByTarget,
-  getGeneratorIterationPreview,
-} from "~/lib/workflow/graph";
+import { getGeneratorIterationPreview } from "~/lib/workflow/graph";
 import type {
   GenerateImageRequest,
   GenerateVideoRequest,
 } from "~/lib/workflow/types";
-import { isGeneratorNodeKind } from "~/lib/workflow/types";
 
 const LLM_ESTIMATED_CREDIT_COST = 1;
 
@@ -35,43 +32,6 @@ export type WorkflowExecutionPriceQuote = {
   hasEstimate: boolean;
   lineItems: WorkflowExecutionPriceLineItem[];
 };
-
-function collectExecutableGeneratorNodeIds(
-  document: WorkflowDocument,
-  targetIds: string[],
-) {
-  const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
-  const incomingByTarget = buildIncomingByTarget(document.edges);
-  const executableGeneratorNodeIds = new Set<string>();
-  const visited = new Set<string>();
-
-  const visit = (nodeId: string) => {
-    if (visited.has(nodeId)) {
-      return;
-    }
-
-    visited.add(nodeId);
-
-    const node = nodeMap.get(nodeId);
-    if (!node) {
-      return;
-    }
-
-    if (isGeneratorNodeKind(node.kind)) {
-      executableGeneratorNodeIds.add(node.id);
-    }
-
-    for (const edge of incomingByTarget.get(nodeId) ?? []) {
-      visit(edge.source);
-    }
-  };
-
-  for (const targetId of targetIds) {
-    visit(targetId);
-  }
-
-  return [...executableGeneratorNodeIds];
-}
 
 function buildWorkflowExecutionPriceLineItem(
   document: WorkflowDocument,
@@ -141,7 +101,10 @@ function buildWorkflowExecutionPriceQuote(
   targetIds: string[],
 ): WorkflowExecutionPriceQuote {
   const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
-  const lineItems = collectExecutableGeneratorNodeIds(document, targetIds)
+  const lineItems = collectExecutableWorkflowGeneratorNodeIds(
+    document,
+    targetIds,
+  )
     .map((nodeId) => nodeMap.get(nodeId))
     .flatMap((node) =>
       node ? [buildWorkflowExecutionPriceLineItem(document, node)] : [],

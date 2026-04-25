@@ -14,7 +14,10 @@ import {
   buildWorkflowExecutionStatusResponse,
   createWorkflowExecutionRuntimeState,
 } from "~/lib/workflow/execution/runtime-state";
-import { extractWorkflowExecutionSubgraph } from "~/lib/workflow/execution/subgraph";
+import {
+  collectExecutableWorkflowGeneratorNodeIds,
+  extractWorkflowExecutionSubgraph,
+} from "~/lib/workflow/execution/subgraph";
 import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target-resolution";
 import type {
   StartWorkflowExecutionRequest,
@@ -22,7 +25,6 @@ import type {
   WorkflowExecutionStatusResponse,
 } from "~/lib/workflow/execution/types";
 import { estimateWorkflowExecution } from "~/lib/workflow/pricing";
-import { isGeneratorNodeKind } from "~/lib/workflow/types";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
 import {
@@ -194,9 +196,10 @@ export class WorkflowExecutionService extends Context.Tag(
             ),
             projectId,
           } satisfies StartWorkflowExecutionRequest;
-          const executionNodeIds = submittedRequest.document.nodes
-            .filter((node) => isGeneratorNodeKind(node.kind))
-            .map((node) => node.id);
+          const executionNodeIds = collectExecutableWorkflowGeneratorNodeIds(
+            submittedRequest.document,
+            targetNodeIds,
+          );
           const priceQuote = estimateWorkflowExecution(submittedRequest);
           const credits = yield* workflowCreditsService.debitExecution({
             amount: priceQuote.totalCost,
