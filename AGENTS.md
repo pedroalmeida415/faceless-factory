@@ -1,4 +1,4 @@
-# IMPORTANT INSTRUCTIONS
+# MANDATORY INSTRUCTIONS AND PRINCIPLES. THESE DIRECTIVES ARE IMPERATIVE AND HAVE TO BE ENFORCED AND FOLLOWED.
 
 ## 1. Code Brevity & Conciseness
 Brevity is an absolute priority. Good code is not measured by volume, but by clarity, safety, and functionality!
@@ -12,7 +12,7 @@ Brevity is an absolute priority. Good code is not measured by volume, but by cla
 
 ## 2. Ruthless Bug Fixing & Root Cause Resolution
 
-Palliative fixes and "band-aid" patches are strictly forbidden. When a bug or suboptimal behavior is identified, you must prioritize the health of the system over the speed of the fix. THIS IS MANDATORY AND HAS TO BE ENFORCED AND FOLLOWED.
+Palliative fixes and "band-aid" patches are strictly forbidden. When a bug or suboptimal behavior is identified, you must prioritize the health of the system over the speed of the fix.
 
 * **Root Cause over Symptoms:** Never write code that merely hides a symptom. Trace the execution flow to the source—whether it is a flawed DAG resolution logic, an incorrect Zustand state transition, or a race condition—and fix it there.
 * **Fix by Deletion:** Your first instinct when fixing a bug should be to look for code to remove. If a bug exists because a system is over-engineered or redundant, refactor it to a simpler, more robust state. The goal is to reduce the surface area for future failures.
@@ -84,12 +84,6 @@ These rules are strict and non-negotiable:
 * **Error Bubbling:** Do not swallow errors at the node level. Propagate specific domain errors (e.g., `NodeExecutionError`, `InvalidInputError`) up to the orchestrator so the UI can highlight the specific failing node.
 * **Strict Error Modeling:** Never throw errors. Use `Effect.fail` with tagged union errors for predictable, type-safe recovery paths.
 
-## 8. Execution Workflow
-
-1.  **Context Gathering:** Analyze the graph schema, tRPC routers, and the existing `Effect` pipelines. Verify the current DAG resolution logic.
-2.  **Architectural Planning:** Define the change in terms of Graph Theory (e.g., "Updating the topological sort to handle conditional branches").
-3.  **Implementation:** Build the core logic (Effect/Domain), then the persistence (Drizzle/Postgres), then the API (tRPC), and finally the UI (React-Flow).
-4.  **Self-Review:** Verify against Section 3 (Graph Engine Architecture) and Section 7 (System Invariants).
 
 ## 9. System Invariants & Quality Assurance
 
@@ -100,7 +94,6 @@ These rules are strict and non-negotiable:
 
 * **Zero Fluff:** Eliminate all greetings, conversational or polite filler, and concluding remarks.
 * **Dense Reasoning:** Provide 1-2 sentences of deep architectural justification for structural changes.
-* **Code-Centric Output:** Output only the necessary commands, diffs, or code blocks.
 
 # RTK (Rust Token Killer) - Token-Optimized Commands
 
