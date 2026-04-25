@@ -14,6 +14,10 @@
 - [ ] Add support for structured outputs on LLM node
 - [ ] Support pasting images
 - [ ] Support drag/drop images
+- [ ] Support multiple images per lane (x2, x3, x4 in Nano banana pro for example)
+- [ ] Array utilities
+- [ ] Display upstream cost separate from node cost when upstream nodes don't yet have an output
+- 
 
 
 # Application
@@ -22,6 +26,9 @@
 - [ ] Any LLM node for text-related functionality.
 - [ ] Extract a provider-agnostic LLM model registry so adding OpenAI/Anthropic models only requires pricing + estimate config + execution adapter wiring.
 - [ ] Human-in-the-loop nodes or something to that require approval before moving forward.
+- [ ] Proper blob storage + CDN for images/videos (Cloudflare?)
+- [ ] How to support breaking changes to workflows in the future when we can't simply drop everything and call it a day to avoid shooting ourselves in the foot?
+- 
 
 # Infra
 - [ ] How to deploy to prod?
