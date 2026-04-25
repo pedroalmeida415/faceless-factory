@@ -26,7 +26,7 @@ import {
   type GenerateVideoResponse,
   type LlmThinkingLevel,
   NANO_BANANA_PRO_MODEL_ID,
-  VEO_31_MODEL_ID,
+  VEO_31_FAST_MODEL_ID,
   type WorkflowAsset,
 } from "~/lib/workflow/types";
 import { WorkflowStorage } from "~/server/workflow/storage";
@@ -491,6 +491,8 @@ export class VertexAi extends Context.Tag("VertexAi")<
           model,
           mode: _mode,
           prompt,
+          firstFrame,
+          lastFrame,
           referenceImages = [],
           aspectRatio = "16:9",
           durationSeconds = 4,
@@ -504,9 +506,27 @@ export class VertexAi extends Context.Tag("VertexAi")<
       }) =>
         Effect.gen(function* () {
           const promptText = prompt.trim();
-          const inputImages = referenceImages;
+          const hasFirstLastFrame = Boolean(firstFrame || lastFrame);
 
-          if (!promptText && !inputImages.length) {
+          if (hasFirstLastFrame && (!firstFrame || !lastFrame)) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message:
+                  "First and last frame are both required for this video mode.",
+              }),
+            );
+          }
+
+          if (hasFirstLastFrame && referenceImages.length) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message:
+                  "First/last frame mode cannot use ingredient reference images.",
+              }),
+            );
+          }
+
+          if (!promptText && !referenceImages.length && !firstFrame) {
             return yield* Effect.fail(
               new WorkflowValidationError({
                 message:
@@ -515,30 +535,32 @@ export class VertexAi extends Context.Tag("VertexAi")<
             );
           }
 
-          if (inputImages.length > 1 && !promptText) {
+          if (referenceImages.length && !promptText) {
             return yield* Effect.fail(
               new WorkflowValidationError({
                 message:
-                  "Prompt is required when using multiple reference images for video generation.",
+                  "Prompt is required when using ingredient images for video generation.",
               }),
             );
           }
 
           const client = yield* createVertexClientEffect(getVideoLocation());
-          const sourceImage =
-            inputImages.length === 1
-              ? yield* toSdkImage(inputImages[0] as WorkflowAsset)
-              : undefined;
+          const sourceImage = firstFrame
+            ? yield* toSdkImage(firstFrame)
+            : undefined;
+          const lastFrameImage = lastFrame
+            ? yield* toSdkImage(lastFrame)
+            : undefined;
           const referenceImageAssets =
-            inputImages.length > 1
-              ? yield* Effect.forEach(inputImages, toVideoReferenceImage, {
+            referenceImages.length > 0
+              ? yield* Effect.forEach(referenceImages, toVideoReferenceImage, {
                   concurrency: "unbounded",
                 })
               : undefined;
           const operation = yield* Effect.tryPromise({
             try: () =>
               client.models.generateVideos({
-                model: VEO_31_MODEL_ID,
+                model: VEO_31_FAST_MODEL_ID,
                 source: {
                   prompt: promptText || undefined,
                   image: sourceImage,
@@ -548,6 +570,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
                   durationSeconds,
                   aspectRatio,
                   generateAudio,
+                  lastFrame: lastFrameImage,
                   resolution,
                   personGeneration: "allow_adult",
                   referenceImages: referenceImageAssets,
@@ -602,7 +625,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
                   source: "generated",
                   mimeType,
                   fileName: `veo-3-1-${index + 1}.mp4`,
-                  model: VEO_31_MODEL_ID,
+                  model: VEO_31_FAST_MODEL_ID,
                   ownerUserId,
                   projectId,
                 });
@@ -613,7 +636,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
                   fileName: `veo-3-1-${index + 1}.mp4`,
                   kind: "video",
                   mimeType,
-                  model: VEO_31_MODEL_ID,
+                  model: VEO_31_FAST_MODEL_ID,
                   ownerUserId,
                   projectId,
                   source: "generated",

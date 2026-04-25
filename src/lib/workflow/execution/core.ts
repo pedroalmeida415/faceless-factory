@@ -40,6 +40,7 @@ import {
   buildGeneratorExecutionBatchPlan,
   buildIncomingByTarget,
   buildTextRuntimeValue,
+  getGeneratorInputHandles,
   getIncomingEdgesForHandle,
   getPromptNodeReferencedVariableKeys,
   getWorkflowGeneratorOutputRuntimeValue,
@@ -115,6 +116,18 @@ function coerceGeneratorExecutionBatchPlan(
         cause,
       }),
   });
+}
+
+function isGeneratorTextInputRequired(
+  document: WorkflowDocument,
+  targetId: string,
+  handleId: string,
+) {
+  return Boolean(
+    getGeneratorInputHandles(document, targetId).find(
+      (handle) => handle.id === handleId && handle.valueType === "text",
+    )?.required,
+  );
 }
 
 function evaluatePromptNodeTextBatch(
@@ -337,11 +350,15 @@ export function executeWorkflow(params: {
             PROMPT_INPUT_HANDLE_ID,
             {
               message: "Connect prompt text.",
-              required: true,
+              required: isGeneratorTextInputRequired(
+                state.document,
+                currentId,
+                PROMPT_INPUT_HANDLE_ID,
+              ),
             },
             incomingByTarget,
             evaluateNode,
-          )) as TextRuntimeValue;
+          )) as TextRuntimeValue | null;
           const mediaPlan = yield* coerceMediaInputBatches(
             state.document,
             nextPath,
@@ -418,11 +435,15 @@ export function executeWorkflow(params: {
             PROMPT_INPUT_HANDLE_ID,
             {
               message: "Connect prompt text.",
-              required: true,
+              required: isGeneratorTextInputRequired(
+                state.document,
+                currentId,
+                PROMPT_INPUT_HANDLE_ID,
+              ),
             },
             incomingByTarget,
             evaluateNode,
-          )) as TextRuntimeValue;
+          )) as TextRuntimeValue | null;
           const mediaPlan = yield* coerceMediaInputBatches(
             state.document,
             nextPath,

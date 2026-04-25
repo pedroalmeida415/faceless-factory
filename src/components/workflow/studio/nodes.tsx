@@ -23,7 +23,6 @@ import {
   type GeneratorControlDefinition,
   getImageGeneratorControlDefinitions,
   getImageGeneratorModelOptions,
-  getVideoGeneratorControlDefinitions,
   getVideoGeneratorModelOptions,
   getVideoGeneratorModeOptions,
 } from "~/lib/workflow/generator-models";
@@ -775,20 +774,19 @@ const VideoGeneratorNode = memo(function VideoGeneratorNode({
   selected,
 }: NodeProps<VideoGeneratorNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
-  const {
-    getGeneratorInputs,
-    getGeneratorIterationInfo,
-    setVideoGeneratorConfigValue,
-    setVideoGeneratorMode,
-    setVideoGeneratorModel,
-    runNode,
-  } = useStudioContext();
+  const { getGeneratorInputs, getGeneratorIterationInfo, runNode } =
+    useStudioContext();
   const inputs = getGeneratorInputs(id);
   const inputHandleSignature = inputs.map((handle) => handle.id).join("|");
   const iterationInfo = getGeneratorIterationInfo(id);
   const modelOptions = getVideoGeneratorModelOptions();
   const modeOptions = getVideoGeneratorModeOptions(data.model);
-  const controls = getVideoGeneratorControlDefinitions(data.model, data.mode);
+  const modelLabel =
+    modelOptions.find((option) => option.value === data.model)?.label ??
+    data.model;
+  const modeLabel =
+    modeOptions.find((option) => option.value === data.mode)?.label ??
+    data.mode;
 
   useEffect(() => {
     inputHandleSignature;
@@ -797,61 +795,29 @@ const VideoGeneratorNode = memo(function VideoGeneratorNode({
 
   return (
     <NodeShell
-      data={data}
+      data={{ ...data, label: "Video Gen" }}
       headerDetail={<WorkflowExecutionCostBadge nodeId={id} />}
       id={id}
       inputs={inputs}
       output={{ id: "videos", label: "Videos", color: "#a78bfa" }}
       selected={selected}
     >
-      <div className="grid gap-2">
-        <NodeFieldCard label="Model">
-          <Select
-            onValueChange={(value) =>
-              setVideoGeneratorModel(id, value as typeof data.model)
-            }
-            value={data.model}
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge
+          className="border-border/70 bg-muted/50 text-foreground"
+          variant="outline"
+        >
+          {modelLabel}
+        </Badge>
+        {modeLabel ? (
+          <Badge
+            className="border-border/70 bg-muted/50 text-foreground"
+            variant="outline"
           >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {modelOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </NodeFieldCard>
-        {modeOptions.length > 1 ? (
-          <NodeFieldCard label="Mode">
-            <Select
-              onValueChange={(value) => setVideoGeneratorMode(id, value)}
-              value={data.mode ?? modeOptions[0]?.value}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {modeOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </NodeFieldCard>
+            {modeLabel}
+          </Badge>
         ) : null}
       </div>
-
-      <GeneratorControlGrid
-        config={data.config}
-        controls={controls}
-        onConfigChange={(key, value) =>
-          setVideoGeneratorConfigValue(id, key, value)
-        }
-      />
 
       {iterationInfo.hasIterator ? (
         <NodeNotice tone="accent">
@@ -861,14 +827,14 @@ const VideoGeneratorNode = memo(function VideoGeneratorNode({
         </NodeNotice>
       ) : null}
 
+      <OutputGallery assets={data.outputAssets} />
+
       <ShellButton
         className="w-full justify-center"
         onClick={() => void runNode(id)}
       >
         Run video generation
       </ShellButton>
-
-      <OutputGallery assets={data.outputAssets} />
     </NodeShell>
   );
 }, isSameNodeRender);

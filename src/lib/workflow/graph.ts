@@ -677,23 +677,28 @@ export function buildGeneratorAssetBatchPlan(
 
 export function buildGeneratorExecutionBatchPlan(params: {
   mediaPlan: GeneratorAssetBatchPlan;
-  prompt: TextRuntimeValue;
+  prompt: TextRuntimeValue | null;
   systemPrompt?: TextRuntimeValue | null;
 }): GeneratorExecutionBatchPlan {
+  const promptLanes = params.prompt?.lanes.length ? params.prompt.lanes : [""];
   const systemPromptLanes = params.systemPrompt?.lanes.length
     ? params.systemPrompt.lanes
     : [null];
   const laneCount = getAlignedLaneCount([
-    params.prompt.lanes.length,
+    promptLanes.length,
     systemPromptLanes.length,
     params.mediaPlan.iterations,
   ]);
   const batches = Array.from({ length: laneCount }, (_, index) => ({
     mediaInputsByHandle:
       getBroadcastLane(params.mediaPlan.batches, index) ?? {},
-    prompt: getBroadcastLane(params.prompt.lanes, index) ?? "",
+    prompt: getBroadcastLane(promptLanes, index) ?? "",
     systemPrompt: getBroadcastLane(systemPromptLanes, index) ?? null,
-  })).filter((batch) => batch.prompt);
+  })).filter(
+    (batch) =>
+      batch.prompt.trim() ||
+      Object.values(batch.mediaInputsByHandle).some((assets) => assets.length),
+  );
 
   if (!batches.length) {
     throw new Error("Connected generator batch is empty.");

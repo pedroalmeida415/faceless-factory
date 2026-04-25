@@ -109,7 +109,7 @@ const NODE_ACTIONS: Array<{
   { kind: "prompt", label: "Prompt", icon: TextIcon },
   { kind: "asset", label: "Asset", icon: RiImageLine },
   { kind: "llmGenerator", label: "Run any LLM", icon: LlmIcon },
-  { kind: "videoGenerator", label: "Video generator", icon: RiVideoAiLine },
+  { kind: "videoGenerator", label: "Video Gen", icon: RiVideoAiLine },
   {
     kind: "imageGenerator",
     label: "Image Gen",

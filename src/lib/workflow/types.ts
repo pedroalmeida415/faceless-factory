@@ -1,9 +1,9 @@
 export const NANO_BANANA_PRO_MODEL_ID = "gemini-3-pro-image-preview";
-export const VEO_31_MODEL_ID = "veo-3.1-fast-generate-001";
+export const VEO_31_FAST_MODEL_ID = "veo-3.1-fast-generate-001";
 export const GEMINI_3_FLASH_PREVIEW_MODEL_ID = "gemini-3-flash-preview";
 
 export const IMAGE_MODEL_IDS = [NANO_BANANA_PRO_MODEL_ID] as const;
-export const VIDEO_MODEL_IDS = [VEO_31_MODEL_ID] as const;
+export const VIDEO_MODEL_IDS = [VEO_31_FAST_MODEL_ID] as const;
 export const LLM_MODEL_IDS = [GEMINI_3_FLASH_PREVIEW_MODEL_ID] as const;
 
 export const IMAGE_ASPECT_RATIOS = [
@@ -199,6 +199,8 @@ export type GenerateVideoRequest = {
   model: VideoGeneratorModelId;
   mode: string | null;
   prompt: string;
+  firstFrame?: WorkflowAsset;
+  lastFrame?: WorkflowAsset;
   referenceImages?: WorkflowAsset[];
   aspectRatio?: VideoAspectRatio;
   durationSeconds?: VideoDuration;

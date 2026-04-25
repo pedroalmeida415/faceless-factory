@@ -121,10 +121,11 @@ export function coerceMediaInputBatches(
   evaluateNode: EvaluateNode,
 ) {
   return Effect.gen(function* () {
+    const mediaHandles = getGeneratorInputHandles(document, targetId).filter(
+      (handle) => handle.valueType === valueType,
+    );
     const inputValues = yield* Effect.forEach(
-      getGeneratorInputHandles(document, targetId).filter(
-        (handle) => handle.valueType === valueType,
-      ),
+      mediaHandles,
       (handle) =>
         Effect.gen(function* () {
           const values = yield* getInputValues(
@@ -146,6 +147,19 @@ export function coerceMediaInputBatches(
         concurrency: "unbounded",
       },
     );
+
+    for (const [handleId, values] of inputValues) {
+      const handle = mediaHandles.find(
+        (candidate) => candidate.id === handleId,
+      );
+      if (handle?.required && !values.length) {
+        return yield* Effect.fail(
+          new WorkflowValidationError({
+            message: `Connect ${handle.label.toLowerCase()} ${valueType}.`,
+          }),
+        );
+      }
+    }
 
     return yield* Effect.try({
       try: () =>

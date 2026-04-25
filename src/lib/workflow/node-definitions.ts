@@ -26,7 +26,7 @@ export function formatNodeTitle(kind: WorkflowNodeKind) {
     case "imageGenerator":
       return "Image Gen";
     case "videoGenerator":
-      return "Video Generator";
+      return "Video Gen";
     case "llmGenerator":
       return "Run LLM";
   }

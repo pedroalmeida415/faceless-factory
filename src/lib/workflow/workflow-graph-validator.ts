@@ -90,12 +90,12 @@ function validateExecutionPlanNodes(
           break;
         }
 
-        const requiredTextHandles = getGeneratorInputHandles(
+        const requiredHandles = getGeneratorInputHandles(
           document,
           node.id,
-        ).filter((handle) => handle.required && handle.valueType === "text");
+        ).filter((handle) => handle.required);
 
-        for (const handle of requiredTextHandles) {
+        for (const handle of requiredHandles) {
           if (
             getIncomingEdgesForHandle(incomingByTarget, node.id, handle.id)
               .length
@@ -103,7 +103,9 @@ function validateExecutionPlanNodes(
             continue;
           }
 
-          failValidation(`Connect ${handle.label.toLowerCase()} text.`);
+          failValidation(
+            `Connect ${handle.label.toLowerCase()} ${handle.valueType}.`,
+          );
         }
 
         if (

@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { Textarea } from "~/components/ui/textarea";
+import { cn } from "~/lib/utils";
 import type {
   AssetWorkflowNode,
   ImageGeneratorWorkflowNode,
@@ -201,8 +202,8 @@ function getDrawerHeading(node: WorkflowDocumentNode) {
       } as const;
     case "videoGenerator":
       return {
-        description: "Tune model, mode, and video generation controls.",
-        title: "Video Generation",
+        description: "Choose a video mode and tune model generation controls.",
+        title: "Video Gen",
       } as const;
     case "llmGenerator":
       return {
@@ -372,6 +373,7 @@ function VideoGeneratorConfigPanel({
   );
   const modelOptions = getVideoGeneratorModelOptions();
   const modeOptions = getVideoGeneratorModeOptions(node.model);
+  const selectedMode = node.mode ?? modeOptions[0]?.value;
   const controls = getVideoGeneratorControlDefinitions(node.model, node.mode);
 
   return (
@@ -398,21 +400,33 @@ function VideoGeneratorConfigPanel({
 
       {modeOptions.length > 1 ? (
         <NodeFieldCard label="Mode">
-          <Select
-            onValueChange={(value) => setVideoGeneratorMode(node.id, value)}
-            value={node.mode ?? modeOptions[0]?.value}
+          <div
+            aria-label="Video generation mode"
+            className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
+            role="tablist"
           >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {modeOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
+            {modeOptions.map((option) => {
+              const active = option.value === selectedMode;
+
+              return (
+                <button
+                  aria-selected={active}
+                  className={cn(
+                    "rounded-md px-3 py-2 text-sm transition-colors",
+                    active
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  key={option.value}
+                  onClick={() => setVideoGeneratorMode(node.id, option.value)}
+                  role="tab"
+                  type="button"
+                >
                   {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+                </button>
+              );
+            })}
+          </div>
         </NodeFieldCard>
       ) : null}
 

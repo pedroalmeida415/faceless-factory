@@ -14,7 +14,7 @@ import {
   type ImageGeneratorModelId,
   type ImageGeneratorSettings,
   NANO_BANANA_PRO_MODEL_ID,
-  VEO_31_MODEL_ID,
+  VEO_31_FAST_MODEL_ID,
   VIDEO_ASPECT_RATIOS,
   VIDEO_DURATIONS,
   VIDEO_MODEL_IDS,
@@ -146,6 +146,15 @@ type VideoGeneratorModelDefinition = {
 };
 
 const IMAGE_REFERENCE_INPUT_PREFIX = "image-input-";
+const VIDEO_FIRST_FRAME_INPUT_ID = "first-frame";
+const VIDEO_LAST_FRAME_INPUT_ID = "last-frame";
+
+function getFirstAssetByHandle(
+  imageInputsByHandle: Record<string, WorkflowAsset[]>,
+  handleId: string,
+) {
+  return imageInputsByHandle[handleId]?.[0];
+}
 
 function createSelectOptions(values: readonly (string | number)[]) {
   return values.map((value) => ({
@@ -254,15 +263,15 @@ const VIDEO_GENERATOR_MODELS: Record<
   VideoGeneratorModelId,
   VideoGeneratorModelDefinition
 > = {
-  [VEO_31_MODEL_ID]: {
-    id: VEO_31_MODEL_ID,
-    label: "Veo 3.1",
+  [VEO_31_FAST_MODEL_ID]: {
+    id: VEO_31_FAST_MODEL_ID,
+    label: "Veo 3.1 Fast",
     creditCost: 40,
-    defaultMode: "default",
+    defaultMode: "ingredients",
     modes: [
       {
-        id: "default",
-        label: "Default",
+        id: "ingredients",
+        label: "Ingredients",
         inputs: [
           {
             type: "fixed",
@@ -315,6 +324,90 @@ const VIDEO_GENERATOR_MODELS: Record<
           referenceImages: flattenAssetsByPrefix(
             imageInputsByHandle,
             IMAGE_REFERENCE_INPUT_PREFIX,
+          ),
+          aspectRatio: getConfigString(
+            config,
+            "aspectRatio",
+            "16:9",
+          ) as VideoAspectRatio,
+          durationSeconds: getConfigNumber(
+            config,
+            "durationSeconds",
+            4,
+          ) as VideoDuration,
+          generateAudio: getConfigBoolean(config, "generateAudio", true),
+          resolution: getConfigString(
+            config,
+            "resolution",
+            "720p",
+          ) as (typeof VIDEO_RESOLUTIONS)[number],
+        }),
+      },
+      {
+        id: "first-last-frame",
+        label: "First & Last Frame",
+        inputs: [
+          {
+            type: "fixed",
+            id: PROMPT_INPUT_HANDLE_ID,
+            label: "Prompt",
+            required: false,
+            valueType: "text",
+          },
+          {
+            type: "fixed",
+            id: VIDEO_FIRST_FRAME_INPUT_ID,
+            label: "First frame",
+            required: true,
+            valueType: "image",
+          },
+          {
+            type: "fixed",
+            id: VIDEO_LAST_FRAME_INPUT_ID,
+            label: "Last frame",
+            required: true,
+            valueType: "image",
+          },
+        ],
+        controls: [
+          {
+            type: "select",
+            key: "aspectRatio",
+            label: "Aspect",
+            options: createSelectOptions(VIDEO_ASPECT_RATIOS),
+          },
+          {
+            type: "select",
+            key: "durationSeconds",
+            label: "Duration",
+            options: VIDEO_DURATIONS.map((duration) => ({
+              label: `${duration}s`,
+              value: String(duration),
+            })),
+          },
+          {
+            type: "select",
+            key: "resolution",
+            label: "Resolution",
+            options: createSelectOptions(VIDEO_RESOLUTIONS),
+          },
+          {
+            type: "switch",
+            key: "generateAudio",
+            label: "Generate audio",
+          },
+        ],
+        buildRequest: ({ config, imageInputsByHandle, mode, model }) => ({
+          model,
+          mode,
+          prompt: "",
+          firstFrame: getFirstAssetByHandle(
+            imageInputsByHandle,
+            VIDEO_FIRST_FRAME_INPUT_ID,
+          ),
+          lastFrame: getFirstAssetByHandle(
+            imageInputsByHandle,
+            VIDEO_LAST_FRAME_INPUT_ID,
           ),
           aspectRatio: getConfigString(
             config,
@@ -438,7 +531,7 @@ function createVideoGeneratorDefaultConfig(
   model: VideoGeneratorModelId,
 ): GeneratorConfig {
   switch (model) {
-    case VEO_31_MODEL_ID:
+    case VEO_31_FAST_MODEL_ID:
       return {
         aspectRatio: "16:9",
         durationSeconds: 4,
@@ -469,7 +562,7 @@ function normalizeVideoGeneratorConfig(
   config: GeneratorConfig,
 ) {
   switch (model) {
-    case VEO_31_MODEL_ID:
+    case VEO_31_FAST_MODEL_ID:
       return {
         aspectRatio: VIDEO_ASPECT_RATIOS.includes(
           config.aspectRatio as VideoAspectRatio,
@@ -583,7 +676,7 @@ export function createDefaultImageGeneratorSettings(
 }
 
 export function createDefaultVideoGeneratorSettings(
-  model: VideoGeneratorModelId = VEO_31_MODEL_ID,
+  model: VideoGeneratorModelId = VEO_31_FAST_MODEL_ID,
 ): VideoGeneratorSettings {
   const definition = getVideoGeneratorModelDefinition(model);
 
@@ -623,7 +716,7 @@ export function normalizeVideoGeneratorSettings(
     settings?.model as VideoGeneratorModelId,
   )
     ? (settings?.model as VideoGeneratorModelId)
-    : VEO_31_MODEL_ID;
+    : VEO_31_FAST_MODEL_ID;
   const definition = getVideoGeneratorModelDefinition(model);
   const mode = definition.modes.some(
     (candidate) => candidate.id === settings?.mode,
