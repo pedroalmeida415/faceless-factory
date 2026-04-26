@@ -22,6 +22,9 @@
     "indentStyle": "space",
     "indentWidth": 2
   },
+  "files": {
+    "includes": ["**", "!!src/components/ui"]
+  },
   "linter": {
     "enabled": true,
     "rules": {

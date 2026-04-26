@@ -17,18 +17,19 @@
 - [ ] Support multiple images per lane (x2, x3, x4 in Nano banana pro for example)
 - [ ] Array utilities
 - [ ] Display upstream cost separate from node cost when upstream nodes don't yet have an output
-- 
+- [ ] Disconnect edge by dragging out the connected socket
 
 
 # Application
 - [X] ~~Database design (tables, credits, etc...)~~
 - [X] ~~Plans Stripe integration~~
-- [ ] Any LLM node for text-related functionality.
+- [X] ~~Any LLM node for text-related functionality.~~
 - [ ] Extract a provider-agnostic LLM model registry so adding OpenAI/Anthropic models only requires pricing + estimate config + execution adapter wiring.
 - [ ] Human-in-the-loop nodes or something to that require approval before moving forward.
 - [ ] Proper blob storage + CDN for images/videos (Cloudflare?)
 - [ ] How to support breaking changes to workflows in the future when we can't simply drop everything and call it a day to avoid shooting ourselves in the foot?
-- 
+- [ ] unblock lanes when ready and display results independently instead of having everything blocked until the entire batch is finished. 
+- [ ]
 
 # Infra
 - [ ] How to deploy to prod?
