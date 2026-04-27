@@ -42,6 +42,7 @@ import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target
 import type {
   StartWorkflowExecutionRequest,
   WorkflowExecutionPortError,
+  WorkflowExecutionRuntimeState,
   WorkflowExecutionStatusResponse,
   WorkflowRunArtifacts,
 } from "~/lib/workflow/execution/types";
@@ -363,6 +364,7 @@ export class WorkflowExecutionService extends Context.Tag(
                           laneCount: params.laneCount,
                           laneIndex: job.laneIndex,
                         },
+                        reviewLaneFilter: null,
                         selection: { nodeIds: [job.nodeId] },
                         target: { type: "selected-or-all" as const },
                       },
@@ -766,7 +768,32 @@ export class WorkflowExecutionService extends Context.Tag(
                 params.state.requestContext.documentRevision,
             }
           : null,
+        runtime: mergeRuntimeState({
+          currentRuntime: params.currentRun.runtime,
+          stateRuntime: params.state.runtime,
+        }),
         targetNodeIds: params.currentRun.targetNodeIds,
+      });
+
+      const mergeRuntimeState = (params: {
+        currentRuntime: WorkflowExecutionRuntimeState;
+        stateRuntime: WorkflowExecutionRuntimeState;
+      }) => ({
+        ...params.currentRuntime,
+        activity: params.stateRuntime.activity,
+        error: params.stateRuntime.error,
+        finishedAt: params.stateRuntime.finishedAt,
+        nodeStateById: {
+          ...params.currentRuntime.nodeStateById,
+          ...Object.fromEntries(
+            Object.entries(params.stateRuntime.nodeStateById).filter(
+              ([, nodeState]) =>
+                nodeState.status !== "idle" || nodeState.error !== null,
+            ),
+          ),
+        },
+        startedAt:
+          params.currentRuntime.startedAt ?? params.stateRuntime.startedAt,
       });
 
       const mergeLaneScopedDocument = (params: {
@@ -2185,6 +2212,34 @@ export class WorkflowExecutionService extends Context.Tag(
                   }
 
                   if (!hasLaneOutput(state, laneIndex)) {
+                    yield* workflowRunStore
+                      .updateRunWith({
+                        runId,
+                        userId,
+                        update: (currentRun) =>
+                          Effect.succeed({
+                            result: null,
+                            run:
+                              currentRun.status === "queued" ||
+                              currentRun.status === "running" ||
+                              currentRun.status === "waiting_for_review"
+                                ? {
+                                    ...currentRun,
+                                    activity: state.runtime.activity,
+                                    credits,
+                                    runtime: mergeRuntimeState({
+                                      currentRuntime: currentRun.runtime,
+                                      stateRuntime: state.runtime,
+                                    }),
+                                    status:
+                                      currentRun.status === "queued"
+                                        ? ("running" as const)
+                                        : currentRun.status,
+                                  }
+                                : currentRun,
+                          }),
+                      })
+                      .pipe(Effect.orDie, Effect.asVoid);
                     return;
                   }
 

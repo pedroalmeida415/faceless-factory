@@ -128,8 +128,8 @@ type EvaluateNode = (
 
 function getExecutionLaneIndex(request: StartWorkflowExecutionRequest) {
   return (
-    request.reviewLaneFilter?.laneIndex ??
     request.executionLaneFilter?.laneIndex ??
+    request.reviewLaneFilter?.laneIndex ??
     null
   );
 }

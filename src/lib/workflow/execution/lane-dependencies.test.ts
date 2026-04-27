@@ -296,6 +296,71 @@ describe("workflow lane dependencies", () => {
     );
   });
 
+  test("rolling pair can run a satisfied lane while another source lane is still blocked", () => {
+    const image = node("imageGenerator", "image");
+    const reorder = {
+      ...node("laneReorder", "shift"),
+      shift: 1,
+      valueType: "image" as const,
+    };
+    const video = node("videoGenerator", "video");
+    const document: WorkflowDocument = {
+      edges: [
+        {
+          id: "image-video-current",
+          source: image.id,
+          sourceHandle: "images",
+          target: video.id,
+          targetHandle: imageInput(0),
+        },
+        {
+          id: "image-shift",
+          source: image.id,
+          sourceHandle: "images",
+          target: reorder.id,
+          targetHandle: "input",
+        },
+        {
+          id: "shift-video-next",
+          source: reorder.id,
+          sourceHandle: "output",
+          target: video.id,
+          targetHandle: imageInput(1),
+        },
+      ],
+      nodes: [image, reorder, video],
+      version: WORKFLOW_DOCUMENT_VERSION,
+    };
+    const plan = lanePlan({
+      document,
+      iterations: { image: 3, video: 3 },
+      targetNodeIds: [image.id, video.id],
+    });
+    for (const [completedLanes, readyLaneIndex] of [
+      [[0, 1], 0],
+      [[1, 2], 1],
+      [[0, 2], 2],
+    ] as const) {
+      const readyJobs = getReadyWorkflowLaneJobs({
+        completedLanes: new Set(
+          completedLanes.map((laneIndex) => `${image.id}:${laneIndex}`),
+        ),
+        plan,
+      });
+
+      assert.equal(
+        readyJobs.some(
+          (job) => job.nodeId === video.id && job.laneIndex === readyLaneIndex,
+        ),
+        true,
+      );
+      assert.equal(
+        readyJobs.filter((job) => job.nodeId === video.id).length,
+        1,
+      );
+    }
+  });
+
   test("prompt dependencies ignore unreferenced variables", () => {
     const used = node("llmGenerator", "used");
     const unused = node("llmGenerator", "unused");

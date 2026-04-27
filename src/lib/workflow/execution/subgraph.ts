@@ -454,11 +454,25 @@ export function getWorkflowPlannedLaneCount(
   document: WorkflowDocument,
   nodeId: string,
   sourceHandleId?: string | null,
+  generatorIterationById: ReadonlyMap<
+    string,
+    { iterations: number }
+  > = new Map(),
 ) {
+  const seededGeneratorIterations = new Map(
+    Array.from(generatorIterationById, ([id, info]) => [
+      id,
+      {
+        hasIterator: info.iterations > 1,
+        iterations: info.iterations,
+        mismatchedIterators: false,
+      } satisfies GeneratorIterationInfo,
+    ]),
+  );
   const context: PlanningContext = {
     document,
     executableNodeIds: [],
-    generatorIterationById: new Map(),
+    generatorIterationById: seededGeneratorIterations,
     incomingByTarget: buildIncomingByTarget(document.edges),
     nodeMap: new Map(document.nodes.map((node) => [node.id, node])),
     reviewBarrierNodeIds: new Set(),

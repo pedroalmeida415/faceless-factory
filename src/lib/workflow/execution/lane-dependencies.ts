@@ -72,7 +72,6 @@ function getBroadcastSourceLane(params: {
   document: WorkflowDocument;
   generatorIterationById: ReadonlyMap<string, { iterations: number }>;
   laneIndex: number;
-  nodeById: ReadonlyMap<string, WorkflowDocumentNode>;
   sourceHandleId?: string | null;
   sourceNodeId: string;
 }) {
@@ -82,18 +81,15 @@ function getBroadcastSourceLane(params: {
 function getSourceLaneCount(params: {
   document: WorkflowDocument;
   generatorIterationById: ReadonlyMap<string, { iterations: number }>;
-  nodeById: ReadonlyMap<string, WorkflowDocumentNode>;
   sourceHandleId?: string | null;
   sourceNodeId: string;
-}) {
-  const sourceNode = params.nodeById.get(params.sourceNodeId);
-  return isGeneratorNode(sourceNode)
-    ? (params.generatorIterationById.get(params.sourceNodeId)?.iterations ?? 1)
-    : getWorkflowPlannedLaneCount(
-        params.document,
-        params.sourceNodeId,
-        params.sourceHandleId,
-      );
+}): number {
+  return getWorkflowPlannedLaneCount(
+    params.document,
+    params.sourceNodeId,
+    params.sourceHandleId,
+    params.generatorIterationById,
+  );
 }
 
 function getLaneMergeSource(params: {
@@ -101,14 +97,12 @@ function getLaneMergeSource(params: {
   generatorIterationById: ReadonlyMap<string, { iterations: number }>;
   incomingEdges: readonly WorkflowDocumentEdge[];
   laneIndex: number;
-  nodeById: ReadonlyMap<string, WorkflowDocumentNode>;
 }) {
   let offset = 0;
   for (const edge of params.incomingEdges) {
     const laneCount = getSourceLaneCount({
       document: params.document,
       generatorIterationById: params.generatorIterationById,
-      nodeById: params.nodeById,
       sourceHandleId: edge.sourceHandle,
       sourceNodeId: edge.source,
     });
@@ -172,7 +166,6 @@ function resolveSourceLaneDependencies(params: {
         laneCount: getSourceLaneCount({
           document: params.document,
           generatorIterationById: params.generatorIterationById,
-          nodeById: params.nodeById,
           sourceHandleId: edge.sourceHandle,
           sourceNodeId: edge.source,
         }),
@@ -187,7 +180,6 @@ function resolveSourceLaneDependencies(params: {
             document: params.document,
             generatorIterationById: params.generatorIterationById,
             laneIndex: params.laneIndex,
-            nodeById: params.nodeById,
             sourceHandleId: edge.sourceHandle,
             sourceNodeId: edge.source,
           }),
@@ -224,7 +216,6 @@ function resolveSourceLaneDependencies(params: {
           LANE_TRANSFORM_INPUT_HANDLE_ID,
         ),
         laneIndex: params.laneIndex,
-        nodeById: params.nodeById,
       });
       return source ? resolveEdge(source.edge, source.laneIndex) : [];
     }
@@ -241,7 +232,6 @@ function resolveSourceLaneDependencies(params: {
                 document: params.document,
                 generatorIterationById: params.generatorIterationById,
                 laneIndex: params.laneIndex,
-                nodeById: params.nodeById,
                 sourceHandleId: edge.sourceHandle,
                 sourceNodeId: edge.source,
               })
@@ -261,7 +251,6 @@ function resolveSourceLaneDependencies(params: {
               document: params.document,
               generatorIterationById: params.generatorIterationById,
               laneIndex: params.laneIndex,
-              nodeById: params.nodeById,
               sourceHandleId: edge.sourceHandle,
               sourceNodeId: edge.source,
             }),
@@ -308,7 +297,6 @@ export function buildWorkflowLaneDependencyPlan(params: {
                 document: params.document,
                 generatorIterationById: params.generatorIterationById,
                 laneIndex,
-                nodeById,
                 sourceHandleId: edge.sourceHandle,
                 sourceNodeId: edge.source,
               }),

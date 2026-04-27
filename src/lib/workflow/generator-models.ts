@@ -148,6 +148,7 @@ type VideoGeneratorModelDefinition = {
 const IMAGE_REFERENCE_INPUT_PREFIX = "image-input-";
 const VIDEO_FIRST_FRAME_INPUT_ID = "first-frame";
 const VIDEO_LAST_FRAME_INPUT_ID = "last-frame";
+const VEO_REFERENCE_VIDEO_DURATIONS = [8] as const;
 
 function getFirstAssetByHandle(
   imageInputsByHandle: Record<string, WorkflowAsset[]>,
@@ -160,6 +161,13 @@ function createSelectOptions(values: readonly (string | number)[]) {
   return values.map((value) => ({
     label: String(value),
     value: String(value),
+  }));
+}
+
+function createDurationOptions(values: readonly VideoDuration[]) {
+  return values.map((duration) => ({
+    label: `${duration}s`,
+    value: String(duration),
   }));
 }
 
@@ -181,13 +189,22 @@ function getConfigBoolean(
   return typeof value === "boolean" ? value : fallback;
 }
 
-function getConfigNumber(
+function getConfigVideoDuration(
   config: GeneratorConfig,
   key: string,
-  fallback: number,
+  fallback: VideoDuration,
+  allowedDurations: readonly VideoDuration[],
 ) {
   const value = config[key];
-  return typeof value === "number" ? value : fallback;
+  return allowedDurations.includes(value as VideoDuration)
+    ? (value as VideoDuration)
+    : fallback;
+}
+
+function getVeoDurationOptions(mode: string | null) {
+  return mode === "first-last-frame"
+    ? VIDEO_DURATIONS
+    : VEO_REFERENCE_VIDEO_DURATIONS;
 }
 
 function flattenAssetsByPrefix(
@@ -300,10 +317,7 @@ const VIDEO_GENERATOR_MODELS: Record<
             type: "select",
             key: "durationSeconds",
             label: "Duration",
-            options: VIDEO_DURATIONS.map((duration) => ({
-              label: `${duration}s`,
-              value: String(duration),
-            })),
+            options: createDurationOptions(VEO_REFERENCE_VIDEO_DURATIONS),
           },
           {
             type: "select",
@@ -330,11 +344,12 @@ const VIDEO_GENERATOR_MODELS: Record<
             "aspectRatio",
             "16:9",
           ) as VideoAspectRatio,
-          durationSeconds: getConfigNumber(
+          durationSeconds: getConfigVideoDuration(
             config,
             "durationSeconds",
-            4,
-          ) as VideoDuration,
+            8,
+            VEO_REFERENCE_VIDEO_DURATIONS,
+          ),
           generateAudio: getConfigBoolean(config, "generateAudio", true),
           resolution: getConfigString(
             config,
@@ -380,10 +395,7 @@ const VIDEO_GENERATOR_MODELS: Record<
             type: "select",
             key: "durationSeconds",
             label: "Duration",
-            options: VIDEO_DURATIONS.map((duration) => ({
-              label: `${duration}s`,
-              value: String(duration),
-            })),
+            options: createDurationOptions(VIDEO_DURATIONS),
           },
           {
             type: "select",
@@ -414,11 +426,12 @@ const VIDEO_GENERATOR_MODELS: Record<
             "aspectRatio",
             "16:9",
           ) as VideoAspectRatio,
-          durationSeconds: getConfigNumber(
+          durationSeconds: getConfigVideoDuration(
             config,
             "durationSeconds",
             4,
-          ) as VideoDuration,
+            VIDEO_DURATIONS,
+          ),
           generateAudio: getConfigBoolean(config, "generateAudio", true),
           resolution: getConfigString(
             config,
@@ -534,7 +547,7 @@ function createVideoGeneratorDefaultConfig(
     case VEO_31_FAST_MODEL_ID:
       return {
         aspectRatio: "16:9",
-        durationSeconds: 4,
+        durationSeconds: 8,
         generateAudio: true,
         resolution: "720p",
       };
@@ -559,21 +572,25 @@ function normalizeImageGeneratorConfig(
 
 function normalizeVideoGeneratorConfig(
   model: VideoGeneratorModelId,
+  mode: string | null,
   config: GeneratorConfig,
 ) {
   switch (model) {
-    case VEO_31_FAST_MODEL_ID:
+    case VEO_31_FAST_MODEL_ID: {
+      const durations = getVeoDurationOptions(mode);
+      const fallbackDuration = durations[0] ?? 8;
       return {
         aspectRatio: VIDEO_ASPECT_RATIOS.includes(
           config.aspectRatio as VideoAspectRatio,
         )
           ? (config.aspectRatio as VideoAspectRatio)
           : "16:9",
-        durationSeconds: VIDEO_DURATIONS.includes(
-          config.durationSeconds as VideoDuration,
-        )
-          ? (config.durationSeconds as VideoDuration)
-          : 4,
+        durationSeconds: getConfigVideoDuration(
+          config,
+          "durationSeconds",
+          fallbackDuration,
+          durations,
+        ),
         generateAudio:
           typeof config.generateAudio === "boolean"
             ? config.generateAudio
@@ -584,6 +601,7 @@ function normalizeVideoGeneratorConfig(
           ? (config.resolution as (typeof VIDEO_RESOLUTIONS)[number])
           : "720p",
       } satisfies GeneratorConfig;
+    }
   }
 }
 
@@ -727,7 +745,7 @@ export function normalizeVideoGeneratorSettings(
   return {
     model,
     mode,
-    config: normalizeVideoGeneratorConfig(model, settings?.config ?? {}),
+    config: normalizeVideoGeneratorConfig(model, mode, settings?.config ?? {}),
   } satisfies VideoGeneratorSettings;
 }
 
@@ -762,12 +780,18 @@ export function setVideoGeneratorMode(
   mode: string,
 ): VideoGeneratorSettings {
   const definition = getVideoGeneratorModelDefinition(settings.model);
+  const nextMode = definition.modes.some((candidate) => candidate.id === mode)
+    ? mode
+    : definition.defaultMode;
 
   return {
     ...settings,
-    mode: definition.modes.some((candidate) => candidate.id === mode)
-      ? mode
-      : definition.defaultMode,
+    mode: nextMode,
+    config: normalizeVideoGeneratorConfig(
+      settings.model,
+      nextMode,
+      settings.config,
+    ),
   };
 }
 
