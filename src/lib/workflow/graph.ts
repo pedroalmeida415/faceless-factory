@@ -1078,6 +1078,44 @@ export function getWorkflowGeneratorOutputRuntimeValue(
     : rawOutput;
 }
 
+export function getWorkflowGeneratorAwaitingReviewRuntimeValue(
+  node: WorkflowDocumentNode,
+  options?: { laneIndex?: number | null },
+): RuntimeValue | null {
+  const laneIndex = options?.laneIndex;
+  if (
+    node.kind !== "imageGenerator" &&
+    node.kind !== "videoGenerator" &&
+    node.kind !== "llmGenerator"
+  ) {
+    return null;
+  }
+
+  if (!node.reviewEnabled) {
+    return null;
+  }
+
+  const rawOutput = getWorkflowGeneratorRawOutputRuntimeValue(node);
+  if (!rawOutput) {
+    return null;
+  }
+
+  const approvedOutput =
+    laneIndex !== null && laneIndex !== undefined
+      ? getApprovedReviewLaneRuntimeValue(node, laneIndex, {
+          inputValue: rawOutput,
+        })
+      : getApprovedReviewRuntimeValue(node, { inputValue: rawOutput });
+
+  if (approvedOutput) {
+    return null;
+  }
+
+  return laneIndex !== null && laneIndex !== undefined
+    ? getRuntimeValueLane(rawOutput, laneIndex)
+    : rawOutput;
+}
+
 function buildMediaBatchPlan(values: MediaRuntimeValue[]): MediaBatchPlan {
   if (!values.length) {
     return {

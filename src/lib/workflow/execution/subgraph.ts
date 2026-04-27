@@ -6,6 +6,7 @@ import {
   getGeneratorInputHandles,
   getIncomingEdgesForHandle,
   getPromptNodeReferencedVariableKeys,
+  getWorkflowGeneratorAwaitingReviewRuntimeValue,
   getWorkflowGeneratorOutputRuntimeValue,
 } from "~/lib/workflow/graph";
 import {
@@ -38,6 +39,7 @@ type PlanningContext = {
   generatorIterationById: Map<string, GeneratorIterationInfo>;
   incomingByTarget: ReturnType<typeof buildIncomingByTarget>;
   nodeMap: Map<string, WorkflowDocument["nodes"][number]>;
+  reviewBarrierNodeIds: Set<string>;
   requiredNodeIds: Set<string>;
   targetNodeIdSet: Set<string>;
 };
@@ -46,6 +48,7 @@ export type WorkflowExecutionPlan = {
   targetNodeIds: string[];
   requiredNodeIds: Set<string>;
   executableNodeIds: string[];
+  reviewBarrierNodeIds: string[];
   generatorIterationById: Map<string, GeneratorIterationInfo>;
 };
 
@@ -416,6 +419,17 @@ function resolveNodePlan(
         };
       }
 
+      const awaitingReviewOutput =
+        getWorkflowGeneratorAwaitingReviewRuntimeValue(node);
+      if (awaitingReviewOutput && !context.targetNodeIdSet.has(node.id)) {
+        context.reviewBarrierNodeIds.add(node.id);
+        return {
+          laneCount: awaitingReviewOutput.lanes.length,
+          mismatched: false,
+          type: awaitingReviewOutput.type,
+        };
+      }
+
       const info = planGeneratorNode(context, node, nextPath);
       return {
         laneCount: info.iterations,
@@ -436,6 +450,7 @@ export function buildWorkflowExecutionPlan(
     generatorIterationById: new Map(),
     incomingByTarget: buildIncomingByTarget(document.edges),
     nodeMap: new Map(document.nodes.map((node) => [node.id, node])),
+    reviewBarrierNodeIds: new Set(),
     requiredNodeIds: new Set(),
     targetNodeIdSet: new Set(targetNodeIds),
   };
@@ -448,6 +463,7 @@ export function buildWorkflowExecutionPlan(
     targetNodeIds,
     requiredNodeIds: context.requiredNodeIds,
     executableNodeIds: context.executableNodeIds,
+    reviewBarrierNodeIds: Array.from(context.reviewBarrierNodeIds),
     generatorIterationById: context.generatorIterationById,
   };
 }

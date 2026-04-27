@@ -30,7 +30,6 @@ import {
 import {
   buildWorkflowExecutionPlan,
   collectDownstreamWorkflowGeneratorNodeIds,
-  collectExecutableWorkflowGeneratorNodeIds,
   extractWorkflowExecutionSubgraph,
 } from "~/lib/workflow/execution/subgraph";
 import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target-resolution";
@@ -1669,9 +1668,16 @@ export class WorkflowExecutionService extends Context.Tag(
             ),
             projectId,
           } satisfies StartWorkflowExecutionRequest;
-          const executionNodeIds = collectExecutableWorkflowGeneratorNodeIds(
+          const executionPlan = buildWorkflowExecutionPlan(
             submittedRequest.document,
             targetNodeIds,
+          );
+          const executionNodeIds = executionPlan.executableNodeIds;
+          const artifactNodeIds = Array.from(
+            new Set([
+              ...executionNodeIds,
+              ...executionPlan.reviewBarrierNodeIds,
+            ]),
           );
           const priceQuote = estimateWorkflowExecution(submittedRequest);
           const credits = yield* workflowCreditsService.debitExecution({
@@ -1682,7 +1688,7 @@ export class WorkflowExecutionService extends Context.Tag(
           });
           const initialRun = buildWorkflowExecutionStatusResponse({
             runId,
-            targetNodeIds: executionNodeIds,
+            targetNodeIds: artifactNodeIds,
             accruedCostCredits: 0,
             projectDocumentRevision: project.documentRevision,
             document: submittedRequest.document,
@@ -1730,10 +1736,6 @@ export class WorkflowExecutionService extends Context.Tag(
               ),
             );
 
-          const executionPlan = buildWorkflowExecutionPlan(
-            submittedRequest.document,
-            targetNodeIds,
-          );
           const laneCount = getExecutionLaneCount(
             submittedRequest.document,
             targetNodeIds,

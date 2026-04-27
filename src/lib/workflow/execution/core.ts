@@ -55,6 +55,7 @@ import {
   getIncomingEdgesForHandle,
   getLaneAccumulatorInputValue,
   getPromptNodeReferencedVariableKeys,
+  getWorkflowGeneratorAwaitingReviewRuntimeValue,
   getWorkflowGeneratorOutputRuntimeValue,
   getWorkflowGeneratorRawOutputRuntimeValue,
   getWorkflowNodeRuntimeValue,
@@ -803,6 +804,9 @@ export function executeWorkflow(params: {
   );
   const targetNodeIdSet = new Set(targetNodeIds);
   const executedNodeIds = executionPlan.executableNodeIds;
+  const artifactNodeIds = Array.from(
+    new Set([...executedNodeIds, ...executionPlan.reviewBarrierNodeIds]),
+  );
   const executionLaneIndex = getExecutionLaneIndex(params.request);
 
   const state: ExecutionState = {
@@ -819,7 +823,7 @@ export function executeWorkflow(params: {
   const publish = () => {
     const response = buildWorkflowExecutionStatusResponse({
       runId: params.runId,
-      targetNodeIds: executedNodeIds,
+      targetNodeIds: artifactNodeIds,
       accruedCostCredits: finalCostCredits,
       projectDocumentRevision,
       finalCostCredits: state.status === "success" ? finalCostCredits : null,
@@ -971,6 +975,14 @@ export function executeWorkflow(params: {
         yield* setNodeRuntime(currentId, "success", null);
         return storedOutput;
       });
+    }
+
+    const awaitingReviewOutput = getWorkflowGeneratorAwaitingReviewRuntimeValue(
+      node,
+      { laneIndex: executionLaneIndex },
+    );
+    if (awaitingReviewOutput && !targetNodeIdSet.has(currentId)) {
+      return releaseGeneratorOutputAfterReview(currentId, awaitingReviewOutput);
     }
 
     switch (node.kind) {
@@ -1808,7 +1820,7 @@ export function executeWorkflow(params: {
 
       return buildWorkflowExecutionStatusResponse({
         runId: params.runId,
-        targetNodeIds: executedNodeIds,
+        targetNodeIds: artifactNodeIds,
         accruedCostCredits: finalCostCredits,
         projectDocumentRevision,
         document: state.document,
@@ -1832,7 +1844,7 @@ export function executeWorkflow(params: {
             finalCostCredits,
             request: params.request,
             runId: params.runId,
-            targetNodeIds: executedNodeIds,
+            targetNodeIds: artifactNodeIds,
           })
         : Effect.succeed(projectDocumentRevision)) ?? projectDocumentRevision;
 
@@ -1846,7 +1858,7 @@ export function executeWorkflow(params: {
 
     return buildWorkflowExecutionStatusResponse({
       runId: params.runId,
-      targetNodeIds: executedNodeIds,
+      targetNodeIds: artifactNodeIds,
       accruedCostCredits: finalCostCredits,
       projectDocumentRevision,
       finalCostCredits,
@@ -1865,7 +1877,7 @@ export function executeWorkflow(params: {
         ? Effect.succeed(
             buildWorkflowExecutionStatusResponse({
               runId: params.runId,
-              targetNodeIds: executedNodeIds,
+              targetNodeIds: artifactNodeIds,
               accruedCostCredits: finalCostCredits,
               projectDocumentRevision,
               document: state.document,
