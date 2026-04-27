@@ -76,6 +76,21 @@ export type NodeLaneOutputArtifact = {
   model: string | null;
 };
 
+export type WorkflowLaneErrorArtifact = {
+  runId: string;
+  projectId: string;
+  ownerUserId: string;
+  nodeId: string;
+  laneIndex: number;
+  attempt: number;
+  error: string;
+  failedAt: string;
+};
+
+export type WorkflowLaneResultArtifact =
+  | ({ status: "success" } & NodeLaneOutputArtifact)
+  | ({ status: "error" } & WorkflowLaneErrorArtifact);
+
 export type ReviewLaneArtifact = {
   runId: string;
   projectId: string;
@@ -108,10 +123,40 @@ export type LaneExecutionResult = {
 };
 
 export type WorkflowRunArtifacts = {
-  outputs: NodeLaneOutputArtifact[];
+  laneResults: WorkflowLaneResultArtifact[];
   reviewLanes: ReviewLaneArtifact[];
   lineage: WorkflowArtifactLineage[];
 };
+
+function workflowLaneResultKey(result: WorkflowLaneResultArtifact) {
+  return `${result.runId}:${result.nodeId}:${result.laneIndex}`;
+}
+
+export function getLatestWorkflowLaneResults(artifacts: WorkflowRunArtifacts) {
+  const latest = new Map<string, WorkflowLaneResultArtifact>();
+  for (const result of artifacts.laneResults) {
+    const key = workflowLaneResultKey(result);
+    const existing = latest.get(key);
+    if (!existing || existing.attempt < result.attempt) {
+      latest.set(key, result);
+    }
+  }
+  return Array.from(latest.values());
+}
+
+export function getSuccessfulWorkflowLaneOutputs(
+  artifacts: WorkflowRunArtifacts,
+) {
+  return getLatestWorkflowLaneResults(artifacts).flatMap((result) =>
+    result.status === "success" ? [result] : [],
+  );
+}
+
+export function getErroredWorkflowLaneResults(artifacts: WorkflowRunArtifacts) {
+  return getLatestWorkflowLaneResults(artifacts).flatMap((result) =>
+    result.status === "error" ? [result] : [],
+  );
+}
 
 export type NodeLaneOutputQuery = {
   runId: string;

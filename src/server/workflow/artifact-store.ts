@@ -22,6 +22,7 @@ import type {
   RegenerationAttemptRequest,
   ReviewLaneArtifact,
   WorkflowArtifactLineage,
+  WorkflowLaneErrorArtifact,
   WorkflowRunArtifactStatus,
   WorkflowRunArtifacts,
 } from "~/lib/workflow/execution/types";
@@ -35,11 +36,11 @@ import { db } from "~/server/db";
 import {
   assets,
   workflowArtifactLineage,
-  workflowNodeLaneOutputs,
+  workflowLaneResults,
   workflowReviewLanes,
 } from "~/server/db/schema";
 
-type OutputRow = typeof workflowNodeLaneOutputs.$inferSelect;
+type LaneResultRow = typeof workflowLaneResults.$inferSelect;
 type AssetRow = typeof assets.$inferSelect;
 
 type ArtifactStoreError = WorkflowInfrastructureError | WorkflowValidationError;
@@ -307,7 +308,19 @@ function outputToRowValue(output: NodeLaneOutputArtifact) {
   };
 }
 
-function rowToOutput(row: OutputRow, assetById: Map<string, WorkflowAsset>) {
+function rowToOutput(
+  row: LaneResultRow,
+  assetById: Map<string, WorkflowAsset>,
+) {
+  if (
+    row.status !== "success" ||
+    !row.valueType ||
+    !row.inputHash ||
+    !row.idempotencyKey
+  ) {
+    return null;
+  }
+
   const value =
     row.valueType === "text"
       ? ({ type: "text", lanes: [row.textValue ?? ""] } satisfies RuntimeValue)
@@ -334,17 +347,39 @@ function rowToOutput(row: OutputRow, assetById: Map<string, WorkflowAsset>) {
   } satisfies NodeLaneOutputArtifact;
 }
 
+function rowToLaneResult(
+  row: LaneResultRow,
+  assetById: Map<string, WorkflowAsset>,
+) {
+  if (row.status === "success") {
+    const output = rowToOutput(row, assetById);
+    return output ? { ...output, status: "success" as const } : null;
+  }
+
+  return {
+    attempt: row.attempt,
+    error: row.error ?? "Workflow execution lane failed.",
+    failedAt: (row.failedAt ?? row.updatedAt).toISOString(),
+    laneIndex: row.laneIndex,
+    nodeId: row.nodeId,
+    ownerUserId: row.ownerUserId,
+    projectId: row.projectId,
+    runId: row.runId,
+    status: "error" as const,
+  } satisfies WorkflowLaneErrorArtifact & { status: "error" };
+}
+
 function getRunArtifactsEffect(params: { ownerUserId: string; runId: string }) {
   return Effect.tryPromise({
     try: async () => {
-      const [outputRows, reviewRows, lineageRows] = await Promise.all([
+      const [resultRows, reviewRows, lineageRows] = await Promise.all([
         db
           .select()
-          .from(workflowNodeLaneOutputs)
+          .from(workflowLaneResults)
           .where(
             and(
-              eq(workflowNodeLaneOutputs.runId, params.runId),
-              eq(workflowNodeLaneOutputs.ownerUserId, params.ownerUserId),
+              eq(workflowLaneResults.runId, params.runId),
+              eq(workflowLaneResults.ownerUserId, params.ownerUserId),
             ),
           ),
         db
@@ -362,7 +397,7 @@ function getRunArtifactsEffect(params: { ownerUserId: string; runId: string }) {
           .where(eq(workflowArtifactLineage.runId, params.runId)),
       ]);
       const assetIds = Array.from(
-        new Set(outputRows.flatMap((row) => row.assetIds)),
+        new Set(resultRows.flatMap((row) => row.assetIds)),
       );
       const assetRows = assetIds.length
         ? await db
@@ -379,6 +414,10 @@ function getRunArtifactsEffect(params: { ownerUserId: string; runId: string }) {
         assetRows.map((row) => [row.id, toWorkflowAsset(row)]),
       );
       return {
+        laneResults: resultRows.flatMap((row) => {
+          const result = rowToLaneResult(row, assetById);
+          return result ? [result] : [];
+        }),
         lineage: lineageRows.map(
           (row) =>
             ({
@@ -391,7 +430,6 @@ function getRunArtifactsEffect(params: { ownerUserId: string; runId: string }) {
               sourceNodeId: row.sourceNodeId,
             }) satisfies WorkflowArtifactLineage,
         ),
-        outputs: outputRows.map((row) => rowToOutput(row, assetById)),
         reviewLanes: reviewRows.map(
           (row) =>
             ({
@@ -416,15 +454,16 @@ function getNodeLaneOutputEffect(params: NodeLaneOutputQuery) {
     try: async () => {
       const output = await db
         .select()
-        .from(workflowNodeLaneOutputs)
+        .from(workflowLaneResults)
         .where(
           and(
-            eq(workflowNodeLaneOutputs.runId, params.runId),
-            eq(workflowNodeLaneOutputs.ownerUserId, params.ownerUserId),
-            eq(workflowNodeLaneOutputs.nodeId, params.nodeId),
-            eq(workflowNodeLaneOutputs.laneIndex, params.laneIndex),
-            eq(workflowNodeLaneOutputs.attempt, params.attempt),
-            eq(workflowNodeLaneOutputs.inputHash, params.inputHash),
+            eq(workflowLaneResults.runId, params.runId),
+            eq(workflowLaneResults.ownerUserId, params.ownerUserId),
+            eq(workflowLaneResults.nodeId, params.nodeId),
+            eq(workflowLaneResults.laneIndex, params.laneIndex),
+            eq(workflowLaneResults.attempt, params.attempt),
+            eq(workflowLaneResults.status, "success"),
+            eq(workflowLaneResults.inputHash, params.inputHash),
           ),
         )
         .then((rows) => rows[0] ?? null);
@@ -473,6 +512,9 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
       runId: string;
       status: WorkflowReviewLaneStatus;
     }) => Effect.Effect<void, ArtifactStoreError>;
+    readonly upsertLaneError: (
+      params: WorkflowLaneErrorArtifact,
+    ) => Effect.Effect<void, ArtifactStoreError>;
     readonly upsertLaneExecutionResult: (
       result: LaneExecutionResult,
     ) => Effect.Effect<void, ArtifactStoreError>;
@@ -486,14 +528,14 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
           try: async () => {
             const [outputRows, reviewRows] = await Promise.all([
               db
-                .select({ attempt: workflowNodeLaneOutputs.attempt })
-                .from(workflowNodeLaneOutputs)
+                .select({ attempt: workflowLaneResults.attempt })
+                .from(workflowLaneResults)
                 .where(
                   and(
-                    eq(workflowNodeLaneOutputs.runId, params.runId),
-                    eq(workflowNodeLaneOutputs.ownerUserId, params.ownerUserId),
-                    eq(workflowNodeLaneOutputs.nodeId, params.nodeId),
-                    eq(workflowNodeLaneOutputs.laneIndex, params.laneIndex),
+                    eq(workflowLaneResults.runId, params.runId),
+                    eq(workflowLaneResults.ownerUserId, params.ownerUserId),
+                    eq(workflowLaneResults.nodeId, params.nodeId),
+                    eq(workflowLaneResults.laneIndex, params.laneIndex),
                   ),
                 ),
               db
@@ -534,38 +576,89 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
       getRunArtifacts: getRunArtifactsEffect,
       getNodeLaneOutput: getNodeLaneOutputEffect,
       setReviewLaneStatus: (params) =>
+        Effect.gen(function* () {
+          const rows = yield* Effect.tryPromise({
+            try: () =>
+              db
+                .select({ attempt: workflowReviewLanes.attempt })
+                .from(workflowReviewLanes)
+                .where(
+                  and(
+                    eq(workflowReviewLanes.runId, params.runId),
+                    eq(workflowReviewLanes.ownerUserId, params.ownerUserId),
+                    eq(workflowReviewLanes.nodeId, params.nodeId),
+                    eq(workflowReviewLanes.laneIndex, params.laneIndex),
+                  ),
+                ),
+            catch: toArtifactStoreError,
+          });
+          const attempt =
+            params.attempt ?? Math.max(-1, ...rows.map((row) => row.attempt));
+          if (attempt < 0) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: `Review lane ${params.laneIndex + 1} does not exist.`,
+              }),
+            );
+          }
+          yield* Effect.tryPromise({
+            try: () =>
+              db
+                .update(workflowReviewLanes)
+                .set({ status: params.status, updatedAt: new Date() })
+                .where(
+                  and(
+                    eq(workflowReviewLanes.runId, params.runId),
+                    eq(workflowReviewLanes.ownerUserId, params.ownerUserId),
+                    eq(workflowReviewLanes.nodeId, params.nodeId),
+                    eq(workflowReviewLanes.laneIndex, params.laneIndex),
+                    eq(workflowReviewLanes.attempt, attempt),
+                  ),
+                ),
+            catch: toArtifactStoreError,
+          });
+        }),
+      upsertLaneError: (params) =>
         Effect.tryPromise({
           try: async () => {
-            const rows = await db
-              .select({ attempt: workflowReviewLanes.attempt })
-              .from(workflowReviewLanes)
-              .where(
-                and(
-                  eq(workflowReviewLanes.runId, params.runId),
-                  eq(workflowReviewLanes.ownerUserId, params.ownerUserId),
-                  eq(workflowReviewLanes.nodeId, params.nodeId),
-                  eq(workflowReviewLanes.laneIndex, params.laneIndex),
-                ),
-              );
-            const attempt =
-              params.attempt ?? Math.max(-1, ...rows.map((row) => row.attempt));
-            if (attempt < 0) {
-              throw new WorkflowValidationError({
-                message: `Review lane ${params.laneIndex + 1} does not exist.`,
-              });
-            }
+            const failedAt = new Date(params.failedAt);
             await db
-              .update(workflowReviewLanes)
-              .set({ status: params.status, updatedAt: new Date() })
-              .where(
-                and(
-                  eq(workflowReviewLanes.runId, params.runId),
-                  eq(workflowReviewLanes.ownerUserId, params.ownerUserId),
-                  eq(workflowReviewLanes.nodeId, params.nodeId),
-                  eq(workflowReviewLanes.laneIndex, params.laneIndex),
-                  eq(workflowReviewLanes.attempt, attempt),
-                ),
-              );
+              .insert(workflowLaneResults)
+              .values({
+                assetIds: [],
+                attempt: params.attempt,
+                error: params.error,
+                failedAt,
+                id: randomUUID(),
+                laneIndex: params.laneIndex,
+                nodeId: params.nodeId,
+                ownerUserId: params.ownerUserId,
+                projectId: params.projectId,
+                runId: params.runId,
+                status: "error",
+                updatedAt: failedAt,
+              })
+              .onConflictDoUpdate({
+                target: [
+                  workflowLaneResults.runId,
+                  workflowLaneResults.nodeId,
+                  workflowLaneResults.laneIndex,
+                  workflowLaneResults.attempt,
+                ],
+                set: {
+                  assetIds: [],
+                  error: params.error,
+                  failedAt,
+                  idempotencyKey: null,
+                  inputHash: null,
+                  model: null,
+                  promptSnapshot: null,
+                  status: "error",
+                  textValue: null,
+                  updatedAt: failedAt,
+                  valueType: null,
+                },
+              });
           },
           catch: toArtifactStoreError,
         }),
@@ -576,11 +669,13 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
             for (const output of result.outputs) {
               const rowValue = outputToRowValue(output);
               await db
-                .insert(workflowNodeLaneOutputs)
+                .insert(workflowLaneResults)
                 .values({
                   ...rowValue,
                   attempt: output.attempt,
                   createdAt: now,
+                  error: null,
+                  failedAt: null,
                   id: randomUUID(),
                   idempotencyKey: output.idempotencyKey,
                   inputHash: output.inputHash,
@@ -591,20 +686,27 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
                   projectId: output.projectId,
                   promptSnapshot: output.promptSnapshot,
                   runId: output.runId,
+                  status: "success",
+                  updatedAt: now,
                 })
                 .onConflictDoUpdate({
                   target: [
-                    workflowNodeLaneOutputs.runId,
-                    workflowNodeLaneOutputs.nodeId,
-                    workflowNodeLaneOutputs.laneIndex,
-                    workflowNodeLaneOutputs.attempt,
+                    workflowLaneResults.runId,
+                    workflowLaneResults.nodeId,
+                    workflowLaneResults.laneIndex,
+                    workflowLaneResults.attempt,
                   ],
                   set: {
                     assetIds: rowValue.assetIds,
+                    error: null,
+                    failedAt: null,
+                    idempotencyKey: output.idempotencyKey,
                     inputHash: output.inputHash,
                     model: output.model,
                     promptSnapshot: output.promptSnapshot,
+                    status: "success",
                     textValue: rowValue.textValue,
+                    updatedAt: now,
                     valueType: rowValue.valueType,
                   },
                 });

@@ -1,10 +1,4 @@
-import {
-  type Processor,
-  Queue,
-  QueueEvents,
-  Worker,
-  type WorkerOptions,
-} from "bullmq";
+import { type Processor, Queue, Worker, type WorkerOptions } from "bullmq";
 
 import { env } from "~/env";
 import type { StartWorkflowExecutionRequest } from "~/lib/workflow/execution/types";
@@ -123,21 +117,11 @@ export function enqueueWorkflowReviewRegenerationJob(
   );
 }
 
-export function getWorkflowExecutionJob(jobId: string) {
-  return getWorkflowExecutionQueue().getJob(jobId);
-}
-
 export function createWorkflowExecutionWorker(
   processor: Processor<WorkflowExecutionJobData, void, string>,
 ) {
   return new Worker(WORKFLOW_EXECUTION_QUEUE_NAME, processor, {
     connection: workflowQueueConnection,
     ...workflowWorkerOptions,
-  });
-}
-
-export function createWorkflowExecutionQueueEvents() {
-  return new QueueEvents(WORKFLOW_EXECUTION_QUEUE_NAME, {
-    connection: workflowQueueConnection,
   });
 }

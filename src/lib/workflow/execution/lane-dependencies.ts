@@ -3,7 +3,12 @@ import type {
   WorkflowDocumentEdge,
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
+import { getWorkflowVisibleCompletionOutputs } from "~/lib/workflow/execution/artifact-projection";
 import { getWorkflowPlannedLaneCount } from "~/lib/workflow/execution/subgraph";
+import {
+  getErroredWorkflowLaneResults,
+  type WorkflowRunArtifacts,
+} from "~/lib/workflow/execution/types";
 import {
   buildIncomingByTarget,
   getGeneratorInputHandles,
@@ -334,6 +339,87 @@ export function getReadyWorkflowLaneJobs(params: {
       )
     );
   });
+}
+
+export function getCompletedWorkflowLaneKeys(artifacts: WorkflowRunArtifacts) {
+  return new Set(
+    getWorkflowVisibleCompletionOutputs(artifacts).map(getWorkflowLaneKey),
+  );
+}
+
+export function getFailedWorkflowLaneKeys(artifacts: WorkflowRunArtifacts) {
+  return new Set(
+    getErroredWorkflowLaneResults(artifacts).map(getWorkflowLaneKey),
+  );
+}
+
+export function getFailedWorkflowLaneClosure(params: {
+  failedLanes: ReadonlySet<string>;
+  plan: WorkflowLaneDependencyPlan;
+}) {
+  const failedLanes = new Set(params.failedLanes);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const job of params.plan.jobs) {
+      const key = laneKey(job);
+      if (failedLanes.has(key)) {
+        continue;
+      }
+      if (
+        job.dependencies.some((dependency) =>
+          failedLanes.has(laneKey(dependency)),
+        )
+      ) {
+        failedLanes.add(key);
+        changed = true;
+      }
+    }
+  }
+
+  return failedLanes;
+}
+
+export function areWorkflowLaneJobsSettled(params: {
+  completedLanes: ReadonlySet<string>;
+  failedLanes: ReadonlySet<string>;
+  plan: WorkflowLaneDependencyPlan;
+}) {
+  const failedClosure = getFailedWorkflowLaneClosure(params);
+  return params.plan.jobs.every((job) => {
+    const key = laneKey(job);
+    return params.completedLanes.has(key) || failedClosure.has(key);
+  });
+}
+
+export function getWorkflowLaneSettlement(params: {
+  artifacts: WorkflowRunArtifacts;
+  blockedLanes?: ReadonlySet<string>;
+  plan: WorkflowLaneDependencyPlan;
+}) {
+  const completedLanes = getCompletedWorkflowLaneKeys(params.artifacts);
+  const failedLanes = getFailedWorkflowLaneKeys(params.artifacts);
+  const failedClosure = getFailedWorkflowLaneClosure({
+    failedLanes,
+    plan: params.plan,
+  });
+  const blockedLanes = new Set(params.blockedLanes ?? []);
+  for (const key of failedClosure) {
+    blockedLanes.add(key);
+  }
+
+  return {
+    blockedLanes,
+    completedLanes,
+    failedClosure,
+    failedLanes,
+    plan: params.plan,
+    settled: params.plan.jobs.every((job) => {
+      const key = laneKey(job);
+      return completedLanes.has(key) || failedClosure.has(key);
+    }),
+  };
 }
 
 export function getWorkflowLaneKey(lane: WorkflowLaneIdentity) {

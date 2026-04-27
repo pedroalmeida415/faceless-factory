@@ -9,13 +9,21 @@ import {
 } from "~/lib/workflow/document";
 import { getWorkflowVisibleCompletionOutputs } from "~/lib/workflow/execution/artifact-projection";
 import {
+  areWorkflowLaneJobsSettled,
   buildWorkflowLaneDependencyPlan,
+  getFailedWorkflowLaneClosure,
   getReadyWorkflowLaneJobs,
   getWorkflowLaneKey,
+  getWorkflowLaneSettlement,
 } from "~/lib/workflow/execution/lane-dependencies";
 import type {
   NodeLaneOutputArtifact,
   WorkflowRunArtifacts,
+} from "~/lib/workflow/execution/types";
+import {
+  getErroredWorkflowLaneResults,
+  getSuccessfulWorkflowLaneOutputs,
+  isWorkflowRunLockingStatus,
 } from "~/lib/workflow/execution/types";
 import { PROMPT_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
 
@@ -60,6 +68,24 @@ function output(nodeId: string, laneIndex: number): NodeLaneOutputArtifact {
   };
 }
 
+function success(output: NodeLaneOutputArtifact) {
+  return { ...output, status: "success" as const };
+}
+
+function errorResult(nodeId: string, laneIndex: number, attempt: number) {
+  return {
+    attempt,
+    error: "lane failed",
+    failedAt: "2026-01-01T00:00:00.000Z",
+    laneIndex,
+    nodeId,
+    ownerUserId: "user",
+    projectId: "project",
+    runId: "run",
+    status: "error" as const,
+  };
+}
+
 function visibleLaneKeys(artifacts: WorkflowRunArtifacts) {
   return new Set(
     getWorkflowVisibleCompletionOutputs(artifacts).map(getWorkflowLaneKey),
@@ -69,7 +95,7 @@ function visibleLaneKeys(artifacts: WorkflowRunArtifacts) {
 function materializedBlockedLaneKeys(artifacts: WorkflowRunArtifacts) {
   const completed = visibleLaneKeys(artifacts);
   return new Set(
-    artifacts.outputs
+    artifacts.laneResults
       .map(getWorkflowLaneKey)
       .filter((key) => !completed.has(key)),
   );
@@ -172,7 +198,7 @@ describe("workflow lane dependencies", () => {
   test("reviewed raw output is not a visible completion until approved", () => {
     const artifacts: WorkflowRunArtifacts = {
       lineage: [],
-      outputs: [output("reviewed", 0)],
+      laneResults: [success(output("reviewed", 0))],
       reviewLanes: [
         {
           attempt: 0,
@@ -194,7 +220,7 @@ describe("workflow lane dependencies", () => {
         ...artifacts,
         reviewLanes: reviewLane ? [{ ...reviewLane, status: "approved" }] : [],
       }),
-      artifacts.outputs,
+      getSuccessfulWorkflowLaneOutputs(artifacts),
     );
   });
 
@@ -240,7 +266,7 @@ describe("workflow lane dependencies", () => {
     });
     const artifacts: WorkflowRunArtifacts = {
       lineage: [],
-      outputs: [output(image.id, 0), output(image.id, 1)],
+      laneResults: [success(output(image.id, 0)), success(output(image.id, 1))],
       reviewLanes: [
         {
           attempt: 0,
@@ -420,5 +446,191 @@ describe("workflow lane dependencies", () => {
       }),
       [],
     );
+  });
+
+  test("failed source lanes transitively settle dependent lanes", () => {
+    const plan = {
+      jobs: [
+        { dependencies: [], laneIndex: 0, nodeId: "image" },
+        {
+          dependencies: [{ laneIndex: 0, nodeId: "image" }],
+          laneIndex: 0,
+          nodeId: "video",
+        },
+      ],
+    };
+    const failedLanes = new Set(["image:0"]);
+
+    assert.deepEqual(
+      getFailedWorkflowLaneClosure({ failedLanes, plan }),
+      new Set(["image:0", "video:0"]),
+    );
+    assert.equal(
+      areWorkflowLaneJobsSettled({
+        completedLanes: new Set(),
+        failedLanes,
+        plan,
+      }),
+      true,
+    );
+    assert.deepEqual(
+      getReadyWorkflowLaneJobs({
+        blockedLanes: getFailedWorkflowLaneClosure({ failedLanes, plan }),
+        completedLanes: new Set(),
+        plan,
+      }),
+      [],
+    );
+  });
+
+  test("unrelated lanes remain runnable after a lane failure", () => {
+    const plan = {
+      jobs: [
+        { dependencies: [], laneIndex: 0, nodeId: "image" },
+        { dependencies: [], laneIndex: 1, nodeId: "image" },
+        {
+          dependencies: [{ laneIndex: 0, nodeId: "image" }],
+          laneIndex: 0,
+          nodeId: "video",
+        },
+        {
+          dependencies: [{ laneIndex: 1, nodeId: "image" }],
+          laneIndex: 1,
+          nodeId: "video",
+        },
+      ],
+    };
+    const failedClosure = getFailedWorkflowLaneClosure({
+      failedLanes: new Set(["image:0"]),
+      plan,
+    });
+
+    assert.deepEqual(
+      getReadyWorkflowLaneJobs({
+        blockedLanes: failedClosure,
+        completedLanes: new Set(["image:1"]),
+        plan,
+      }),
+      [
+        {
+          dependencies: [{ laneIndex: 1, nodeId: "image" }],
+          laneIndex: 1,
+          nodeId: "video",
+        },
+      ],
+    );
+    assert.equal(
+      areWorkflowLaneJobsSettled({
+        completedLanes: new Set(["image:1", "video:1"]),
+        failedLanes: new Set(["image:0"]),
+        plan,
+      }),
+      true,
+    );
+  });
+
+  test("durable lane failures settle dependent lanes and leave siblings runnable", () => {
+    const plan = {
+      jobs: [
+        { dependencies: [], laneIndex: 0, nodeId: "image" },
+        { dependencies: [], laneIndex: 1, nodeId: "image" },
+        {
+          dependencies: [{ laneIndex: 0, nodeId: "image" }],
+          laneIndex: 0,
+          nodeId: "video",
+        },
+        {
+          dependencies: [{ laneIndex: 1, nodeId: "image" }],
+          laneIndex: 1,
+          nodeId: "video",
+        },
+      ],
+    };
+    const artifacts: WorkflowRunArtifacts = {
+      laneResults: [
+        success(output("image", 1)),
+        {
+          attempt: 0,
+          error: "lane failed",
+          failedAt: "2026-01-01T00:00:00.000Z",
+          laneIndex: 0,
+          nodeId: "image",
+          ownerUserId: "user",
+          projectId: "project",
+          runId: "run",
+          status: "error",
+        },
+      ],
+      lineage: [],
+      reviewLanes: [],
+    };
+
+    const settlement = getWorkflowLaneSettlement({ artifacts, plan });
+
+    assert.deepEqual(settlement.failedClosure, new Set(["image:0", "video:0"]));
+    assert.equal(settlement.settled, false);
+    assert.deepEqual(
+      getReadyWorkflowLaneJobs({
+        blockedLanes: settlement.blockedLanes,
+        completedLanes: settlement.completedLanes,
+        plan,
+      }),
+      [
+        {
+          dependencies: [{ laneIndex: 1, nodeId: "image" }],
+          laneIndex: 1,
+          nodeId: "video",
+        },
+      ],
+    );
+
+    assert.equal(
+      getWorkflowLaneSettlement({
+        artifacts: {
+          ...artifacts,
+          laneResults: [...artifacts.laneResults, success(output("video", 1))],
+        },
+        plan,
+      }).settled,
+      true,
+    );
+    assert.equal(isWorkflowRunLockingStatus("error"), false);
+  });
+
+  test("later successful attempt supersedes stale lane error", () => {
+    const artifacts: WorkflowRunArtifacts = {
+      laneResults: [
+        errorResult("image", 0, 0),
+        success({ ...output("image", 0), attempt: 1 }),
+      ],
+      lineage: [],
+      reviewLanes: [],
+    };
+    const settlement = getWorkflowLaneSettlement({
+      artifacts,
+      plan: { jobs: [{ dependencies: [], laneIndex: 0, nodeId: "image" }] },
+    });
+
+    assert.deepEqual(getErroredWorkflowLaneResults(artifacts), []);
+    assert.deepEqual(settlement.completedLanes, new Set(["image:0"]));
+    assert.deepEqual(settlement.failedLanes, new Set());
+    assert.equal(settlement.settled, true);
+  });
+
+  test("later error attempt supersedes stale successful completion", () => {
+    const artifacts: WorkflowRunArtifacts = {
+      laneResults: [success(output("image", 0)), errorResult("image", 0, 1)],
+      lineage: [],
+      reviewLanes: [],
+    };
+    const settlement = getWorkflowLaneSettlement({
+      artifacts,
+      plan: { jobs: [{ dependencies: [], laneIndex: 0, nodeId: "image" }] },
+    });
+
+    assert.deepEqual(getSuccessfulWorkflowLaneOutputs(artifacts), []);
+    assert.deepEqual(settlement.completedLanes, new Set());
+    assert.deepEqual(settlement.failedLanes, new Set(["image:0"]));
+    assert.equal(settlement.settled, true);
   });
 });

@@ -14,6 +14,7 @@ import type {
   WorkflowArtifactLineage,
   WorkflowRunArtifacts,
 } from "~/lib/workflow/execution/types";
+import { getSuccessfulWorkflowLaneOutputs } from "~/lib/workflow/execution/types";
 import {
   ImageGeneratorService,
   LlmGeneratorService,
@@ -75,9 +76,10 @@ function groupLineageByDependent(lineage: readonly WorkflowArtifactLineage[]) {
 }
 
 function getVisibleLatestOutputs(artifacts: WorkflowRunArtifacts) {
-  const latestOutputs = getLatestOutputs(artifacts.outputs);
+  const outputs = getSuccessfulWorkflowLaneOutputs(artifacts);
+  const latestOutputs = getLatestOutputs(outputs);
   const outputByAttempt = new Map(
-    artifacts.outputs.map((output) => [outputAttemptKey(output), output]),
+    outputs.map((output) => [outputAttemptKey(output), output]),
   );
   const latestReviewByLane = getLatestReviewLanes(artifacts.reviewLanes);
   const lineageByDependent = groupLineageByDependent(artifacts.lineage);
@@ -175,14 +177,15 @@ export function buildWorkflowApprovedRunProjection(params: {
 
   return buildWorkflowArtifactProjection({
     artifacts: {
-      lineage: params.artifacts.lineage,
-      outputs: params.artifacts.outputs.filter(
-        (output) =>
-          !reviewedNodeIds.has(output.nodeId) ||
+      laneResults: params.artifacts.laneResults.filter(
+        (result) =>
+          result.status === "error" ||
+          !reviewedNodeIds.has(result.nodeId) ||
           approvedReviewIdentity.has(
-            `${output.nodeId}:${output.laneIndex}:${output.attempt}`,
+            `${result.nodeId}:${result.laneIndex}:${result.attempt}`,
           ),
       ),
+      lineage: params.artifacts.lineage,
       reviewLanes: latestReviewLanes,
     },
     document: params.document,

@@ -223,8 +223,8 @@ export const assets = pgTable(
   }),
 );
 
-export const workflowNodeLaneOutputs = pgTable(
-  "workflow_node_lane_outputs",
+export const workflowLaneResults = pgTable(
+  "workflow_lane_results",
   {
     id: text("id").primaryKey(),
     runId: text("run_id").notNull(),
@@ -237,35 +237,40 @@ export const workflowNodeLaneOutputs = pgTable(
     nodeId: text("node_id").notNull(),
     laneIndex: bigint("lane_index", { mode: "number" }).notNull(),
     attempt: bigint("attempt", { mode: "number" }).notNull(),
-    valueType: text("value_type")
-      .$type<Exclude<LaneTransformValueType, null>>()
-      .notNull(),
+    status: text("status").$type<"success" | "error">().notNull(),
+    valueType:
+      text("value_type").$type<Exclude<LaneTransformValueType, null>>(),
     textValue: text("text_value"),
     assetIds: jsonb("asset_ids").$type<string[]>().default([]).notNull(),
-    inputHash: text("input_hash").notNull(),
-    idempotencyKey: text("idempotency_key").notNull(),
+    inputHash: text("input_hash"),
+    idempotencyKey: text("idempotency_key"),
     model: text("model"),
     promptSnapshot: text("prompt_snapshot"),
+    error: text("error"),
+    failedAt: timestamp("failed_at"),
     createdAt: timestamp("created_at")
+      .$defaultFn(() => /* @__PURE__ */ new Date())
+      .notNull(),
+    updatedAt: timestamp("updated_at")
       .$defaultFn(() => /* @__PURE__ */ new Date())
       .notNull(),
   },
   (table) => ({
     laneAttemptUnique: uniqueIndex(
-      "workflow_node_lane_outputs_lane_attempt_unique",
+      "workflow_lane_results_lane_attempt_unique",
     ).on(table.runId, table.nodeId, table.laneIndex, table.attempt),
     idempotencyKeyUnique: uniqueIndex(
-      "workflow_node_lane_outputs_idempotency_key_unique",
+      "workflow_lane_results_idempotency_key_unique",
     ).on(table.idempotencyKey),
-    projectRunIdx: index("workflow_node_lane_outputs_project_run_idx").on(
+    projectRunIdx: index("workflow_lane_results_project_run_idx").on(
       table.projectId,
       table.runId,
     ),
-    runNodeIdx: index("workflow_node_lane_outputs_run_node_idx").on(
+    runNodeIdx: index("workflow_lane_results_run_node_idx").on(
       table.runId,
       table.nodeId,
     ),
-    runNodeLaneIdx: index("workflow_node_lane_outputs_run_node_lane_idx").on(
+    runNodeLaneIdx: index("workflow_lane_results_run_node_lane_idx").on(
       table.runId,
       table.nodeId,
       table.laneIndex,
@@ -440,7 +445,7 @@ export const workflowProjectsRelations = relations(
   workflowProjects,
   ({ many, one }) => ({
     assets: many(assets),
-    nodeLaneOutputs: many(workflowNodeLaneOutputs),
+    laneResults: many(workflowLaneResults),
     reviewLanes: many(workflowReviewLanes),
     runs: many(workflowRuns),
     owner: one(user, {
@@ -472,15 +477,15 @@ export const assetsRelations = relations(assets, ({ one }) => ({
   }),
 }));
 
-export const workflowNodeLaneOutputsRelations = relations(
-  workflowNodeLaneOutputs,
+export const workflowLaneResultsRelations = relations(
+  workflowLaneResults,
   ({ one }) => ({
     owner: one(user, {
-      fields: [workflowNodeLaneOutputs.ownerUserId],
+      fields: [workflowLaneResults.ownerUserId],
       references: [user.id],
     }),
     project: one(workflowProjects, {
-      fields: [workflowNodeLaneOutputs.projectId],
+      fields: [workflowLaneResults.projectId],
       references: [workflowProjects.id],
     }),
   }),

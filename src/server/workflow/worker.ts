@@ -3,11 +3,7 @@ import { Effect } from "effect";
 import { ServerRuntime } from "~/effect/server/runtime";
 import { getErrorMessage } from "~/lib/workflow/errors";
 import { WorkflowExecutionService } from "~/server/workflow/execution-service";
-import {
-  createWorkflowExecutionQueueEvents,
-  createWorkflowExecutionWorker,
-  getWorkflowExecutionJob,
-} from "~/server/workflow/queue";
+import { createWorkflowExecutionWorker } from "~/server/workflow/queue";
 
 async function failWorkflowRun(params: {
   message: string;
@@ -18,6 +14,21 @@ async function failWorkflowRun(params: {
     Effect.gen(function* () {
       const workflowExecutionService = yield* WorkflowExecutionService;
       yield* workflowExecutionService.failRun(params);
+    }),
+  );
+}
+
+async function settleFailedExecutionLane(params: {
+  laneIndex: number;
+  message: string;
+  nodeId: string;
+  runId: string;
+  userId: string;
+}) {
+  await ServerRuntime.runPromise(
+    Effect.gen(function* () {
+      const workflowExecutionService = yield* WorkflowExecutionService;
+      yield* workflowExecutionService.settleFailedExecutionLane(params);
     }),
   );
 }
@@ -47,23 +58,12 @@ async function main() {
     );
   });
 
-  const queueEvents = createWorkflowExecutionQueueEvents();
-
-  queueEvents.on("error", (error) => {
-    console.error("Workflow queue events error", error);
-  });
-
-  queueEvents.on("failed", async ({ failedReason, jobId }) => {
-    if (!jobId) {
+  worker.on("failed", async (job, error) => {
+    console.error(`Workflow job ${job?.id ?? "unknown"} failed`, error);
+    if (!job) {
       return;
     }
-
     try {
-      const job = await getWorkflowExecutionJob(jobId);
-      if (!job) {
-        return;
-      }
-
       const maxAttempts = job.opts.attempts ?? 1;
       if (job.attemptsMade < maxAttempts) {
         return;
@@ -73,11 +73,22 @@ async function main() {
         job.data.type === "execute-run" &&
         job.data.request.executionLaneFilter
       ) {
+        const nodeId = job.data.request.selection?.nodeIds?.[0];
+        if (nodeId) {
+          await settleFailedExecutionLane({
+            laneIndex: job.data.request.executionLaneFilter.laneIndex,
+            message:
+              getErrorMessage(error) || "Workflow execution lane failed.",
+            nodeId,
+            runId: job.data.runId,
+            userId: job.data.userId,
+          });
+        }
         return;
       }
 
       await failWorkflowRun({
-        message: failedReason || "Workflow execution job failed.",
+        message: getErrorMessage(error) || "Workflow execution job failed.",
         runId: job.data.runId,
         userId: job.data.userId,
       });
@@ -94,11 +105,7 @@ async function main() {
     console.error("Workflow worker error", error);
   });
 
-  worker.on("failed", (job, error) => {
-    console.error(`Workflow job ${job?.id ?? "unknown"} failed`, error);
-  });
-
-  await Promise.all([worker.waitUntilReady(), queueEvents.waitUntilReady()]);
+  await worker.waitUntilReady();
   console.info("Workflow worker ready.");
 
   let shuttingDown = false;
@@ -111,11 +118,7 @@ async function main() {
     shuttingDown = true;
     console.info(`Shutting down workflow worker (${signal}).`);
 
-    await Promise.allSettled([
-      worker.close(),
-      queueEvents.close(),
-      ServerRuntime.dispose(),
-    ]);
+    await Promise.allSettled([worker.close(), ServerRuntime.dispose()]);
   };
 
   process.once("SIGINT", () => {
