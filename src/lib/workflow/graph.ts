@@ -1020,28 +1020,32 @@ export function getWorkflowGeneratorRawOutputRuntimeValue(
 ): RuntimeValue | null {
   switch (node.kind) {
     case "imageGenerator": {
-      return node.outputLanes.some((lane) => lane.length)
+      const lanes = node.outputLanes.map((lane) => lane ?? []);
+      return lanes.some((lane) => lane.length)
         ? {
             type: "image",
-            lanes: node.outputLanes,
+            lanes,
           }
         : null;
     }
     case "videoGenerator": {
-      return node.outputLanes.some((lane) => lane.length)
+      const lanes = node.outputLanes.map((lane) => lane ?? []);
+      return lanes.some((lane) => lane.length)
         ? {
             type: "video",
-            lanes: node.outputLanes,
+            lanes,
           }
         : null;
     }
-    case "llmGenerator":
-      return node.outputLanes.some((lane) => lane.trim())
+    case "llmGenerator": {
+      const lanes = node.outputLanes.map((lane) => lane ?? "");
+      return lanes.some((lane) => lane.trim())
         ? {
             type: "text",
-            lanes: node.outputLanes,
+            lanes,
           }
         : null;
+    }
     default:
       return null;
   }

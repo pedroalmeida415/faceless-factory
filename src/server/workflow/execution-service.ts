@@ -4,6 +4,7 @@ import { Context, Effect, Layer } from "effect";
 import {
   hydrateWorkflowGraphDocument,
   updateWorkflowDocumentNode,
+  type WorkflowDocument,
 } from "~/lib/workflow/document";
 import {
   getErrorMessage,
@@ -274,6 +275,62 @@ export class WorkflowExecutionService extends Context.Tag(
           return false;
         });
 
+      const canDecideReviewLane = (run: WorkflowExecutionStatusResponse) =>
+        run.status === "running" || run.status === "waiting_for_review";
+
+      const getExpectedReviewLaneCount = (
+        run: WorkflowExecutionStatusResponse,
+        reviewNodeId: string,
+        artifacts: WorkflowRunArtifacts,
+      ) => {
+        const reviewNode = run.document.nodes.find(
+          (node) => node.id === reviewNodeId,
+        );
+        const plannedLaneCount =
+          buildWorkflowExecutionPlan(
+            run.document,
+            run.targetNodeIds,
+          ).generatorIterationById.get(reviewNodeId)?.iterations ?? 0;
+        const artifactLaneCount = artifacts.reviewLanes
+          .filter((lane) => lane.nodeId === reviewNodeId)
+          .reduce((count, lane) => Math.max(count, lane.laneIndex + 1), 0);
+        const projectedLaneCount =
+          reviewNode &&
+          (reviewNode.kind === "imageGenerator" ||
+            reviewNode.kind === "videoGenerator" ||
+            reviewNode.kind === "llmGenerator")
+            ? Math.max(
+                reviewNode.outputLanes.length,
+                reviewNode.review.lanes.length,
+              )
+            : 0;
+
+        return Math.max(
+          plannedLaneCount,
+          artifactLaneCount,
+          projectedLaneCount,
+        );
+      };
+
+      const getLatestReviewLaneArtifact = (
+        artifacts: WorkflowRunArtifacts,
+        params: { laneIndex: number; reviewNodeId: string },
+      ) => {
+        let latest: WorkflowRunArtifacts["reviewLanes"][number] | null = null;
+        for (const lane of artifacts.reviewLanes) {
+          if (
+            lane.nodeId !== params.reviewNodeId ||
+            lane.laneIndex !== params.laneIndex
+          ) {
+            continue;
+          }
+          if (!latest || latest.attempt < lane.attempt) {
+            latest = lane;
+          }
+        }
+        return latest;
+      };
+
       const hasApprovedReviewLanes = (
         run: WorkflowExecutionStatusResponse,
         reviewNodeId: string,
@@ -299,10 +356,16 @@ export class WorkflowExecutionService extends Context.Tag(
                   latestByLane.set(lane.laneIndex, lane);
                 }
               }
-              const latest = Array.from(latestByLane.values());
+              const expectedLaneCount = getExpectedReviewLaneCount(
+                run,
+                reviewNodeId,
+                artifacts,
+              );
               return (
-                latest.length > 0 &&
-                latest.every((lane) => lane.status === "approved")
+                expectedLaneCount > 0 &&
+                Array.from({ length: expectedLaneCount }, (_, laneIndex) =>
+                  latestByLane.get(laneIndex),
+                ).every((lane) => lane?.status === "approved")
               );
             }),
           );
@@ -315,10 +378,10 @@ export class WorkflowExecutionService extends Context.Tag(
         run: WorkflowExecutionStatusResponse;
       }) =>
         Effect.gen(function* () {
-          if (params.run.status !== "waiting_for_review") {
+          if (!canDecideReviewLane(params.run)) {
             return yield* Effect.fail(
               new WorkflowValidationError({
-                message: "Workflow run is not waiting for human review.",
+                message: "Workflow run has no active human review.",
               }),
             );
           }
@@ -498,7 +561,11 @@ export class WorkflowExecutionService extends Context.Tag(
       }) => ({
         ...params.state,
         accruedCostCredits: params.accruedCostCredits,
-        document: params.state.document,
+        document: mergeLaneScopedDocument({
+          currentDocument: params.currentRun.document,
+          laneIndex: params.laneIndex,
+          stateDocument: params.state.document,
+        }),
         projectDocumentRevision:
           params.currentRun.projectDocumentRevision ??
           params.state.projectDocumentRevision,
@@ -513,6 +580,130 @@ export class WorkflowExecutionService extends Context.Tag(
           : null,
         targetNodeIds: params.currentRun.targetNodeIds,
       });
+
+      const mergeLaneScopedDocument = (params: {
+        currentDocument: WorkflowDocument;
+        laneIndex: number;
+        stateDocument: WorkflowDocument;
+      }) => {
+        const stateNodeById = new Map(
+          params.stateDocument.nodes.map((node) => [node.id, node]),
+        );
+
+        return {
+          ...params.currentDocument,
+          nodes: params.currentDocument.nodes.map((currentNode) => {
+            const stateNode = stateNodeById.get(currentNode.id);
+            if (!stateNode || currentNode.kind !== stateNode.kind) {
+              return currentNode;
+            }
+
+            if (
+              currentNode.kind === "imageGenerator" &&
+              stateNode.kind === "imageGenerator"
+            ) {
+              return {
+                ...stateNode,
+                outputLanes: mergeLaneValue(
+                  currentNode.outputLanes,
+                  stateNode.outputLanes,
+                  params.laneIndex,
+                ),
+                review: mergeReviewLane(
+                  currentNode.review,
+                  stateNode.review,
+                  params.laneIndex,
+                ),
+              };
+            }
+
+            if (
+              currentNode.kind === "videoGenerator" &&
+              stateNode.kind === "videoGenerator"
+            ) {
+              return {
+                ...stateNode,
+                outputLanes: mergeLaneValue(
+                  currentNode.outputLanes,
+                  stateNode.outputLanes,
+                  params.laneIndex,
+                ),
+                review: mergeReviewLane(
+                  currentNode.review,
+                  stateNode.review,
+                  params.laneIndex,
+                ),
+              };
+            }
+
+            if (
+              currentNode.kind === "llmGenerator" &&
+              stateNode.kind === "llmGenerator"
+            ) {
+              return {
+                ...stateNode,
+                outputLanes: mergeLaneValue(
+                  currentNode.outputLanes,
+                  stateNode.outputLanes,
+                  params.laneIndex,
+                ),
+                review: mergeReviewLane(
+                  currentNode.review,
+                  stateNode.review,
+                  params.laneIndex,
+                ),
+              };
+            }
+
+            return stateNode;
+          }),
+        } satisfies WorkflowDocument;
+      };
+
+      const mergeLaneValue = <Value>(
+        currentValues: readonly Value[],
+        stateValues: readonly Value[],
+        laneIndex: number,
+      ) => {
+        if (!Object.hasOwn(stateValues, laneIndex)) {
+          return [...currentValues];
+        }
+
+        const values = [...currentValues];
+        values[laneIndex] = stateValues[laneIndex] as Value;
+        return values;
+      };
+
+      const mergeReviewLane = <
+        Review extends WorkflowDocument["nodes"][number],
+      >(
+        currentReview: Extract<Review, { review: unknown }>["review"],
+        stateReview: Extract<Review, { review: unknown }>["review"],
+        laneIndex: number,
+      ) => {
+        const stateLane = stateReview.lanes.find(
+          (lane) => lane.laneIndex === laneIndex,
+        );
+        if (!stateLane) {
+          return currentReview;
+        }
+
+        const lanes = currentReview.lanes.some(
+          (lane) => lane.laneIndex === laneIndex,
+        )
+          ? currentReview.lanes.map((lane) =>
+              lane.laneIndex === laneIndex ? stateLane : lane,
+            )
+          : [...currentReview.lanes, stateLane];
+
+        return {
+          ...currentReview,
+          sourceNodeId: stateReview.sourceNodeId,
+          updatedAt: stateReview.updatedAt ?? currentReview.updatedAt,
+          valueType: stateReview.valueType,
+          lanes: lanes.sort((left, right) => left.laneIndex - right.laneIndex),
+        };
+      };
 
       const hydrateRunDocumentFromProject = (
         run: WorkflowExecutionStatusResponse,
@@ -714,7 +905,10 @@ export class WorkflowExecutionService extends Context.Tag(
                       },
                     },
                   },
-                  status: "waiting_for_review" as const,
+                  status:
+                    currentRun.status === "running"
+                      ? ("running" as const)
+                      : ("waiting_for_review" as const),
                 } satisfies WorkflowExecutionStatusResponse;
                 const documentRevision = yield* persistRunArtifacts(
                   nextRunBase,
@@ -1071,7 +1265,10 @@ export class WorkflowExecutionService extends Context.Tag(
                       ...currentRun.runtime,
                       activity: `Regenerating lane ${params.laneIndex + 1} for review...`,
                     },
-                    status: "waiting_for_review" as const,
+                    status:
+                      currentRun.status === "running"
+                        ? ("running" as const)
+                        : ("waiting_for_review" as const),
                   },
                 };
               }),
@@ -1135,6 +1332,27 @@ export class WorkflowExecutionService extends Context.Tag(
             runId: params.runId,
             userId: params.userId,
           });
+          const regenerationArtifacts =
+            yield* workflowArtifactStore.getRunArtifacts({
+              ownerUserId: params.userId,
+              runId: params.runId,
+            });
+          const latestRegenerationLane = getLatestReviewLaneArtifact(
+            regenerationArtifacts,
+            {
+              laneIndex: params.laneIndex,
+              reviewNodeId: params.reviewNodeId,
+            },
+          );
+          if (
+            !latestRegenerationLane ||
+            latestRegenerationLane.attempt >= params.attempt ||
+            latestRegenerationLane.attempt !== params.attempt - 1 ||
+            latestRegenerationLane.status !== "regenerating"
+          ) {
+            return regeneratingRun;
+          }
+
           const regenerationDocument = yield* hydrateRunDocumentFromProject(
             regeneratingRun,
             params.userId,
@@ -1245,25 +1463,23 @@ export class WorkflowExecutionService extends Context.Tag(
               userId: params.userId,
               update: (currentRun) =>
                 Effect.gen(function* () {
-                  const reviewNode = currentRun.document.nodes.find(
-                    (node) => node.id === params.reviewNodeId,
+                  const currentArtifacts =
+                    yield* workflowArtifactStore.getRunArtifacts({
+                      ownerUserId: params.userId,
+                      runId: params.runId,
+                    });
+                  const latestLane = getLatestReviewLaneArtifact(
+                    currentArtifacts,
+                    {
+                      laneIndex: params.laneIndex,
+                      reviewNodeId: params.reviewNodeId,
+                    },
                   );
-                  const lane =
-                    reviewNode &&
-                    (reviewNode.kind === "imageGenerator" ||
-                      reviewNode.kind === "videoGenerator" ||
-                      reviewNode.kind === "llmGenerator")
-                      ? reviewNode.review.lanes.find(
-                          (candidate) =>
-                            candidate.laneIndex === params.laneIndex,
-                        )
-                      : null;
-                  if (lane?.status !== "regenerating") {
-                    return yield* Effect.fail(
-                      new WorkflowValidationError({
-                        message: `Review lane ${params.laneIndex + 1} is no longer regenerating.`,
-                      }),
-                    );
+                  if (latestLane?.attempt !== params.attempt - 1) {
+                    return { result: null, run: currentRun };
+                  }
+                  if (latestLane.status !== "regenerating") {
+                    return { result: null, run: currentRun };
                   }
 
                   const nextAccruedCostCredits =
@@ -1278,12 +1494,19 @@ export class WorkflowExecutionService extends Context.Tag(
                     ...currentRun,
                     accruedCostCredits: nextAccruedCostCredits,
                     credits,
-                    document: result.document,
+                    document: mergeLaneScopedDocument({
+                      currentDocument: currentRun.document,
+                      laneIndex: params.laneIndex,
+                      stateDocument: result.document,
+                    }),
                     runtime: {
                       ...currentRun.runtime,
                       activity: `Lane ${params.laneIndex + 1} regenerated. Review it again.`,
                     },
-                    status: "waiting_for_review" as const,
+                    status:
+                      currentRun.status === "running"
+                        ? ("running" as const)
+                        : ("waiting_for_review" as const),
                   } satisfies WorkflowExecutionStatusResponse;
                   const documentRevision = yield* persistRunArtifacts(
                     nextRunBase,
@@ -1808,6 +2031,78 @@ export class WorkflowExecutionService extends Context.Tag(
                     .pipe(Effect.map(({ run }) => run));
                 }
 
+                const reviewLaneFilter = request.reviewLaneFilter;
+                if (state.status === "success" && reviewLaneFilter) {
+                  return yield* workflowRunStore
+                    .updateRunWith({
+                      runId,
+                      userId,
+                      update: (currentRun) =>
+                        Effect.gen(function* () {
+                          if (
+                            currentRun.status !== "queued" &&
+                            !canDecideReviewLane(currentRun)
+                          ) {
+                            return { result: null, run: currentRun };
+                          }
+
+                          const nextState = yield* Effect.try({
+                            try: () =>
+                              mergeLaneScopedExecutionState({
+                                accruedCostCredits:
+                                  currentRun.accruedCostCredits +
+                                  getFilteredContinuationCostDelta(
+                                    state,
+                                    request,
+                                  ),
+                                currentRun,
+                                laneIndex: reviewLaneFilter.laneIndex,
+                                state,
+                              }),
+                            catch: toPersistenceError,
+                          });
+                          const documentRevision = yield* persistRunArtifacts(
+                            nextState,
+                            userId,
+                            reviewLaneFilter.laneIndex,
+                          );
+                          const credits =
+                            yield* workflowCreditsService.getRunSummary({
+                              runId,
+                              userId,
+                            });
+                          const status =
+                            currentRun.status === "queued"
+                              ? ("queued" as const)
+                              : currentRun.status === "running"
+                                ? ("running" as const)
+                                : ("waiting_for_review" as const);
+
+                          return {
+                            result: null,
+                            run: {
+                              ...withProjectDocumentRevision(
+                                nextState,
+                                documentRevision,
+                              ),
+                              credits,
+                              finalCostCredits: null,
+                              runtime: {
+                                ...nextState.runtime,
+                                activity:
+                                  status === "queued"
+                                    ? currentRun.runtime.activity
+                                    : nextState.runtime.activity,
+                                finishedAt: null,
+                              },
+                              status,
+                            },
+                          };
+                        }),
+                    })
+                    .pipe(Effect.map(({ run }) => run));
+                }
+
                 if (state.status === "success") {
                   const credits = yield* settleRunCost({
                     reason: "Workflow execution settled.",
@@ -1921,7 +2216,6 @@ export class WorkflowExecutionService extends Context.Tag(
                       .pipe(Effect.map(({ run }) => run));
                   }
 
-                  const reviewLaneFilter = request.reviewLaneFilter;
                   if (reviewLaneFilter) {
                     return yield* workflowRunStore
                       .updateRunWith({
@@ -1929,7 +2223,7 @@ export class WorkflowExecutionService extends Context.Tag(
                         userId,
                         update: (currentRun) =>
                           Effect.gen(function* () {
-                            if (currentRun.status !== "waiting_for_review") {
+                            if (!canDecideReviewLane(currentRun)) {
                               return {
                                 result: null,
                                 run: currentRun,
@@ -1971,6 +2265,10 @@ export class WorkflowExecutionService extends Context.Tag(
                                   documentRevision,
                                 ),
                                 credits,
+                                status:
+                                  currentRun.status === "running"
+                                    ? ("running" as const)
+                                    : ("waiting_for_review" as const),
                               },
                             };
                           }),

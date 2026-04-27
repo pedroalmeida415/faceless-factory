@@ -396,8 +396,11 @@ function mergeExecutionTargetResults(
         return {
           ...node,
           lastPrompt: projectedNode.lastPrompt,
-          outputLanes: projectedNode.outputLanes,
-          review: projectedNode.review,
+          outputLanes: mergeMediaExecutionLanes({
+            currentLanes: node.outputLanes,
+            projectedLanes: projectedNode.outputLanes,
+          }),
+          review: mergeExecutionReview(node.review, projectedNode.review),
         };
       }
 
@@ -408,8 +411,11 @@ function mergeExecutionTargetResults(
         return {
           ...node,
           lastPrompt: projectedNode.lastPrompt,
-          outputLanes: projectedNode.outputLanes,
-          review: projectedNode.review,
+          outputLanes: mergeMediaExecutionLanes({
+            currentLanes: node.outputLanes,
+            projectedLanes: projectedNode.outputLanes,
+          }),
+          review: mergeExecutionReview(node.review, projectedNode.review),
         };
       }
 
@@ -421,14 +427,124 @@ function mergeExecutionTargetResults(
           ...node,
           lastPrompt: projectedNode.lastPrompt,
           lastSystemPrompt: projectedNode.lastSystemPrompt,
-          outputLanes: projectedNode.outputLanes,
-          review: projectedNode.review,
+          outputLanes: mergeTextExecutionLanes({
+            currentLanes: node.outputLanes,
+            projectedLanes: projectedNode.outputLanes,
+          }),
+          review: mergeExecutionReview(node.review, projectedNode.review),
         };
       }
 
       return node;
     }),
   } satisfies WorkflowDocument;
+}
+
+function mergeMediaExecutionLanes(params: {
+  currentLanes: readonly WorkflowAsset[][];
+  projectedLanes: readonly WorkflowAsset[][];
+}) {
+  const laneCount = Math.max(
+    params.currentLanes.length,
+    params.projectedLanes.length,
+  );
+  const lanes = Array.from(
+    { length: laneCount },
+    (_, laneIndex) => params.currentLanes[laneIndex] ?? [],
+  );
+  for (
+    let laneIndex = 0;
+    laneIndex < params.projectedLanes.length;
+    laneIndex += 1
+  ) {
+    const projectedLane = params.projectedLanes[laneIndex];
+    if (projectedLane?.length) {
+      lanes[laneIndex] = projectedLane;
+    }
+  }
+  return lanes;
+}
+
+function mergeTextExecutionLanes(params: {
+  currentLanes: readonly string[];
+  projectedLanes: readonly string[];
+}) {
+  const laneCount = Math.max(
+    params.currentLanes.length,
+    params.projectedLanes.length,
+  );
+  const lanes = Array.from(
+    { length: laneCount },
+    (_, laneIndex) => params.currentLanes[laneIndex] ?? "",
+  );
+  for (
+    let laneIndex = 0;
+    laneIndex < params.projectedLanes.length;
+    laneIndex += 1
+  ) {
+    const projectedLane = params.projectedLanes[laneIndex];
+    if (projectedLane?.trim()) {
+      lanes[laneIndex] = projectedLane;
+    }
+  }
+  return lanes;
+}
+
+type ReviewState = WorkflowDocument["nodes"][number] extends infer Node
+  ? Node extends { review: infer Review }
+    ? Review
+    : never
+  : never;
+
+function mergeExecutionReview(
+  currentReview: ReviewState,
+  projectedReview: ReviewState,
+) {
+  if (!projectedReview.lanes.length) {
+    return currentReview;
+  }
+
+  const currentLaneByIndex = new Map(
+    currentReview.lanes.map((lane) => [lane.laneIndex, lane]),
+  );
+  const projectedLaneByIndex = new Map(
+    projectedReview.lanes.map((lane) => [lane.laneIndex, lane]),
+  );
+  const laneIndexes = new Set([
+    ...currentLaneByIndex.keys(),
+    ...projectedLaneByIndex.keys(),
+  ]);
+
+  return {
+    ...currentReview,
+    sourceNodeId: projectedReview.sourceNodeId,
+    updatedAt: projectedReview.updatedAt ?? currentReview.updatedAt,
+    valueType: projectedReview.valueType,
+    lanes: Array.from(laneIndexes)
+      .sort((left, right) => left - right)
+      .flatMap((laneIndex) => {
+        const currentLane = currentLaneByIndex.get(laneIndex);
+        const projectedLane = projectedLaneByIndex.get(laneIndex);
+        if (!projectedLane) {
+          return currentLane ? [currentLane] : [];
+        }
+        if (!currentLane) {
+          return [projectedLane];
+        }
+        return [
+          {
+            ...projectedLane,
+            assets: projectedLane.assets.length
+              ? projectedLane.assets
+              : currentLane.assets,
+            text:
+              projectedLane.text && projectedLane.text.trim().length > 0
+                ? projectedLane.text
+                : currentLane.text,
+          },
+        ];
+      }),
+  };
 }
 
 function mergeExecutionRuntimeState(

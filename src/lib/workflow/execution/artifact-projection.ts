@@ -170,9 +170,7 @@ export function buildWorkflowApprovedRunProjection(params: {
             `${output.nodeId}:${output.laneIndex}:${output.attempt}`,
           ),
       ),
-      reviewLanes: latestReviewLanes.filter(
-        (lane) => lane.status === "approved",
-      ),
+      reviewLanes: latestReviewLanes,
     },
     document: params.document,
   });

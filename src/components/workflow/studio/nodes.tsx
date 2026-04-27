@@ -1018,12 +1018,14 @@ function GeneratorReviewPanel({
   );
   const setActivity = useWorkflowStudioStore((state) => state.setActivity);
   const node = document.nodes.find((candidate) => candidate.id === nodeId);
-  const laneCount =
+  const outputLaneCount =
     node && (node.kind === "imageGenerator" || node.kind === "videoGenerator")
       ? node.outputLanes.length
       : node?.kind === "llmGenerator"
         ? node.outputLanes.length
         : null;
+  const laneCount =
+    outputLaneCount && outputLaneCount > 0 ? outputLaneCount : null;
   const reviewLanes = review.lanes;
 
   const decideLane = useCallback(
