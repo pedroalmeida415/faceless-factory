@@ -5,8 +5,6 @@ export const LANE_REORDER_INPUT_HANDLE_ID = "input";
 export const LANE_REORDER_OUTPUT_HANDLE_ID = "output";
 export const LANE_TRANSFORM_INPUT_HANDLE_ID = "input";
 export const LANE_TRANSFORM_OUTPUT_HANDLE_ID = "output";
-export const LANE_ACCUMULATOR_INPUT_HANDLE_ID = "input";
-export const LANE_ACCUMULATOR_OUTPUT_HANDLE_ID = "output";
 export const getLaneSplitOutputHandleId = (index: number) => `lane-${index}`;
 export const PROMPT_VARIABLE_PATTERN =
   /\{\{([a-zA-Z][a-zA-Z0-9]*)(?::[^}]*)?\}\}/g;
@@ -40,8 +38,6 @@ export function formatNodeTitle(kind: WorkflowNodeKind) {
       return "Lane Merge";
     case "laneZipAlign":
       return "Lane Zip";
-    case "laneAccumulator":
-      return "Lane Accumulator";
     case "imageGenerator":
       return "Image Gen";
     case "videoGenerator":
@@ -65,8 +61,6 @@ export function getNodeOutputHandleId(kind: WorkflowNodeKind) {
     case "laneMerge":
     case "laneZipAlign":
       return LANE_TRANSFORM_OUTPUT_HANDLE_ID;
-    case "laneAccumulator":
-      return LANE_ACCUMULATOR_OUTPUT_HANDLE_ID;
     case "laneSplit":
       return getLaneSplitOutputHandleId(0);
     case "imageGenerator":

@@ -6,7 +6,6 @@ import {
   buildOutgoingBySource,
   getGeneratorInputHandles,
   getIncomingEdgesForHandle,
-  getLaneAccumulatorInputValue,
   getLaneReorderInputValue,
   getLaneTransformInputValue,
   isValidWorkflowEdge,
@@ -18,7 +17,6 @@ import {
   getLaneSplitValidationMessage,
 } from "~/lib/workflow/lanes";
 import {
-  LANE_ACCUMULATOR_INPUT_HANDLE_ID,
   LANE_REORDER_INPUT_HANDLE_ID,
   LANE_TRANSFORM_INPUT_HANDLE_ID,
 } from "~/lib/workflow/node-definitions";
@@ -177,25 +175,6 @@ function validateExecutionPlanNodes(
           failValidation(`${node.label} needs at least one input.`);
         }
         break;
-      case "laneAccumulator": {
-        if (
-          getIncomingEdgesForHandle(
-            incomingByTarget,
-            node.id,
-            LANE_ACCUMULATOR_INPUT_HANDLE_ID,
-          ).length !== 1
-        ) {
-          failValidation("Lane Accumulator needs exactly one input.");
-        }
-
-        const inputValue = getLaneAccumulatorInputValue(document, node.id);
-        if (inputValue && inputValue.type !== node.valueType) {
-          failValidation(
-            "Lane Accumulator input type does not match its lane type.",
-          );
-        }
-        break;
-      }
       case "imageGenerator":
       case "videoGenerator":
       case "llmGenerator": {

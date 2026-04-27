@@ -17,12 +17,18 @@ import {
 import {
   buildWorkflowApprovedRunProjection,
   buildWorkflowRunProjection,
+  getWorkflowVisibleCompletionOutputs,
 } from "~/lib/workflow/execution/artifact-projection";
 import {
   estimateGeneratorReviewLaneRegenerationCreditCost,
   executeWorkflow,
   regenerateGeneratorReviewLane,
 } from "~/lib/workflow/execution/core";
+import {
+  buildWorkflowLaneDependencyPlan,
+  getReadyWorkflowLaneJobs,
+  getWorkflowLaneKey,
+} from "~/lib/workflow/execution/lane-dependencies";
 import {
   buildWorkflowExecutionStatusResponse,
   createWorkflowExecutionRuntimeState,
@@ -39,6 +45,7 @@ import type {
   WorkflowExecutionStatusResponse,
   WorkflowRunArtifacts,
 } from "~/lib/workflow/execution/types";
+import { WorkflowLaneDependencyMissing } from "~/lib/workflow/execution/types";
 import { estimateWorkflowExecution } from "~/lib/workflow/pricing";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 import {
@@ -51,11 +58,11 @@ import {
   saveWorkflowProjectExecutionResults,
 } from "~/server/workflow/projects";
 import {
-  createWorkflowContinuationJobId,
   createWorkflowExecutionLaneJobId,
   createWorkflowReviewRegenerationJobId,
   enqueueWorkflowExecutionJob,
   enqueueWorkflowReviewRegenerationJob,
+  getWorkflowExecutionQueue,
 } from "~/server/workflow/queue";
 import { WorkflowRunStore } from "~/server/workflow/run-store";
 import { VertexAi } from "~/server/workflow/vertex";
@@ -222,9 +229,182 @@ export class WorkflowExecutionService extends Context.Tag(
         );
       };
 
-      const hasLaneAccumulator = (
-        document: StartWorkflowExecutionRequest["document"],
-      ) => document.nodes.some((node) => node.kind === "laneAccumulator");
+      const getCompletedLaneKeys = (artifacts: WorkflowRunArtifacts) =>
+        new Set(
+          getWorkflowVisibleCompletionOutputs(artifacts).map((output) =>
+            getWorkflowLaneKey({
+              laneIndex: output.laneIndex,
+              nodeId: output.nodeId,
+            }),
+          ),
+        );
+
+      const getMaterializedLaneKeys = (artifacts: WorkflowRunArtifacts) =>
+        new Set(
+          artifacts.outputs.map((output) =>
+            getWorkflowLaneKey({
+              laneIndex: output.laneIndex,
+              nodeId: output.nodeId,
+            }),
+          ),
+        );
+
+      const getBlockedLaneKeys = (params: {
+        artifacts: WorkflowRunArtifacts;
+        runId: string;
+      }) =>
+        Effect.tryPromise({
+          try: async () => {
+            const completedLanes = getCompletedLaneKeys(params.artifacts);
+            const blockedLanes = new Set(
+              Array.from(getMaterializedLaneKeys(params.artifacts)).filter(
+                (key) => !completedLanes.has(key),
+              ),
+            );
+
+            const queue = getWorkflowExecutionQueue();
+            const jobs = await queue.getJobs([
+              "active",
+              "delayed",
+              "prioritized",
+              "waiting",
+              "waiting-children",
+            ]);
+            for (const job of jobs) {
+              const data = job.data;
+              const laneFilter =
+                data.type === "execute-run"
+                  ? data.request.executionLaneFilter
+                  : null;
+              const nodeId =
+                data.type === "execute-run"
+                  ? data.request.selection?.nodeIds?.[0]
+                  : null;
+              if (data.runId === params.runId && laneFilter && nodeId) {
+                blockedLanes.add(
+                  getWorkflowLaneKey({
+                    laneIndex: laneFilter.laneIndex,
+                    nodeId,
+                  }),
+                );
+              }
+            }
+
+            return blockedLanes;
+          },
+          catch: toPersistenceError,
+        });
+
+      const getReadyLaneJobs = (params: {
+        artifacts: WorkflowRunArtifacts;
+        blockedLanes?: ReadonlySet<string>;
+        document: StartWorkflowExecutionRequest["document"];
+        targetNodeIds: string[];
+      }) => {
+        const plan = buildWorkflowExecutionPlan(
+          params.document,
+          params.targetNodeIds,
+        );
+        return getReadyWorkflowLaneJobs({
+          blockedLanes: params.blockedLanes,
+          completedLanes: getCompletedLaneKeys(params.artifacts),
+          plan: buildWorkflowLaneDependencyPlan({
+            document: params.document,
+            generatorIterationById: plan.generatorIterationById,
+            targetNodeIds: params.targetNodeIds,
+          }),
+        });
+      };
+
+      const getSchedulableReadyLaneJobs = (params: {
+        artifacts: WorkflowRunArtifacts;
+        request: StartWorkflowExecutionRequest;
+        runId: string;
+        targetNodeIds: string[];
+      }) =>
+        Effect.gen(function* () {
+          const blockedLanes = yield* getBlockedLaneKeys({
+            artifacts: params.artifacts,
+            runId: params.runId,
+          });
+          const readyJobs = getReadyLaneJobs({
+            artifacts: params.artifacts,
+            blockedLanes,
+            document: params.request.document,
+            targetNodeIds: params.targetNodeIds,
+          });
+
+          return readyJobs;
+        });
+
+      const enqueueLaneJobs = (params: {
+        jobs: ReturnType<typeof getReadyWorkflowLaneJobs>;
+        laneCount: number;
+        request: StartWorkflowExecutionRequest;
+        runId: string;
+        userId: string;
+      }) =>
+        Effect.gen(function* () {
+          if (!params.jobs.length) {
+            return 0;
+          }
+
+          yield* Effect.tryPromise({
+            try: async () => {
+              // BullMQ job IDs are stable per {runId,nodeId,laneIndex}; combined
+              // with blocked active jobs, duplicate lane scheduling is bounded.
+              await Promise.all(
+                params.jobs.map((job) =>
+                  enqueueWorkflowExecutionJob(
+                    {
+                      request: {
+                        ...params.request,
+                        executionLaneFilter: {
+                          laneCount: params.laneCount,
+                          laneIndex: job.laneIndex,
+                        },
+                        selection: { nodeIds: [job.nodeId] },
+                        target: { type: "selected-or-all" as const },
+                      },
+                      runId: params.runId,
+                      type: "execute-run",
+                      userId: params.userId,
+                    },
+                    {
+                      jobId: createWorkflowExecutionLaneJobId({
+                        laneIndex: job.laneIndex,
+                        nodeId: job.nodeId,
+                        runId: params.runId,
+                      }),
+                    },
+                  ),
+                ),
+              );
+            },
+            catch: toPersistenceError,
+          });
+
+          return params.jobs.length;
+        });
+
+      const enqueueReadyLaneJobs = (params: {
+        artifacts: WorkflowRunArtifacts;
+        laneCount: number;
+        request: StartWorkflowExecutionRequest;
+        runId: string;
+        targetNodeIds: string[];
+        userId: string;
+      }) =>
+        Effect.gen(function* () {
+          const jobs = yield* getSchedulableReadyLaneJobs(params);
+          return yield* enqueueLaneJobs({
+            jobs,
+            laneCount: params.laneCount,
+            request: params.request,
+            runId: params.runId,
+            userId: params.userId,
+          });
+        });
 
       const isExecutionLaneComplete = (
         run: WorkflowExecutionStatusResponse,
@@ -791,50 +971,6 @@ export class WorkflowExecutionService extends Context.Tag(
           });
         });
 
-      const enqueueContinuation = (
-        run: WorkflowExecutionStatusResponse,
-        userId: string,
-        reviewLaneFilter?: StartWorkflowExecutionRequest["reviewLaneFilter"],
-      ) =>
-        Effect.gen(function* () {
-          if (
-            reviewLaneFilter &&
-            !hasLaneContinuationTargets(run, reviewLaneFilter.reviewNodeId)
-          ) {
-            return null;
-          }
-
-          const request = yield* buildContinuationRequest(
-            run,
-            userId,
-            reviewLaneFilter,
-          );
-
-          return yield* Effect.tryPromise({
-            try: () =>
-              enqueueWorkflowExecutionJob(
-                {
-                  request,
-                  runId: run.runId,
-                  type: "execute-run",
-                  userId,
-                },
-                {
-                  jobId: createWorkflowContinuationJobId({
-                    laneIndex: reviewLaneFilter?.laneIndex,
-                    reviewNodeId: reviewLaneFilter?.reviewNodeId,
-                    runId: run.runId,
-                  }),
-                },
-              ),
-            catch: (cause) =>
-              new WorkflowInfrastructureError({
-                message: getErrorMessage(cause),
-                cause,
-              }),
-          });
-        });
-
       const approveReviewLane = (params: {
         laneIndex: number;
         reviewNodeId: string;
@@ -983,6 +1119,44 @@ export class WorkflowExecutionService extends Context.Tag(
                 .pipe(Effect.map(({ run }) => run));
             }
 
+            const request = yield* buildContinuationRequest(
+              waitingRun,
+              params.userId,
+            );
+            const artifacts = yield* workflowArtifactStore.getRunArtifacts({
+              ownerUserId: params.userId,
+              runId: params.runId,
+            });
+            const readyJobs = yield* getSchedulableReadyLaneJobs({
+              artifacts,
+              request,
+              runId: params.runId,
+              targetNodeIds: waitingRun.targetNodeIds,
+            });
+            if (!readyJobs.length) {
+              const activity =
+                "Human review approved. Waiting for dependent lanes...";
+              return yield* workflowRunStore
+                .updateRunWith({
+                  runId: params.runId,
+                  userId: params.userId,
+                  update: (currentRun) =>
+                    Effect.succeed({
+                      result: null,
+                      run: {
+                        ...currentRun,
+                        activity,
+                        runtime: {
+                          ...currentRun.runtime,
+                          activity,
+                        },
+                        status: "running" as const,
+                      },
+                    }),
+                })
+                .pipe(Effect.map(({ run }) => run));
+            }
+
             let reservationFailureRun: WorkflowExecutionStatusResponse | null =
               null;
             const reservedCredits = yield* reserveContinuationCredits({
@@ -1015,14 +1189,18 @@ export class WorkflowExecutionService extends Context.Tag(
             if (!reservedCredits) {
               return reservationFailureRun ?? waitingRun;
             }
-            let continuationFailureRun: WorkflowExecutionStatusResponse | null =
+            let schedulingFailureRun: WorkflowExecutionStatusResponse | null =
               null;
-            const continuationQueued = yield* enqueueContinuation(
-              waitingRun,
-              params.userId,
-              null,
-            ).pipe(
-              Effect.as(true),
+            const queuedLaneCount = yield* enqueueLaneJobs({
+              jobs: readyJobs,
+              laneCount: getExecutionLaneCount(
+                request.document,
+                waitingRun.targetNodeIds,
+              ),
+              request,
+              runId: params.runId,
+              userId: params.userId,
+            }).pipe(
               Effect.catchAll((error) =>
                 Effect.gen(function* () {
                   const credits = yield* settleRunCost({
@@ -1050,15 +1228,18 @@ export class WorkflowExecutionService extends Context.Tag(
                         },
                       }),
                   });
-                  continuationFailureRun = run;
-                  return false;
+                  schedulingFailureRun = run;
+                  return -1;
                 }),
               ),
             );
-            if (!continuationQueued) {
-              return continuationFailureRun ?? waitingRun;
+            if (queuedLaneCount < 0) {
+              return schedulingFailureRun ?? waitingRun;
             }
 
+            const activity = queuedLaneCount
+              ? "Human review approved. Resuming workflow..."
+              : "Human review approved. Waiting for dependent lanes...";
             return yield* workflowRunStore
               .updateRunWith({
                 runId: params.runId,
@@ -1068,13 +1249,15 @@ export class WorkflowExecutionService extends Context.Tag(
                     result: null,
                     run: {
                       ...currentRun,
-                      activity: "Human review approved. Resuming workflow...",
+                      activity,
                       credits: reservedCredits,
                       runtime: {
                         ...currentRun.runtime,
-                        activity: "Human review approved. Resuming workflow...",
+                        activity,
                       },
-                      status: "queued" as const,
+                      status: queuedLaneCount
+                        ? ("queued" as const)
+                        : ("running" as const),
                     },
                   }),
               })
@@ -1083,6 +1266,50 @@ export class WorkflowExecutionService extends Context.Tag(
 
           if (!hasLaneContinuationTargets(waitingRun, params.reviewNodeId)) {
             return waitingRun;
+          }
+
+          const request = yield* buildContinuationRequest(
+            waitingRun,
+            params.userId,
+            {
+              laneIndex: params.laneIndex,
+              reviewNodeId: params.reviewNodeId,
+            },
+          );
+          const artifacts = yield* workflowArtifactStore.getRunArtifacts({
+            ownerUserId: params.userId,
+            runId: params.runId,
+          });
+          const readyJobs = yield* getSchedulableReadyLaneJobs({
+            artifacts,
+            request,
+            runId: params.runId,
+            targetNodeIds: waitingRun.targetNodeIds,
+          });
+          if (!readyJobs.length) {
+            const activity = `Lane ${params.laneIndex + 1} approved. Waiting for dependent lanes...`;
+            return yield* workflowRunStore
+              .updateRunWith({
+                runId: params.runId,
+                userId: params.userId,
+                update: (currentRun) =>
+                  Effect.succeed({
+                    result: null,
+                    run: {
+                      ...currentRun,
+                      activity,
+                      runtime: {
+                        ...currentRun.runtime,
+                        activity,
+                      },
+                      status:
+                        currentRun.status === "running"
+                          ? ("running" as const)
+                          : ("waiting_for_review" as const),
+                    },
+                  }),
+              })
+              .pipe(Effect.map(({ run }) => run));
           }
 
           let reservationFailureRun: WorkflowExecutionStatusResponse | null =
@@ -1122,17 +1349,18 @@ export class WorkflowExecutionService extends Context.Tag(
             return reservationFailureRun ?? waitingRun;
           }
 
-          let continuationFailureRun: WorkflowExecutionStatusResponse | null =
+          let schedulingFailureRun: WorkflowExecutionStatusResponse | null =
             null;
-          const continuationQueued = yield* enqueueContinuation(
-            waitingRun,
-            params.userId,
-            {
-              laneIndex: params.laneIndex,
-              reviewNodeId: params.reviewNodeId,
-            },
-          ).pipe(
-            Effect.as(true),
+          const queuedLaneCount = yield* enqueueLaneJobs({
+            jobs: readyJobs,
+            laneCount: getExecutionLaneCount(
+              request.document,
+              waitingRun.targetNodeIds,
+            ),
+            request,
+            runId: params.runId,
+            userId: params.userId,
+          }).pipe(
             Effect.catchAll((error) =>
               Effect.gen(function* () {
                 const credits = yield* settleRunCost({
@@ -1158,15 +1386,18 @@ export class WorkflowExecutionService extends Context.Tag(
                       },
                     }),
                 });
-                continuationFailureRun = run;
-                return false;
+                schedulingFailureRun = run;
+                return -1;
               }),
             ),
           );
-          if (!continuationQueued) {
-            return continuationFailureRun ?? waitingRun;
+          if (queuedLaneCount < 0) {
+            return schedulingFailureRun ?? waitingRun;
           }
 
+          const activity = queuedLaneCount
+            ? `Lane ${params.laneIndex + 1} approved. Queued ready workflow lanes.`
+            : `Lane ${params.laneIndex + 1} approved. Waiting for dependent lanes...`;
           return yield* workflowRunStore
             .updateRunWith({
               runId: params.runId,
@@ -1176,7 +1407,17 @@ export class WorkflowExecutionService extends Context.Tag(
                   result: null,
                   run: {
                     ...currentRun,
+                    activity,
                     credits: reservedCredits,
+                    runtime: {
+                      ...currentRun.runtime,
+                      activity,
+                    },
+                    status: queuedLaneCount
+                      ? ("queued" as const)
+                      : currentRun.status === "running"
+                        ? ("running" as const)
+                        : ("waiting_for_review" as const),
                   },
                 }),
             })
@@ -1740,44 +1981,47 @@ export class WorkflowExecutionService extends Context.Tag(
             submittedRequest.document,
             targetNodeIds,
           );
-          const shouldSplitLanes =
-            laneCount > 1 && !hasLaneAccumulator(submittedRequest.document);
+          const shouldSplitLanes = laneCount > 1;
 
           yield* Effect.tryPromise({
             try: async () => {
               if (shouldSplitLanes) {
-                await Promise.all(
-                  Array.from({ length: laneCount }, (_, laneIndex) => {
-                    const laneTargetNodeIds = targetNodeIds.filter(
-                      (nodeId) =>
-                        (executionPlan.generatorIterationById.get(nodeId)
-                          ?.iterations ?? 1) > laneIndex,
-                    );
-                    return laneTargetNodeIds.length
-                      ? enqueueWorkflowExecutionJob(
-                          {
-                            request: {
-                              ...submittedRequest,
-                              executionLaneFilter: {
-                                laneCount,
-                                laneIndex,
-                              },
-                              selection: { nodeIds: laneTargetNodeIds },
-                              target: { type: "selected-or-all" as const },
-                            },
-                            runId,
-                            type: "execute-run",
-                            userId,
-                          },
-                          {
-                            jobId: createWorkflowExecutionLaneJobId({
-                              laneIndex,
-                              runId,
-                            }),
-                          },
-                        )
-                      : Promise.resolve(null);
+                const readyJobs = getReadyWorkflowLaneJobs({
+                  completedLanes: new Set(),
+                  plan: buildWorkflowLaneDependencyPlan({
+                    document: submittedRequest.document,
+                    generatorIterationById:
+                      executionPlan.generatorIterationById,
+                    targetNodeIds: artifactNodeIds,
                   }),
+                });
+
+                await Promise.all(
+                  readyJobs.map((job) =>
+                    enqueueWorkflowExecutionJob(
+                      {
+                        request: {
+                          ...submittedRequest,
+                          executionLaneFilter: {
+                            laneCount,
+                            laneIndex: job.laneIndex,
+                          },
+                          selection: { nodeIds: [job.nodeId] },
+                          target: { type: "selected-or-all" as const },
+                        },
+                        runId,
+                        type: "execute-run",
+                        userId,
+                      },
+                      {
+                        jobId: createWorkflowExecutionLaneJobId({
+                          laneIndex: job.laneIndex,
+                          nodeId: job.nodeId,
+                          runId,
+                        }),
+                      },
+                    ),
+                  ),
                 );
                 return;
               }
@@ -1855,6 +2099,43 @@ export class WorkflowExecutionService extends Context.Tag(
                   ...query,
                   ownerUserId: userId,
                 }),
+              getNodeLaneValue: (query) =>
+                workflowArtifactStore
+                  .getRunArtifacts({ ownerUserId: userId, runId })
+                  .pipe(
+                    Effect.map((artifacts) => {
+                      const document = buildWorkflowRunProjection({
+                        artifacts,
+                        document: request.document,
+                      });
+                      const node = document.nodes.find(
+                        (candidate) => candidate.id === query.nodeId,
+                      );
+
+                      if (node?.kind === "llmGenerator") {
+                        const text = node.outputLanes[query.laneIndex]?.trim();
+                        return text ? { type: "text", lanes: [text] } : null;
+                      }
+
+                      if (
+                        node?.kind === "imageGenerator" ||
+                        node?.kind === "videoGenerator"
+                      ) {
+                        const assets = node.outputLanes[query.laneIndex] ?? [];
+                        return assets.length
+                          ? {
+                              type:
+                                node.kind === "imageGenerator"
+                                  ? "image"
+                                  : "video",
+                              lanes: [assets],
+                            }
+                          : null;
+                      }
+
+                      return null;
+                    }),
+                  ),
               onCompleted: ({ document, finalCostCredits, targetNodeIds }) =>
                 Effect.gen(function* () {
                   const run = buildWorkflowExecutionStatusResponse({
@@ -1996,6 +2277,16 @@ export class WorkflowExecutionService extends Context.Tag(
                             executionLaneFilter.laneCount,
                             artifacts,
                           );
+                          if (!isComplete) {
+                            yield* enqueueReadyLaneJobs({
+                              artifacts,
+                              laneCount: executionLaneFilter.laneCount,
+                              request,
+                              runId,
+                              targetNodeIds: currentRun.targetNodeIds,
+                              userId,
+                            });
+                          }
                           const settledRun = isComplete
                             ? {
                                 ...nextState,
@@ -2041,6 +2332,33 @@ export class WorkflowExecutionService extends Context.Tag(
                               credits,
                             },
                           };
+                        }),
+                    })
+                    .pipe(Effect.map(({ run }) => run));
+                }
+
+                if (state.status === "running" && executionLaneFilter) {
+                  return yield* workflowRunStore
+                    .updateRunWith({
+                      runId,
+                      userId,
+                      update: (currentRun) =>
+                        Effect.succeed({
+                          result: null,
+                          run:
+                            currentRun.status === "queued" ||
+                            currentRun.status === "running"
+                              ? {
+                                  ...currentRun,
+                                  runtime: {
+                                    ...currentRun.runtime,
+                                    activity: state.runtime.activity,
+                                    error: null,
+                                    finishedAt: null,
+                                  },
+                                  status: "running" as const,
+                                }
+                              : currentRun,
                         }),
                     })
                     .pipe(Effect.map(({ run }) => run));
@@ -2365,10 +2683,12 @@ export class WorkflowExecutionService extends Context.Tag(
                         }
                       : currentRun.runtime,
                   status:
-                    request.executionLaneFilter &&
-                    currentRun.status === "queued"
-                      ? "running"
-                      : currentRun.status,
+                    error instanceof WorkflowLaneDependencyMissing
+                      ? "error"
+                      : request.executionLaneFilter &&
+                          currentRun.status === "queued"
+                        ? "running"
+                        : currentRun.status,
                 });
                 return yield* Effect.fail(error);
               }),

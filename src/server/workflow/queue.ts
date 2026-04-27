@@ -18,28 +18,12 @@ function toWorkflowJobId(...parts: readonly (number | string)[]) {
   return parts.map((part) => encodeURIComponent(String(part))).join("~");
 }
 
-export function createWorkflowContinuationJobId(params: {
-  laneIndex?: number | null;
-  reviewNodeId?: string | null;
-  runId: string;
-}) {
-  return params.reviewNodeId &&
-    params.laneIndex !== null &&
-    params.laneIndex !== undefined
-    ? toWorkflowJobId(
-        params.runId,
-        "resume",
-        params.reviewNodeId,
-        params.laneIndex ?? "all",
-      )
-    : toWorkflowJobId(params.runId, "resume", "all");
-}
-
 export function createWorkflowExecutionLaneJobId(params: {
   laneIndex: number;
+  nodeId: string;
   runId: string;
 }) {
-  return toWorkflowJobId(params.runId, "lane", params.laneIndex);
+  return toWorkflowJobId(params.runId, "lane", params.nodeId, params.laneIndex);
 }
 
 export function createWorkflowReviewRegenerationJobId(params: {
@@ -118,9 +102,10 @@ export function getWorkflowExecutionQueue() {
 
 export function enqueueWorkflowExecutionJob(
   data: Extract<WorkflowExecutionJobData, { type: "execute-run" }>,
-  options: { jobId?: string } = {},
+  options: { delay?: number; jobId?: string } = {},
 ) {
   return getWorkflowExecutionQueue().add(WORKFLOW_EXECUTION_JOB_NAME, data, {
+    delay: options.delay,
     jobId: options.jobId ?? data.runId,
   });
 }

@@ -29,7 +29,11 @@ function outputAttemptKey(output: NodeLaneOutputArtifact) {
   return `${output.runId}:${output.nodeId}:${output.laneIndex}:${output.attempt}`;
 }
 
-function reviewLaneKey(lane: ReviewLaneArtifact) {
+function reviewLaneKey(lane: {
+  laneIndex: number;
+  nodeId: string;
+  runId: string;
+}) {
   return `${lane.runId}:${lane.nodeId}:${lane.laneIndex}`;
 }
 
@@ -93,8 +97,12 @@ function getVisibleLatestOutputs(artifacts: WorkflowRunArtifacts) {
     }
 
     visiting.add(key);
-    const isOutputVisible: boolean = (lineageByDependent.get(key) ?? []).every(
-      (lineage) => {
+    const reviewLane = latestReviewByLane.get(reviewLaneKey(output));
+    const isOutputVisible =
+      (!reviewLane ||
+        (reviewLane.status === "approved" &&
+          reviewLane.attempt === output.attempt)) &&
+      (lineageByDependent.get(key) ?? []).every((lineage) => {
         const sourceLatest = latestOutputs.get(
           `${lineage.runId}:${lineage.sourceNodeId}:${lineage.sourceLaneIndex}`,
         );
@@ -117,8 +125,7 @@ function getVisibleLatestOutputs(artifacts: WorkflowRunArtifacts) {
           `${lineage.runId}:${lineage.sourceNodeId}:${lineage.sourceLaneIndex}:${lineage.sourceAttempt}`,
         );
         return sourceOutput ? isVisible(sourceOutput, visiting) : false;
-      },
-    );
+      });
     visiting.delete(key);
     visibleByAttempt.set(key, isOutputVisible);
     return isOutputVisible;
@@ -127,6 +134,12 @@ function getVisibleLatestOutputs(artifacts: WorkflowRunArtifacts) {
   return Array.from(latestOutputs.values()).filter((output) =>
     isVisible(output),
   );
+}
+
+export function getWorkflowVisibleCompletionOutputs(
+  artifacts: WorkflowRunArtifacts,
+) {
+  return getVisibleLatestOutputs(artifacts);
 }
 
 function groupByNodeId<Value extends { nodeId: string }>(

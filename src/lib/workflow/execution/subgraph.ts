@@ -14,7 +14,6 @@ import {
   getLaneSplitValidationMessage,
 } from "~/lib/workflow/lanes";
 import {
-  LANE_ACCUMULATOR_INPUT_HANDLE_ID,
   LANE_REORDER_INPUT_HANDLE_ID,
   LANE_TRANSFORM_INPUT_HANDLE_ID,
   PROMPT_VARIABLE_PATTERN,
@@ -73,7 +72,6 @@ function getNodeOutputValueType(
     case "laneSplit":
     case "laneMerge":
     case "laneZipAlign":
-    case "laneAccumulator":
       return node.valueType;
     case "imageGenerator":
       return "image";
@@ -389,22 +387,6 @@ function resolveNodePlan(
           }
         : zipAlignPlannedValues(node.valueType, values, node.mode);
     }
-    case "laneAccumulator": {
-      const incomingEdge = getIncomingEdgesForHandle(
-        context.incomingByTarget,
-        node.id,
-        LANE_ACCUMULATOR_INPUT_HANDLE_ID,
-      )[0];
-      const value = incomingEdge
-        ? resolveNodePlan(
-            context,
-            incomingEdge.source,
-            nextPath,
-            incomingEdge.sourceHandle,
-          )
-        : null;
-      return value?.type === node.valueType ? value : null;
-    }
     case "prompt":
       return resolvePromptPlan(context, node, nextPath);
     case "imageGenerator":
@@ -466,6 +448,27 @@ export function buildWorkflowExecutionPlan(
     reviewBarrierNodeIds: Array.from(context.reviewBarrierNodeIds),
     generatorIterationById: context.generatorIterationById,
   };
+}
+
+export function getWorkflowPlannedLaneCount(
+  document: WorkflowDocument,
+  nodeId: string,
+  sourceHandleId?: string | null,
+) {
+  const context: PlanningContext = {
+    document,
+    executableNodeIds: [],
+    generatorIterationById: new Map(),
+    incomingByTarget: buildIncomingByTarget(document.edges),
+    nodeMap: new Map(document.nodes.map((node) => [node.id, node])),
+    reviewBarrierNodeIds: new Set(),
+    requiredNodeIds: new Set(),
+    targetNodeIdSet: new Set([nodeId]),
+  };
+
+  return (
+    resolveNodePlan(context, nodeId, new Set(), sourceHandleId)?.laneCount ?? 1
+  );
 }
 
 export function getGeneratorIterationPreview(

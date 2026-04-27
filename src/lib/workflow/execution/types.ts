@@ -1,16 +1,15 @@
 import type { Effect } from "effect";
-
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import type {
   WorkflowAuthorizationError,
   WorkflowConfigError,
   WorkflowCreditsError,
-  WorkflowExecutionError,
   WorkflowGenerationError,
   WorkflowInfrastructureError,
   WorkflowStorageError,
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
+import { WorkflowExecutionError } from "~/lib/workflow/errors";
 import type { RuntimeValue } from "~/lib/workflow/lanes";
 import type {
   GenerateImageRequest,
@@ -195,6 +194,20 @@ export class WorkflowReviewPause {
   readonly _tag = "WorkflowReviewPause";
 }
 
+export class WorkflowLaneDependencyMissing extends WorkflowExecutionError {
+  constructor(
+    readonly params: {
+      laneIndex: number;
+      nodeId: string;
+      nodeLabel: string;
+    },
+  ) {
+    super({
+      message: `Invariant violation: ${params.nodeLabel} lane ${params.laneIndex + 1} was scheduled before upstream lane ${params.nodeId}:${params.laneIndex} was visible.`,
+    });
+  }
+}
+
 export type WorkflowExecutionPorts = {
   readonly generateImage: (
     request: GenerateImageRequest,
@@ -208,6 +221,11 @@ export type WorkflowExecutionPorts = {
   readonly getNodeLaneOutput: (
     query: Omit<NodeLaneOutputQuery, "ownerUserId">,
   ) => Effect.Effect<NodeLaneOutputArtifact | null, WorkflowExecutionPortError>;
+  readonly getNodeLaneValue: (query: {
+    runId: string;
+    nodeId: string;
+    laneIndex: number;
+  }) => Effect.Effect<RuntimeValue | null, WorkflowExecutionPortError>;
   readonly onCompleted?: (params: {
     document: WorkflowDocument;
     finalCostCredits: number;

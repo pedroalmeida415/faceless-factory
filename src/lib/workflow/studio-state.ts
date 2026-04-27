@@ -186,14 +186,6 @@ function toWorkflowNodeData(
         mode: node.mode,
         valueType: node.valueType,
       };
-    case "laneAccumulator":
-      return {
-        kind: node.kind,
-        label: node.label,
-        status,
-        error,
-        valueType: node.valueType,
-      };
     case "imageGenerator":
       return {
         kind: node.kind,
@@ -377,12 +369,6 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       right.kind === "laneZipAlign" &&
       left.mode === right.mode &&
       left.valueType === right.valueType
-    );
-  }
-
-  if (left.kind === "laneAccumulator") {
-    return (
-      right.kind === "laneAccumulator" && left.valueType === right.valueType
     );
   }
 

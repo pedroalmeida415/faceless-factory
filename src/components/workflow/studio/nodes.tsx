@@ -29,7 +29,6 @@ import {
   getVideoGeneratorModeOptions,
 } from "~/lib/workflow/generator-models";
 import {
-  getLaneAccumulatorInputValue,
   getLaneReorderInputValue,
   getLaneTransformInputValue,
 } from "~/lib/workflow/graph";
@@ -39,17 +38,12 @@ import {
   getLaneSelectionValidationMessage,
   getLaneSplitValidationMessage,
 } from "~/lib/workflow/lanes";
-import {
-  getLaneSplitOutputHandleId,
-  LANE_ACCUMULATOR_INPUT_HANDLE_ID,
-  LANE_ACCUMULATOR_OUTPUT_HANDLE_ID,
-} from "~/lib/workflow/node-definitions";
+import { getLaneSplitOutputHandleId } from "~/lib/workflow/node-definitions";
 import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
 import type {
   AssetNodeData,
   GeneratorConfigValue,
   ImageGeneratorNodeData,
-  LaneAccumulatorNodeData,
   LaneMergeNodeData,
   LaneReorderNodeData,
   LaneSelectNodeData,
@@ -961,45 +955,6 @@ const LaneZipAlignNode = memo(function LaneZipAlignNode({
   );
 }, isSameNodeRender);
 
-const LaneAccumulatorNode = memo(function LaneAccumulatorNode({
-  id,
-  data,
-  selected,
-}: NodeProps<LaneAccumulatorNodeData>) {
-  const document = useWorkflowStudioStore((state) => state.document);
-  const inputValue = getLaneAccumulatorInputValue(document, id);
-  const laneCount =
-    inputValue?.type === data.valueType ? inputValue.lanes.length : null;
-  const color = getLaneValueTypeColor(data.valueType);
-  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Lane";
-
-  return (
-    <NodeShell
-      data={data}
-      id={id}
-      inputs={[
-        { id: LANE_ACCUMULATOR_INPUT_HANDLE_ID, label: valueTypeLabel, color },
-      ]}
-      output={
-        data.valueType
-          ? {
-              id: LANE_ACCUMULATOR_OUTPUT_HANDLE_ID,
-              label: valueTypeLabel,
-              color,
-            }
-          : null
-      }
-      selected={selected}
-    >
-      <NodeNotice tone="accent">
-        {data.valueType
-          ? `Waits for all ${laneCount ?? "upstream"} lanes before continuing.`
-          : "Connect lanes to create an explicit batch barrier."}
-      </NodeNotice>
-    </NodeShell>
-  );
-}, isSameNodeRender);
-
 function GeneratorReviewPanel({
   nodeId,
   review,
@@ -1442,7 +1397,6 @@ export const nodeTypes = {
   laneSplit: LaneSplitNode,
   laneMerge: LaneMergeNode,
   laneZipAlign: LaneZipAlignNode,
-  laneAccumulator: LaneAccumulatorNode,
   imageGenerator: ImageGeneratorNode,
   videoGenerator: VideoGeneratorNode,
   llmGenerator: LlmGeneratorNode,

@@ -17,7 +17,6 @@ import type {
   AssetNodeFields,
   GeneratorReviewFields,
   ImageGeneratorSettings,
-  LaneAccumulatorNodeFields,
   LaneMergeNodeFields,
   LaneReorderNodeFields,
   LaneSelectNodeFields,
@@ -92,11 +91,6 @@ export type LaneZipAlignWorkflowNode = WorkflowDocumentNodeBase &
     kind: "laneZipAlign";
   };
 
-export type LaneAccumulatorWorkflowNode = WorkflowDocumentNodeBase &
-  LaneAccumulatorNodeFields & {
-    kind: "laneAccumulator";
-  };
-
 export type ImageGeneratorWorkflowNode = WorkflowDocumentNodeBase &
   ImageGeneratorSettings &
   GeneratorReviewFields &
@@ -127,7 +121,6 @@ export type WorkflowDocumentNode =
   | LaneSplitWorkflowNode
   | LaneMergeWorkflowNode
   | LaneZipAlignWorkflowNode
-  | LaneAccumulatorWorkflowNode
   | ImageGeneratorWorkflowNode
   | VideoGeneratorWorkflowNode
   | LlmGeneratorWorkflowNode;
@@ -294,14 +287,6 @@ function makeWorkflowNode(
         mode: "zip",
         valueType: null,
       };
-    case "laneAccumulator":
-      return {
-        id,
-        kind,
-        label,
-        position,
-        valueType: null,
-      };
     case "imageGenerator":
       return {
         id,
@@ -357,7 +342,6 @@ function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
     value === "laneSplit" ||
     value === "laneMerge" ||
     value === "laneZipAlign" ||
-    value === "laneAccumulator" ||
     value === "imageGenerator" ||
     value === "videoGenerator" ||
     value === "llmGenerator"
@@ -709,19 +693,6 @@ function normalizeWorkflowNode(
         valueType: asLaneReorderValueType(value.valueType),
       };
     }
-    case "laneAccumulator": {
-      const baseNode = makeWorkflowNode(
-        id,
-        value.kind,
-        position,
-      ) as LaneAccumulatorWorkflowNode;
-
-      return {
-        ...baseNode,
-        label: asString(value.label, baseNode.label),
-        valueType: asLaneReorderValueType(value.valueType),
-      };
-    }
     case "imageGenerator": {
       const baseNode = makeWorkflowNode(
         id,
@@ -882,8 +853,7 @@ export function specializeWorkflowNodeForValueType(
     node.kind === "laneSelect" ||
     node.kind === "laneSplit" ||
     node.kind === "laneMerge" ||
-    node.kind === "laneZipAlign" ||
-    node.kind === "laneAccumulator"
+    node.kind === "laneZipAlign"
     ? {
         ...node,
         valueType,

@@ -201,7 +201,6 @@ function getDrawerHeading(node: WorkflowDocumentNode) {
     case "laneSplit":
     case "laneMerge":
     case "laneZipAlign":
-    case "laneAccumulator":
       return {
         description:
           "Transform lanes on this branch without mutating upstream output.",
@@ -562,7 +561,6 @@ function NodeConfigPanel({ node }: { node: WorkflowDocumentNode }) {
     case "laneSplit":
     case "laneMerge":
     case "laneZipAlign":
-    case "laneAccumulator":
       return <LaneReorderConfigPanel node={node} />;
     case "imageGenerator":
       return <ImageGeneratorConfigPanel node={node} />;
@@ -602,7 +600,6 @@ function isSameNodeConfig(
     case "laneSplit":
     case "laneMerge":
     case "laneZipAlign":
-    case "laneAccumulator":
       return (
         right.kind === left.kind &&
         JSON.stringify(left) === JSON.stringify(right)

@@ -51,7 +51,6 @@ export type WorkflowNodeKind =
   | "laneSplit"
   | "laneMerge"
   | "laneZipAlign"
-  | "laneAccumulator"
   | "imageGenerator"
   | "videoGenerator"
   | "llmGenerator";
@@ -138,10 +137,6 @@ export type LaneMergeNodeFields = {
 
 export type LaneZipAlignNodeFields = {
   mode: LaneZipAlignMode;
-  valueType: LaneTransformValueType;
-};
-
-export type LaneAccumulatorNodeFields = {
   valueType: LaneTransformValueType;
 };
 
@@ -244,11 +239,6 @@ export type LaneZipAlignNodeData = BaseNodeData &
     kind: "laneZipAlign";
   };
 
-export type LaneAccumulatorNodeData = BaseNodeData &
-  LaneAccumulatorNodeFields & {
-    kind: "laneAccumulator";
-  };
-
 export type ImageGeneratorNodeData = BaseNodeData &
   WorkflowGeneratorResult &
   GeneratorReviewFields &
@@ -279,7 +269,6 @@ export type WorkflowNodeData =
   | LaneSplitNodeData
   | LaneMergeNodeData
   | LaneZipAlignNodeData
-  | LaneAccumulatorNodeData
   | ImageGeneratorNodeData
   | VideoGeneratorNodeData
   | LlmGeneratorNodeData;

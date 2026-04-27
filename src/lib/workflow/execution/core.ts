@@ -21,6 +21,7 @@ import {
   coerceTextInputBatch,
 } from "~/lib/workflow/execution/input-coercion";
 import {
+  getRuntimeValueLane,
   replaceMediaOutputLane,
   replaceTextOutputLane,
 } from "~/lib/workflow/execution/output-lanes";
@@ -29,7 +30,10 @@ import {
   createWorkflowExecutionRuntimeState,
   syncWorkflowExecutionRuntimeState,
 } from "~/lib/workflow/execution/runtime-state";
-import { buildWorkflowExecutionPlan } from "~/lib/workflow/execution/subgraph";
+import {
+  buildWorkflowExecutionPlan,
+  getWorkflowPlannedLaneCount,
+} from "~/lib/workflow/execution/subgraph";
 import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target-resolution";
 import type {
   StartWorkflowExecutionRequest,
@@ -39,7 +43,10 @@ import type {
   WorkflowExecutionStatusResponse,
   WorkflowRunStatus,
 } from "~/lib/workflow/execution/types";
-import { WorkflowReviewPause } from "~/lib/workflow/execution/types";
+import {
+  WorkflowLaneDependencyMissing,
+  WorkflowReviewPause,
+} from "~/lib/workflow/execution/types";
 import {
   buildImageGenerationRequest,
   buildVideoGenerationRequest,
@@ -53,7 +60,6 @@ import {
   type GeneratorExecutionBatch,
   getGeneratorInputHandles,
   getIncomingEdgesForHandle,
-  getLaneAccumulatorInputValue,
   getPromptNodeReferencedVariableKeys,
   getWorkflowGeneratorAwaitingReviewRuntimeValue,
   getWorkflowGeneratorOutputRuntimeValue,
@@ -101,9 +107,11 @@ import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator"
 type ExecutionError =
   | WorkflowExecutionError
   | WorkflowExecutionPortError
+  | WorkflowLaneDependencyMissing
   | WorkflowReviewPause;
 type PendingMap = Map<string, Deferred.Deferred<RuntimeValue, ExecutionError>>;
 type NodeMap = Map<string, WorkflowDocumentNode>;
+type RequestedLaneIndex = number | null | undefined;
 
 type ExecutionState = {
   document: WorkflowDocument;
@@ -115,6 +123,7 @@ type EvaluateNode = (
   currentId: string,
   path: ReadonlySet<string>,
   sourceHandleId?: string | null,
+  requestedLaneIndex?: RequestedLaneIndex,
 ) => Effect.Effect<RuntimeValue, ExecutionError>;
 
 function getExecutionLaneIndex(request: StartWorkflowExecutionRequest) {
@@ -262,6 +271,50 @@ function cloneExecutionResponse(
   ) as WorkflowExecutionStatusResponse;
 }
 
+function isGeneratorWorkflowNode(node: WorkflowDocumentNode) {
+  return (
+    node.kind === "imageGenerator" ||
+    node.kind === "videoGenerator" ||
+    node.kind === "llmGenerator"
+  );
+}
+
+function getBroadcastLaneIndex(
+  document: WorkflowDocument,
+  sourceNodeId: string,
+  sourceHandleId: string | null | undefined,
+  requestedLaneIndex: number,
+) {
+  return getWorkflowPlannedLaneCount(document, sourceNodeId, sourceHandleId) ===
+    1
+    ? 0
+    : requestedLaneIndex;
+}
+
+function getLaneMergeSourceRequest(params: {
+  document: WorkflowDocument;
+  incomingEdges: ReturnType<typeof getIncomingEdgesForHandle>;
+  requestedLaneIndex: number;
+}) {
+  let offset = 0;
+  for (const edge of params.incomingEdges) {
+    const laneCount = getWorkflowPlannedLaneCount(
+      params.document,
+      edge.source,
+      edge.sourceHandle,
+    );
+    if (params.requestedLaneIndex < offset + laneCount) {
+      return {
+        edge,
+        laneIndex: params.requestedLaneIndex - offset,
+      };
+    }
+    offset += laneCount;
+  }
+
+  return null;
+}
+
 function coerceGeneratorExecutionBatchPlan(
   input: Parameters<typeof buildGeneratorExecutionBatchPlan>[0],
 ) {
@@ -319,6 +372,7 @@ function evaluatePromptNodeTextBatch(
   path: ReadonlySet<string>,
   incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
   evaluateNode: EvaluateNode,
+  requestedLaneIndex?: RequestedLaneIndex,
 ) {
   return Effect.gen(function* () {
     const resolvedVariables = new Map(
@@ -328,7 +382,13 @@ function evaluatePromptNodeTextBatch(
           Effect.gen(function* () {
             const values = yield* Effect.forEach(
               getIncomingEdgesForHandle(incomingByTarget, node.id, key),
-              (edge) => evaluateNode(edge.source, path, edge.sourceHandle),
+              (edge) =>
+                evaluateNode(
+                  edge.source,
+                  path,
+                  edge.sourceHandle,
+                  requestedLaneIndex,
+                ),
               {
                 concurrency: "unbounded",
               },
@@ -357,10 +417,13 @@ function evaluatePromptNodeTextBatch(
 }
 
 function evaluateLaneReorderInput(
+  document: WorkflowDocument,
   currentId: string,
   path: ReadonlySet<string>,
   incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
   evaluateNode: EvaluateNode,
+  laneIndex?: RequestedLaneIndex,
+  laneOrder?: readonly number[],
 ) {
   const incomingEdges = getIncomingEdgesForHandle(
     incomingByTarget,
@@ -377,7 +440,20 @@ function evaluateLaneReorderInput(
     );
   }
 
-  return evaluateNode(edge.source, path, edge.sourceHandle);
+  return evaluateNode(
+    edge.source,
+    path,
+    edge.sourceHandle,
+    typeof laneIndex === "number"
+      ? (laneOrder?.[laneIndex] ??
+          getBroadcastLaneIndex(
+            document,
+            edge.source,
+            edge.sourceHandle,
+            laneIndex,
+          ))
+      : laneIndex,
+  );
 }
 
 function evaluateLaneTransformInputs(
@@ -385,6 +461,7 @@ function evaluateLaneTransformInputs(
   path: ReadonlySet<string>,
   incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
   evaluateNode: EvaluateNode,
+  requestedLaneIndex?: RequestedLaneIndex,
 ) {
   return Effect.forEach(
     getIncomingEdgesForHandle(
@@ -392,7 +469,8 @@ function evaluateLaneTransformInputs(
       currentId,
       LANE_TRANSFORM_INPUT_HANDLE_ID,
     ),
-    (edge) => evaluateNode(edge.source, path, edge.sourceHandle),
+    (edge) =>
+      evaluateNode(edge.source, path, edge.sourceHandle, requestedLaneIndex),
     { concurrency: "unbounded" },
   );
 }
@@ -855,18 +933,28 @@ export function executeWorkflow(params: {
     return publish();
   };
 
-  const pauseFilteredLaneAtBarrier = (label: string) =>
+  const getRequiredNodeLaneValue = (laneDependency: {
+    laneIndex: number;
+    nodeId: string;
+    nodeLabel: string;
+  }): Effect.Effect<RuntimeValue, ExecutionError> =>
     Effect.gen(function* () {
-      const filter = params.request.reviewLaneFilter;
-      if (!filter) {
-        return false;
+      const value = yield* params.ports.getNodeLaneValue({
+        laneIndex: laneDependency.laneIndex,
+        nodeId: laneDependency.nodeId,
+        runId: params.runId,
+      });
+      if (value) {
+        return value;
       }
 
-      state.status = "waiting_for_review";
-      yield* setActivity(
-        `Lane ${filter.laneIndex + 1} is waiting at ${label} until the reviewed batch is complete.`,
+      return yield* Effect.fail(
+        new WorkflowLaneDependencyMissing({
+          laneIndex: laneDependency.laneIndex,
+          nodeId: laneDependency.nodeId,
+          nodeLabel: laneDependency.nodeLabel,
+        }),
       );
-      return yield* Effect.fail(new WorkflowReviewPause());
     });
 
   const setNodeRuntime = (
@@ -966,9 +1054,11 @@ export function executeWorkflow(params: {
     incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
     evaluateNode: EvaluateNode,
     sourceHandleId?: string | null,
+    requestedLaneIndex?: RequestedLaneIndex,
   ): Effect.Effect<RuntimeValue, ExecutionError> => {
+    const activeLaneIndex = requestedLaneIndex ?? executionLaneIndex;
     const storedOutput = getWorkflowGeneratorOutputRuntimeValue(node, {
-      laneIndex: executionLaneIndex,
+      laneIndex: activeLaneIndex,
     });
     if (storedOutput && !targetNodeIdSet.has(currentId)) {
       return Effect.gen(function* () {
@@ -977,9 +1067,24 @@ export function executeWorkflow(params: {
       });
     }
 
+    if (
+      typeof activeLaneIndex === "number" &&
+      typeof executionLaneIndex === "number" &&
+      isGeneratorWorkflowNode(node) &&
+      ((activeLaneIndex !== executionLaneIndex &&
+        targetNodeIdSet.has(currentId)) ||
+        !targetNodeIdSet.has(currentId))
+    ) {
+      return getRequiredNodeLaneValue({
+        laneIndex: activeLaneIndex,
+        nodeId: currentId,
+        nodeLabel: node.label,
+      });
+    }
+
     const awaitingReviewOutput = getWorkflowGeneratorAwaitingReviewRuntimeValue(
       node,
-      { laneIndex: executionLaneIndex },
+      { laneIndex: activeLaneIndex },
     );
     if (awaitingReviewOutput && !targetNodeIdSet.has(currentId)) {
       return releaseGeneratorOutputAfterReview(currentId, awaitingReviewOutput);
@@ -1007,7 +1112,9 @@ export function executeWorkflow(params: {
           }
 
           yield* setNodeRuntime(currentId, "success", null);
-          return textValue satisfies RuntimeValue;
+          return typeof activeLaneIndex === "number"
+            ? (getRuntimeValueLane(textValue, activeLaneIndex) ?? textValue)
+            : (textValue satisfies RuntimeValue);
         });
       case "prompt":
         return Effect.gen(function* () {
@@ -1016,6 +1123,7 @@ export function executeWorkflow(params: {
             nextPath,
             incomingByTarget,
             evaluateNode,
+            activeLaneIndex,
           );
 
           if (!textValue) {
@@ -1040,33 +1148,30 @@ export function executeWorkflow(params: {
           }
 
           yield* setNodeRuntime(currentId, "success", null);
-          return {
+          const assetValue = {
             type: node.assetKind,
             lanes: node.assets.map((asset) => [asset]),
           } satisfies RuntimeValue;
+          return typeof activeLaneIndex === "number"
+            ? (getRuntimeValueLane(assetValue, activeLaneIndex) ?? assetValue)
+            : assetValue;
         });
       case "laneReorder":
         return Effect.gen(function* () {
-          const inputValue = yield* evaluateLaneReorderInput(
-            currentId,
-            nextPath,
-            incomingByTarget,
-            evaluateNode,
-          );
-
-          if (inputValue.type !== node.valueType) {
-            return yield* Effect.fail(
-              new WorkflowValidationError({
-                message:
-                  "Lane Reorder input type does not match its lane type.",
-              }),
-            );
-          }
-
           const laneOrder = yield* Effect.try({
             try: () =>
               resolveLanePermutation({
-                laneCount: inputValue.lanes.length,
+                laneCount:
+                  typeof activeLaneIndex === "number"
+                    ? (params.request.executionLaneFilter?.laneCount ??
+                      getWorkflowPlannedLaneCount(
+                        params.request.document,
+                        currentId,
+                      ))
+                    : getWorkflowPlannedLaneCount(
+                        params.request.document,
+                        currentId,
+                      ),
                 mode: node.mode,
                 order: node.order,
                 shift: node.shift,
@@ -1080,20 +1185,45 @@ export function executeWorkflow(params: {
                 cause,
               }),
           });
+          const inputValue = yield* evaluateLaneReorderInput(
+            state.document,
+            currentId,
+            nextPath,
+            incomingByTarget,
+            evaluateNode,
+            activeLaneIndex,
+            laneOrder,
+          );
+
+          if (inputValue.type !== node.valueType) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message:
+                  "Lane Reorder input type does not match its lane type.",
+              }),
+            );
+          }
 
           yield* setNodeRuntime(currentId, "success", null);
-          return reorderRuntimeValue(
-            inputValue,
-            laneOrder,
-          ) satisfies RuntimeValue;
+          return typeof activeLaneIndex === "number"
+            ? (inputValue satisfies RuntimeValue)
+            : (reorderRuntimeValue(
+                inputValue,
+                laneOrder,
+              ) satisfies RuntimeValue);
         });
       case "laneSelect":
         return Effect.gen(function* () {
+          const inputLaneIndex =
+            typeof activeLaneIndex === "number"
+              ? node.indices[activeLaneIndex]
+              : activeLaneIndex;
           const [inputValue] = yield* evaluateLaneTransformInputs(
             currentId,
             nextPath,
             incomingByTarget,
             evaluateNode,
+            inputLaneIndex,
           );
           if (!inputValue || inputValue.type !== node.valueType) {
             return yield* Effect.fail(
@@ -1101,27 +1231,36 @@ export function executeWorkflow(params: {
             );
           }
 
-          const selectedValue = yield* Effect.try({
-            try: () => selectRuntimeValue(inputValue, node.indices),
-            catch: (cause) =>
-              new WorkflowValidationError({
-                message:
-                  cause instanceof Error
-                    ? cause.message
-                    : "Invalid lane selection.",
-                cause,
-              }),
-          });
+          const selectedValue =
+            typeof activeLaneIndex === "number"
+              ? inputValue
+              : yield* Effect.try({
+                  try: () => selectRuntimeValue(inputValue, node.indices),
+                  catch: (cause) =>
+                    new WorkflowValidationError({
+                      message:
+                        cause instanceof Error
+                          ? cause.message
+                          : "Invalid lane selection.",
+                      cause,
+                    }),
+                });
           yield* setNodeRuntime(currentId, "success", null);
-          return selectedValue satisfies RuntimeValue;
+          return typeof activeLaneIndex === "number"
+            ? (inputValue satisfies RuntimeValue)
+            : (selectedValue satisfies RuntimeValue);
         });
       case "laneSplit":
         return Effect.gen(function* () {
+          const laneIndex = Number(
+            (sourceHandleId ?? "lane-0").replace("lane-", ""),
+          );
           const [inputValue] = yield* evaluateLaneTransformInputs(
             currentId,
             nextPath,
             incomingByTarget,
             evaluateNode,
+            Number.isInteger(laneIndex) ? laneIndex : activeLaneIndex,
           );
           if (!inputValue || inputValue.type !== node.valueType) {
             return yield* Effect.fail(
@@ -1129,12 +1268,12 @@ export function executeWorkflow(params: {
             );
           }
 
-          const laneIndex = Number(
-            (sourceHandleId ?? "lane-0").replace("lane-", ""),
-          );
-          const splitValue = Number.isInteger(laneIndex)
-            ? splitRuntimeValueLane(inputValue, laneIndex)
-            : null;
+          const splitValue =
+            typeof activeLaneIndex === "number"
+              ? inputValue
+              : Number.isInteger(laneIndex)
+                ? splitRuntimeValueLane(inputValue, laneIndex)
+                : null;
           if (!splitValue) {
             return yield* Effect.fail(
               new WorkflowValidationError({
@@ -1144,17 +1283,58 @@ export function executeWorkflow(params: {
           }
 
           yield* setNodeRuntime(currentId, "success", null);
-          return splitValue satisfies RuntimeValue;
+          return typeof activeLaneIndex === "number"
+            ? (inputValue satisfies RuntimeValue)
+            : (splitValue satisfies RuntimeValue);
         });
       case "laneMerge":
       case "laneZipAlign":
         return Effect.gen(function* () {
-          const values = (yield* evaluateLaneTransformInputs(
-            currentId,
-            nextPath,
+          const incomingEdges = getIncomingEdgesForHandle(
             incomingByTarget,
-            evaluateNode,
-          )).filter((value) => value.type === node.valueType);
+            currentId,
+            LANE_TRANSFORM_INPUT_HANDLE_ID,
+          );
+          const mergeRequest =
+            typeof activeLaneIndex === "number" && node.kind === "laneMerge"
+              ? getLaneMergeSourceRequest({
+                  document: params.request.document,
+                  incomingEdges,
+                  requestedLaneIndex: activeLaneIndex,
+                })
+              : null;
+          const laneValues = mergeRequest
+            ? Effect.forEach([mergeRequest], (request) =>
+                evaluateNode(
+                  request.edge.source,
+                  nextPath,
+                  request.edge.sourceHandle,
+                  request.laneIndex,
+                ),
+              )
+            : Effect.forEach(
+                incomingEdges,
+                (edge) =>
+                  evaluateNode(
+                    edge.source,
+                    nextPath,
+                    edge.sourceHandle,
+                    typeof activeLaneIndex === "number" &&
+                      node.kind === "laneZipAlign" &&
+                      node.mode === "broadcast"
+                      ? getBroadcastLaneIndex(
+                          params.request.document,
+                          edge.source,
+                          edge.sourceHandle,
+                          activeLaneIndex,
+                        )
+                      : activeLaneIndex,
+                  ),
+                { concurrency: "unbounded" },
+              );
+          const values = (yield* laneValues).filter(
+            (value) => value.type === node.valueType,
+          );
           const nextValue = yield* Effect.try({
             try: () =>
               node.kind === "laneMerge"
@@ -1180,41 +1360,6 @@ export function executeWorkflow(params: {
           yield* setNodeRuntime(currentId, "success", null);
           return nextValue satisfies RuntimeValue;
         });
-      case "laneAccumulator":
-        return Effect.gen(function* () {
-          if (params.request.reviewLaneFilter) {
-            yield* pauseFilteredLaneAtBarrier(node.label);
-          }
-
-          const inputValue = yield* Effect.try({
-            try: () =>
-              getLaneAccumulatorInputValue(
-                state.document,
-                currentId,
-                nextPath,
-                undefined,
-                incomingByTarget,
-              ),
-            catch: (cause) =>
-              new WorkflowValidationError({
-                message:
-                  cause instanceof Error
-                    ? cause.message
-                    : "Invalid lane accumulator input.",
-                cause,
-              }),
-          });
-          if (!inputValue || inputValue.type !== node.valueType) {
-            return yield* Effect.fail(
-              new WorkflowValidationError({
-                message: "Lane Accumulator needs one matching input.",
-              }),
-            );
-          }
-
-          yield* setNodeRuntime(currentId, "success", null);
-          return inputValue satisfies RuntimeValue;
-        });
       case "imageGenerator":
         return Effect.gen(function* () {
           yield* setNodeRuntime(currentId, "running", null);
@@ -1234,6 +1379,7 @@ export function executeWorkflow(params: {
             },
             incomingByTarget,
             evaluateNode,
+            activeLaneIndex,
           )) as TextRuntimeValue | null;
           const mediaPlan = yield* coerceMediaInputBatches(
             state.document,
@@ -1242,6 +1388,7 @@ export function executeWorkflow(params: {
             "image",
             incomingByTarget,
             evaluateNode,
+            activeLaneIndex,
           );
           const batchPlan = yield* coerceGeneratorExecutionBatchPlan({
             mediaPlan,
@@ -1262,7 +1409,7 @@ export function executeWorkflow(params: {
           const responses = yield* Effect.forEach(
             yield* getExecutableGeneratorBatches(
               batchPlan.batches,
-              executionLaneIndex,
+              activeLaneIndex,
             ),
             ({ batch, laneIndex }) =>
               Effect.gen(function* () {
@@ -1345,7 +1492,7 @@ export function executeWorkflow(params: {
               executionLaneIndex !== null
                 ? replaceMediaOutputLane(
                     currentNode.outputLanes,
-                    executionLaneIndex,
+                    activeLaneIndex ?? executionLaneIndex,
                     responseOutputLanes[0] ?? [],
                   )
                 : responseOutputLanes;
@@ -1379,6 +1526,7 @@ export function executeWorkflow(params: {
             },
             incomingByTarget,
             evaluateNode,
+            activeLaneIndex,
           )) as TextRuntimeValue | null;
           const mediaPlan = yield* coerceMediaInputBatches(
             state.document,
@@ -1387,6 +1535,7 @@ export function executeWorkflow(params: {
             "image",
             incomingByTarget,
             evaluateNode,
+            activeLaneIndex,
           );
           const batchPlan = yield* coerceGeneratorExecutionBatchPlan({
             mediaPlan,
@@ -1407,7 +1556,7 @@ export function executeWorkflow(params: {
           const responses = yield* Effect.forEach(
             yield* getExecutableGeneratorBatches(
               batchPlan.batches,
-              executionLaneIndex,
+              activeLaneIndex,
             ),
             ({ batch, laneIndex }) =>
               Effect.gen(function* () {
@@ -1491,7 +1640,7 @@ export function executeWorkflow(params: {
               executionLaneIndex !== null
                 ? replaceMediaOutputLane(
                     currentNode.outputLanes,
-                    executionLaneIndex,
+                    activeLaneIndex ?? executionLaneIndex,
                     responseOutputLanes[0] ?? [],
                   )
                 : responseOutputLanes;
@@ -1521,6 +1670,7 @@ export function executeWorkflow(params: {
             },
             incomingByTarget,
             evaluateNode,
+            activeLaneIndex,
           )) as TextRuntimeValue;
           const systemPrompt = yield* coerceTextInputBatch(
             state.document,
@@ -1533,6 +1683,7 @@ export function executeWorkflow(params: {
             },
             incomingByTarget,
             evaluateNode,
+            activeLaneIndex,
           );
           const mediaPlan = yield* coerceMediaInputBatches(
             state.document,
@@ -1541,6 +1692,7 @@ export function executeWorkflow(params: {
             "image",
             incomingByTarget,
             evaluateNode,
+            activeLaneIndex,
           );
           const batchPlan = yield* coerceGeneratorExecutionBatchPlan({
             mediaPlan,
@@ -1565,7 +1717,7 @@ export function executeWorkflow(params: {
           const responses = yield* Effect.forEach(
             yield* getExecutableGeneratorBatches(
               batchPlan.batches,
-              executionLaneIndex,
+              activeLaneIndex,
             ),
             ({ batch, laneIndex }) =>
               Effect.gen(function* () {
@@ -1657,7 +1809,7 @@ export function executeWorkflow(params: {
               executionLaneIndex !== null
                 ? replaceTextOutputLane(
                     currentNode.outputLanes,
-                    executionLaneIndex,
+                    activeLaneIndex ?? executionLaneIndex,
                     responseOutputLanes[0] ?? "",
                   )
                 : responseOutputLanes;
@@ -1683,6 +1835,7 @@ export function executeWorkflow(params: {
     incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
     pending: PendingMap,
     sourceHandleId?: string | null,
+    requestedLaneIndex?: RequestedLaneIndex,
   ): Effect.Effect<RuntimeValue, ExecutionError> =>
     Effect.suspend(() => {
       if (path.has(currentId)) {
@@ -1693,7 +1846,7 @@ export function executeWorkflow(params: {
         );
       }
 
-      const pendingKey = `${currentId}:${sourceHandleId ?? ""}`;
+      const pendingKey = `${currentId}:${sourceHandleId ?? ""}:${requestedLaneIndex ?? "all"}`;
       const cached = pending.get(pendingKey);
       if (cached) {
         return Deferred.await(cached);
@@ -1703,6 +1856,7 @@ export function executeWorkflow(params: {
         nextId,
         nextPath,
         nextSourceHandleId,
+        nextRequestedLaneIndex,
       ) =>
         evaluateNode(
           nextId,
@@ -1711,6 +1865,7 @@ export function executeWorkflow(params: {
           incomingByTarget,
           pending,
           nextSourceHandleId,
+          nextRequestedLaneIndex,
         );
 
       return Effect.gen(function* () {
@@ -1738,6 +1893,7 @@ export function executeWorkflow(params: {
               incomingByTarget,
               recursiveEvaluateNode,
               sourceHandleId,
+              requestedLaneIndex,
             );
           }).pipe(
             Effect.tapError((error) =>

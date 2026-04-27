@@ -24,7 +24,6 @@ import {
 } from "~/lib/workflow/graph";
 import {
   formatNodeTitle,
-  LANE_ACCUMULATOR_OUTPUT_HANDLE_ID,
   LANE_REORDER_OUTPUT_HANDLE_ID,
   LANE_TRANSFORM_OUTPUT_HANDLE_ID,
   type WorkflowValueType,
@@ -93,8 +92,7 @@ function syncEngineState(
         node.kind === "laneSelect" ||
         node.kind === "laneSplit" ||
         node.kind === "laneMerge" ||
-        node.kind === "laneZipAlign" ||
-        node.kind === "laneAccumulator") &&
+        node.kind === "laneZipAlign") &&
       !node.valueType
         ? [node.id]
         : [],
@@ -107,7 +105,6 @@ function syncEngineState(
             untypedLaneTransformNodeIds.has(edge.source) &&
             (edge.sourceHandle === LANE_REORDER_OUTPUT_HANDLE_ID ||
               edge.sourceHandle === LANE_TRANSFORM_OUTPUT_HANDLE_ID ||
-              edge.sourceHandle === LANE_ACCUMULATOR_OUTPUT_HANDLE_ID ||
               edge.sourceHandle?.startsWith("lane-"))
           ),
       )

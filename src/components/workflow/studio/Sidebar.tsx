@@ -80,11 +80,6 @@ const NODE_ACTION_GROUPS: Array<{
       { kind: "laneSplit", label: "Lane Split", icon: RiStackLine },
       { kind: "laneMerge", label: "Lane Merge", icon: RiGitMergeLine },
       { kind: "laneZipAlign", label: "Lane Zip", icon: RiShuffleLine },
-      {
-        kind: "laneAccumulator",
-        label: "Lane Accumulator",
-        icon: RiStackLine,
-      },
     ],
   },
   {

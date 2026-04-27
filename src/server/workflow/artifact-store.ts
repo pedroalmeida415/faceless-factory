@@ -13,6 +13,8 @@ import {
   getGeneratorOutputIdempotencyKey,
   getGeneratorOutputInputHash,
 } from "~/lib/workflow/execution/artifact-identity";
+import { buildWorkflowLaneDependencyPlan } from "~/lib/workflow/execution/lane-dependencies";
+import { buildWorkflowExecutionPlan } from "~/lib/workflow/execution/subgraph";
 import type {
   LaneExecutionResult,
   NodeLaneOutputArtifact,
@@ -23,7 +25,6 @@ import type {
   WorkflowRunArtifactStatus,
   WorkflowRunArtifacts,
 } from "~/lib/workflow/execution/types";
-import { buildIncomingByTarget } from "~/lib/workflow/graph";
 import type { RuntimeValue } from "~/lib/workflow/lanes";
 import type {
   WorkflowAsset,
@@ -90,56 +91,6 @@ function isGeneratorWorkflowNode(
   node: WorkflowDocument["nodes"][number] | undefined,
 ): node is GeneratorWorkflowNode {
   return Boolean(node && isGeneratorNodeKind(node.kind));
-}
-
-function hasGeneratorLaneOutput(
-  node: GeneratorWorkflowNode,
-  laneIndex: number,
-) {
-  return node.kind === "llmGenerator"
-    ? Boolean(node.outputLanes[laneIndex]?.trim())
-    : (node.outputLanes[laneIndex]?.length ?? 0) > 0;
-}
-
-function resolveSourceLaneIndex(
-  node: GeneratorWorkflowNode,
-  dependentLaneIndex: number,
-) {
-  if (hasGeneratorLaneOutput(node, dependentLaneIndex)) {
-    return dependentLaneIndex;
-  }
-
-  return hasGeneratorLaneOutput(node, 0) ? 0 : null;
-}
-
-function collectUpstreamGeneratorNodeIds(
-  document: WorkflowDocument,
-  nodeId: string,
-) {
-  const incomingByTarget = buildIncomingByTarget(document.edges);
-  const nodeById = new Map(document.nodes.map((node) => [node.id, node]));
-  const generatorIds = new Set<string>();
-  const visited = new Set<string>();
-  const stack = (incomingByTarget.get(nodeId) ?? []).map((edge) => edge.source);
-
-  while (stack.length) {
-    const currentId = stack.pop();
-    if (!currentId || visited.has(currentId)) {
-      continue;
-    }
-
-    visited.add(currentId);
-    const node = nodeById.get(currentId);
-    if (node && isGeneratorNodeKind(node.kind)) {
-      generatorIds.add(node.id);
-    }
-
-    for (const edge of incomingByTarget.get(currentId) ?? []) {
-      stack.push(edge.source);
-    }
-  }
-
-  return [...generatorIds];
 }
 
 function toOutputArtifact(params: {
@@ -241,6 +192,17 @@ export function buildLaneExecutionResultFromDocument(params: {
   const nodeById = new Map(
     params.document.nodes.map((node) => [node.id, node]),
   );
+  const executionPlan = buildWorkflowExecutionPlan(
+    params.document,
+    Array.from(params.targetNodeIds),
+  );
+  const laneDependencyByJob = new Map(
+    buildWorkflowLaneDependencyPlan({
+      document: params.document,
+      generatorIterationById: executionPlan.generatorIterationById,
+      targetNodeIds: params.targetNodeIds,
+    }).jobs.map((job) => [`${job.nodeId}:${job.laneIndex}`, job.dependencies]),
+  );
   const lineage: WorkflowArtifactLineage[] = [];
   const outputs: NodeLaneOutputArtifact[] = [];
   const reviewLanes: ReviewLaneArtifact[] = [];
@@ -272,16 +234,11 @@ export function buildLaneExecutionResultFromDocument(params: {
       });
       if (output) {
         outputs.push(output);
-        for (const sourceNodeId of collectUpstreamGeneratorNodeIds(
-          params.document,
-          node.id,
-        )) {
-          const sourceNode = nodeById.get(sourceNodeId);
+        for (const dependency of laneDependencyByJob.get(
+          `${output.nodeId}:${output.laneIndex}`,
+        ) ?? []) {
+          const sourceNode = nodeById.get(dependency.nodeId);
           if (!isGeneratorWorkflowNode(sourceNode)) {
-            continue;
-          }
-          const sourceLaneIndex = resolveSourceLaneIndex(sourceNode, laneIndex);
-          if (sourceLaneIndex === null) {
             continue;
           }
           lineage.push({
@@ -291,10 +248,10 @@ export function buildLaneExecutionResultFromDocument(params: {
             runId: output.runId,
             sourceAttempt: getGeneratorOutputAttempt(
               sourceNode,
-              sourceLaneIndex,
+              dependency.laneIndex,
             ),
-            sourceLaneIndex,
-            sourceNodeId,
+            sourceLaneIndex: dependency.laneIndex,
+            sourceNodeId: dependency.nodeId,
           });
         }
       }
