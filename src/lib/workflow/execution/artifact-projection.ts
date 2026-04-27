@@ -207,7 +207,7 @@ function buildWorkflowArtifactProjection(params: {
                   output.value.lanes[0] ?? [],
                 )
               : lanes,
-          [] as typeof node.outputLanes,
+          node.outputLanes,
         );
         const review = reviewLanes.length
           ? ({
@@ -264,7 +264,7 @@ function buildWorkflowArtifactProjection(params: {
                   output.value.lanes[0] ?? "",
                 )
               : lanes,
-          [] as typeof node.outputLanes,
+          node.outputLanes,
         );
         const review = reviewLanes.length
           ? ({

@@ -47,7 +47,10 @@ import {
   WorkflowArtifactStore,
 } from "~/server/workflow/artifact-store";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
-import { getWorkflowProject } from "~/server/workflow/projects";
+import {
+  getWorkflowProject,
+  saveWorkflowProjectExecutionResults,
+} from "~/server/workflow/projects";
 import {
   createWorkflowContinuationJobId,
   createWorkflowExecutionLaneJobId,
@@ -520,11 +523,17 @@ export class WorkflowExecutionService extends Context.Tag(
             }),
           );
 
-          return (
-            run.projectDocumentRevision ??
-            run.requestContext?.documentRevision ??
-            null
-          );
+          const result = yield* Effect.tryPromise({
+            try: () =>
+              saveWorkflowProjectExecutionResults({
+                document: run.document,
+                ownerUserId: userId,
+                projectId,
+              }),
+            catch: toPersistenceError,
+          });
+
+          return result.documentRevision;
         });
 
       const hydrateExecutionRequest = (
@@ -1846,30 +1855,34 @@ export class WorkflowExecutionService extends Context.Tag(
                 }),
               onCompleted: ({ document, finalCostCredits, targetNodeIds }) =>
                 Effect.gen(function* () {
-                  const projectId = request.projectId?.trim();
-                  if (!projectId) {
-                    return yield* Effect.fail(
-                      new WorkflowInfrastructureError({
-                        message:
-                          "Workflow project is missing from execution context.",
-                      }),
-                    );
-                  }
-
-                  yield* workflowArtifactStore.upsertLaneExecutionResult(
-                    buildLaneExecutionResultFromDocument({
-                      costCredits: finalCostCredits,
+                  const run = buildWorkflowExecutionStatusResponse({
+                    runId,
+                    targetNodeIds,
+                    accruedCostCredits: finalCostCredits,
+                    projectDocumentRevision: request.documentRevision ?? null,
+                    finalCostCredits,
+                    document,
+                    runtime: createWorkflowExecutionRuntimeState(
                       document,
+                      "Workflow run finished.",
+                    ),
+                    requestContext: {
+                      accruedCostCredits: finalCostCredits,
+                      clientRunId: request.clientRunId ?? null,
                       documentRevision: request.documentRevision ?? null,
-                      laneIndex: getRequestLaneIndex(request),
-                      ownerUserId: userId,
-                      projectId,
-                      runId,
-                      status: "success",
-                      targetNodeIds,
-                    }),
+                      idempotencyKey: request.idempotencyKey ?? null,
+                      projectId: request.projectId ?? null,
+                      selection: request.selection ?? null,
+                      target: request.target,
+                    },
+                    status: "success",
+                  });
+
+                  return yield* persistRunArtifacts(
+                    run,
+                    userId,
+                    getRequestLaneIndex(request),
                   );
-                  return request.documentRevision ?? null;
                 }),
               onStateChange: (state) =>
                 Effect.gen(function* () {

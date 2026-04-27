@@ -7,6 +7,8 @@ import {
   deserializeStoredWorkflowGraphDocument,
   hydrateWorkflowGraphDocument,
   toWorkflowGraphDocument,
+  type WorkflowDocument,
+  type WorkflowDocumentNode,
   type WorkflowGraphDocument,
 } from "~/lib/workflow/document";
 import {
@@ -64,6 +66,70 @@ function toWorkflowProject(row: WorkflowProjectRow): WorkflowProject {
     document,
     documentRevision: row.documentRevision,
   };
+}
+
+function mergeGeneratorExecutionResult(
+  currentNode: WorkflowDocumentNode,
+  executionNode: WorkflowDocumentNode | undefined,
+) {
+  if (
+    currentNode.kind === "imageGenerator" &&
+    executionNode?.kind === "imageGenerator"
+  ) {
+    return {
+      ...currentNode,
+      lastPrompt: executionNode.lastPrompt,
+      outputLanes: executionNode.outputLanes,
+      review: executionNode.review,
+    } satisfies WorkflowDocumentNode;
+  }
+
+  if (
+    currentNode.kind === "videoGenerator" &&
+    executionNode?.kind === "videoGenerator"
+  ) {
+    return {
+      ...currentNode,
+      lastPrompt: executionNode.lastPrompt,
+      outputLanes: executionNode.outputLanes,
+      review: executionNode.review,
+    } satisfies WorkflowDocumentNode;
+  }
+
+  if (
+    currentNode.kind === "llmGenerator" &&
+    executionNode?.kind === "llmGenerator"
+  ) {
+    return {
+      ...currentNode,
+      lastPrompt: executionNode.lastPrompt,
+      lastSystemPrompt: executionNode.lastSystemPrompt,
+      outputLanes: executionNode.outputLanes,
+      review: executionNode.review,
+    } satisfies WorkflowDocumentNode;
+  }
+
+  return currentNode;
+}
+
+function mergeWorkflowExecutionResults(params: {
+  currentDocument: WorkflowDocument;
+  executionDocument: WorkflowDocument;
+}) {
+  const executionNodeById = new Map(
+    params.executionDocument.nodes.map((node) => [node.id, node]),
+  );
+  const nodes = params.currentDocument.nodes.map((node) =>
+    mergeGeneratorExecutionResult(node, executionNodeById.get(node.id)),
+  );
+  const nextDocument = {
+    ...params.currentDocument,
+    nodes,
+  } satisfies WorkflowDocument;
+
+  return JSON.stringify(params.currentDocument) === JSON.stringify(nextDocument)
+    ? params.currentDocument
+    : nextDocument;
 }
 
 function assertLockedExecutionSliceUnchanged(params: {
@@ -231,4 +297,64 @@ export async function saveWorkflowProjectDocument(params: {
   }
 
   return updatedProject;
+}
+
+export async function saveWorkflowProjectExecutionResults(params: {
+  document: WorkflowDocument;
+  ownerUserId: string;
+  projectId: string;
+}): Promise<WorkflowProjectSaveResponse> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const currentProject = await getWorkflowProject({
+      ownerUserId: params.ownerUserId,
+      projectId: params.projectId,
+    });
+    const currentDocument = hydrateWorkflowGraphDocument(
+      currentProject.document,
+    );
+    if (!currentDocument) {
+      throw new WorkflowValidationError({
+        message: "Workflow project contains an invalid graph document.",
+      });
+    }
+
+    const nextDocument = mergeWorkflowExecutionResults({
+      currentDocument,
+      executionDocument: params.document,
+    });
+    if (nextDocument === currentDocument) {
+      return {
+        documentRevision: currentProject.documentRevision,
+      };
+    }
+
+    const [updatedProject] = await db
+      .update(workflowProjects)
+      .set({
+        document: toWorkflowGraphDocument(nextDocument),
+        documentRevision: currentProject.documentRevision + 1,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(
+            workflowProjects.documentRevision,
+            currentProject.documentRevision,
+          ),
+          eq(workflowProjects.id, params.projectId),
+          eq(workflowProjects.ownerUserId, params.ownerUserId),
+        ),
+      )
+      .returning({
+        documentRevision: workflowProjects.documentRevision,
+      });
+
+    if (updatedProject) {
+      return updatedProject;
+    }
+  }
+
+  throw new WorkflowValidationError({
+    message: "Workflow project changed while saving generated results.",
+  });
 }
