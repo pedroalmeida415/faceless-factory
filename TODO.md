@@ -29,7 +29,7 @@
 - [ ] Proper blob storage + CDN for images/videos (Cloudflare?)
 - [ ] How to support breaking changes to workflows in the future when we can't simply drop everything and call it a day to avoid shooting ourselves in the foot?
 - [ ] unblock lanes when ready and display results independently instead of having everything blocked until the entire batch is finished. 
-- [ ]
+- [ ] I also want to change this overall behavior where running a downstream node puts it in "generating" mode even though the "flow" has not gotten to it just yet, meaning, it is not generating anything, but currently it still shows the loading spinner as if it were. We need to differentiate between "waiting" and "running". If the node is running, 
 
 # Infra
 - [ ] How to deploy to prod?

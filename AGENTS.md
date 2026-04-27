@@ -140,6 +140,7 @@ These rules are strict and non-negotiable:
 
 * **Idempotency:** All BullMQ workers must be idempotent. A job restarted mid-execution should not result in duplicate API billing or corrupted state.
 * **Resource Safety:** All generative calls must use an `AbortSignal` to prevent hanging resources.
+* **Autofix First:** When `bun run check` reports formatting issues or safe automatically fixable lint errors, fix them with `bun run check:write` instead of manually editing each reported file. Manual edits are only for issues that remain after the autofix command or fixes that require semantic judgment.
 
 ## 11. Communication Constraints
 
