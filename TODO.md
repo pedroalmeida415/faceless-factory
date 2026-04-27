@@ -35,6 +35,7 @@
 - [ ] How to deploy to prod?
 - [ ] Posthog analytics
 - [ ] Observabilty
+- [ ] Vertex AI production capacity plan before launch: evaluate Provisioned Throughput for `gemini-3-pro-image-preview`, add a shared model-aware generation scheduler/limiter, remove unbounded Vertex fanout, add jittered 429 retry/backoff, and monitor per-model token burn + spillover so single-user 3-6 image batches do not fail under PayGo shared-capacity spikes.
 
 # Testing
 - [ ] tests tests tests, integration, E2E?
