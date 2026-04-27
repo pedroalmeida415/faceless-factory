@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "next build",
-    "check": "biome check --no-errors-on-unmatched --max-diagnostics=none .",
-    "check:unsafe": "biome check --write --unsafe --no-errors-on-unmatched --max-diagnostics=none .",
-    "check:write": "biome check --write --no-errors-on-unmatched --max-diagnostics=none .",
+    "check": "rtk biome check --no-errors-on-unmatched --max-diagnostics=none .",
+    "check:unsafe": "rtk biome check --write --unsafe --no-errors-on-unmatched --max-diagnostics=none .",
+    "check:write": "rtk biome check --write --no-errors-on-unmatched --max-diagnostics=none .",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
@@ -16,7 +16,7 @@
     "preview": "next build && next start",
     "stripe:bootstrap": "bun src/server/billing/bootstrap.ts",
     "start": "next start",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "rtk tsc --noEmit",
     "worker:workflow": "bun src/server/workflow/worker.ts",
     "worker:workflow:dev": "bun --watch src/server/workflow/worker.ts"
   },
