@@ -173,8 +173,6 @@ export type GeneratorReviewFields = {
 
 export type WorkflowGeneratorResult = {
   lastPrompt: string;
-  responseText: string | null;
-  outputAssets: WorkflowAsset[];
   outputLanes: WorkflowAsset[][];
 };
 
@@ -182,7 +180,6 @@ export type WorkflowLlmResult = {
   lastPrompt: string;
   lastSystemPrompt: string;
   outputLanes: string[];
-  responseText: string | null;
 };
 
 type BaseGeneratorSettings<ModelId extends string> = {
@@ -302,7 +299,6 @@ export type GenerateImageRequest = {
 
 export type GenerateImageResponse = {
   assets: WorkflowAsset[];
-  responseText: string | null;
   model: ImageGeneratorModelId;
 };
 

@@ -1,6 +1,5 @@
 import type {
   ImageGeneratorWorkflowNode,
-  LaneMergeWorkflowNode,
   LaneReorderWorkflowNode,
   LaneSelectWorkflowNode,
   LaneSplitWorkflowNode,
@@ -191,15 +190,6 @@ export const LaneSplitNodeService = {
   },
 };
 
-export const LaneMergeNodeService = {
-  setValueType(
-    node: LaneMergeWorkflowNode,
-    valueType: WorkflowValueType | null,
-  ) {
-    return { ...node, valueType } satisfies LaneMergeWorkflowNode;
-  },
-};
-
 export const LaneZipAlignNodeService = {
   setMode(
     node: LaneZipAlignWorkflowNode,
@@ -245,16 +235,12 @@ export const ImageGeneratorService = {
     node: ImageGeneratorWorkflowNode,
     result: {
       lastPrompt: string;
-      responseText: string | null;
-      outputAssets: WorkflowAsset[];
       outputLanes: WorkflowAsset[][];
     },
   ): ImageGeneratorWorkflowNode {
     return {
       ...node,
       lastPrompt: result.lastPrompt,
-      responseText: result.responseText,
-      outputAssets: result.outputAssets,
       outputLanes: result.outputLanes,
     };
   },
@@ -296,16 +282,12 @@ export const VideoGeneratorService = {
     node: VideoGeneratorWorkflowNode,
     result: {
       lastPrompt: string;
-      responseText: string | null;
-      outputAssets: WorkflowAsset[];
       outputLanes: WorkflowAsset[][];
     },
   ): VideoGeneratorWorkflowNode {
     return {
       ...node,
       lastPrompt: result.lastPrompt,
-      responseText: result.responseText,
-      outputAssets: result.outputAssets,
       outputLanes: result.outputLanes,
     };
   },
@@ -329,7 +311,6 @@ export const LlmGeneratorService = {
       lastPrompt: string;
       lastSystemPrompt: string;
       outputLanes: string[];
-      responseText: string | null;
     },
   ): LlmGeneratorWorkflowNode {
     return {
@@ -337,7 +318,6 @@ export const LlmGeneratorService = {
       lastPrompt: result.lastPrompt,
       lastSystemPrompt: result.lastSystemPrompt,
       outputLanes: result.outputLanes,
-      responseText: result.responseText,
     };
   },
 };
@@ -349,23 +329,6 @@ export const WorkflowNodeAssetService = {
         return {
           ...node,
           assets: [],
-        };
-      case "imageGenerator":
-      case "videoGenerator":
-        return {
-          ...node,
-          outputAssets: [],
-          outputLanes: [],
-          responseText: null,
-          lastPrompt: "",
-        };
-      case "llmGenerator":
-        return {
-          ...node,
-          lastPrompt: "",
-          lastSystemPrompt: "",
-          outputLanes: [],
-          responseText: null,
         };
       default:
         return node;

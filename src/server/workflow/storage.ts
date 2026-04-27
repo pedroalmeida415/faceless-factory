@@ -474,8 +474,6 @@ export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
     >;
   }
 >() {
-  static readonly functions = Effect.serviceFunctions(this);
-
   static readonly Live = Layer.succeed(this, {
     listProjectAssets: listProjectAssetsEffect,
     readAssetById: readAssetByIdEffect,

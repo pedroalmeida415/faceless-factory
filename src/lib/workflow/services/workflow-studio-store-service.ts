@@ -39,8 +39,6 @@ export class WorkflowStudioStoreService extends Context.Tag(
     ) => Effect.Effect<void>;
   }
 >() {
-  static readonly functions = Effect.serviceFunctions(this);
-
   static readonly Live = Layer.succeed(this, {
     applyServerExecutionState: (executionState) =>
       Effect.sync(() => {

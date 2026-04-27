@@ -11,6 +11,7 @@ import type {
   WorkflowStorageError,
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
+import type { RuntimeValue } from "~/lib/workflow/lanes";
 import type {
   GenerateImageRequest,
   GenerateImageResponse,
@@ -19,6 +20,7 @@ import type {
   GenerateVideoRequest,
   GenerateVideoResponse,
   WorkflowNodeStatus,
+  WorkflowReviewLaneStatus,
 } from "~/lib/workflow/types";
 
 export type WorkflowExecutionTarget =
@@ -54,6 +56,79 @@ export type WorkflowRunStatus =
   | "waiting_for_review"
   | "success"
   | "error";
+
+export type WorkflowRunArtifactStatus = Extract<
+  WorkflowRunStatus,
+  "running" | "waiting_for_review" | "success" | "error"
+>;
+
+export type NodeLaneOutputArtifact = {
+  runId: string;
+  projectId: string;
+  ownerUserId: string;
+  nodeId: string;
+  laneIndex: number;
+  attempt: number;
+  documentRevision: number | null;
+  value: RuntimeValue;
+  inputHash: string;
+  idempotencyKey: string;
+  promptSnapshot: string | null;
+  model: string | null;
+};
+
+export type ReviewLaneArtifact = {
+  runId: string;
+  projectId: string;
+  ownerUserId: string;
+  nodeId: string;
+  laneIndex: number;
+  attempt: number;
+  valueType: RuntimeValue["type"];
+  status: WorkflowReviewLaneStatus;
+};
+
+export type WorkflowArtifactLineage = {
+  runId: string;
+  sourceNodeId: string;
+  sourceLaneIndex: number;
+  sourceAttempt: number;
+  dependentNodeId: string;
+  dependentLaneIndex: number;
+  dependentAttempt: number;
+};
+
+export type LaneExecutionResult = {
+  runId: string;
+  laneIndex: number | null;
+  outputs: NodeLaneOutputArtifact[];
+  reviewLanes: ReviewLaneArtifact[];
+  lineage: WorkflowArtifactLineage[];
+  status: WorkflowRunArtifactStatus;
+  costCredits: number;
+};
+
+export type WorkflowRunArtifacts = {
+  outputs: NodeLaneOutputArtifact[];
+  reviewLanes: ReviewLaneArtifact[];
+  lineage: WorkflowArtifactLineage[];
+};
+
+export type NodeLaneOutputQuery = {
+  runId: string;
+  ownerUserId: string;
+  nodeId: string;
+  laneIndex: number;
+  attempt: number;
+  inputHash: string;
+};
+
+export type RegenerationAttemptRequest = {
+  runId: string;
+  ownerUserId: string;
+  nodeId: string;
+  laneIndex: number;
+};
 
 export function isWorkflowRunActiveStatus(status: WorkflowRunStatus) {
   return (
@@ -130,6 +205,9 @@ export type WorkflowExecutionPorts = {
   readonly generateLlm: (
     request: GenerateLlmRequest,
   ) => Effect.Effect<GenerateLlmResponse, WorkflowExecutionPortError>;
+  readonly getNodeLaneOutput: (
+    query: Omit<NodeLaneOutputQuery, "ownerUserId">,
+  ) => Effect.Effect<NodeLaneOutputArtifact | null, WorkflowExecutionPortError>;
   readonly onCompleted?: (params: {
     document: WorkflowDocument;
     finalCostCredits: number;

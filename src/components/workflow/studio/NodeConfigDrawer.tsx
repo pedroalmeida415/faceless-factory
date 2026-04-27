@@ -626,8 +626,7 @@ function isSameNodeConfig(
         right.kind === "llmGenerator" &&
         left.model === right.model &&
         left.mode === right.mode &&
-        left.config === right.config &&
-        left.responseText === right.responseText
+        left.config === right.config
       );
   }
 }

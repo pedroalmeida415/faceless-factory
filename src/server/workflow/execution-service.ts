@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import { Context, Effect, Layer } from "effect";
-import { updateWorkflowDocumentNode } from "~/lib/workflow/document";
+import {
+  hydrateWorkflowGraphDocument,
+  updateWorkflowDocumentNode,
+} from "~/lib/workflow/document";
 import {
   getErrorMessage,
   WorkflowAuthorizationError,
@@ -11,12 +14,14 @@ import {
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
 import {
-  clearReviewDescendantOutputLane,
+  buildWorkflowApprovedRunProjection,
+  buildWorkflowRunProjection,
+} from "~/lib/workflow/execution/artifact-projection";
+import {
   estimateGeneratorReviewLaneRegenerationCreditCost,
   executeWorkflow,
   regenerateGeneratorReviewLane,
 } from "~/lib/workflow/execution/core";
-import { mergeWorkflowExecutionDocument } from "~/lib/workflow/execution/result-merge";
 import {
   buildWorkflowExecutionStatusResponse,
   createWorkflowExecutionRuntimeState,
@@ -32,15 +37,16 @@ import type {
   StartWorkflowExecutionRequest,
   WorkflowExecutionPortError,
   WorkflowExecutionStatusResponse,
+  WorkflowRunArtifacts,
 } from "~/lib/workflow/execution/types";
 import { estimateWorkflowExecution } from "~/lib/workflow/pricing";
-import { isReviewFullyApproved } from "~/lib/workflow/review-state";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
-import { WorkflowCreditsService } from "~/server/workflow/credits";
 import {
-  getWorkflowProject,
-  persistWorkflowExecutionResults,
-} from "~/server/workflow/projects";
+  buildLaneExecutionResultFromDocument,
+  WorkflowArtifactStore,
+} from "~/server/workflow/artifact-store";
+import { WorkflowCreditsService } from "~/server/workflow/credits";
+import { getWorkflowProject } from "~/server/workflow/projects";
 import {
   createWorkflowContinuationJobId,
   createWorkflowExecutionLaneJobId,
@@ -107,6 +113,7 @@ export class WorkflowExecutionService extends Context.Tag(
       | WorkflowRunNotFoundError
     >;
     readonly executeReviewLaneRegeneration: (params: {
+      attempt: number;
       laneIndex: number;
       reviewNodeId: string;
       runId: string;
@@ -134,17 +141,17 @@ export class WorkflowExecutionService extends Context.Tag(
     >;
   }
 >() {
-  static readonly functions = Effect.serviceFunctions(this);
-
   static readonly Live = Layer.effect(
     this,
     Effect.gen(function* () {
       const vertexAi = yield* VertexAi;
       const workflowCreditsService = yield* WorkflowCreditsService;
+      const workflowArtifactStore = yield* WorkflowArtifactStore;
       const workflowRunStore = yield* WorkflowRunStore;
 
       const buildContinuationRequest = (
         run: WorkflowExecutionStatusResponse,
+        userId: string,
         reviewLaneFilter?: StartWorkflowExecutionRequest["reviewLaneFilter"],
       ) =>
         Effect.gen(function* () {
@@ -165,11 +172,19 @@ export class WorkflowExecutionService extends Context.Tag(
                 new Set(run.targetNodeIds),
               )
             : null;
+          const artifacts = yield* workflowArtifactStore.getRunArtifacts({
+            ownerUserId: userId,
+            runId: run.runId,
+          });
+          const document = buildWorkflowApprovedRunProjection({
+            artifacts,
+            document: run.document,
+          });
 
           return {
             ...context,
             accruedCostCredits: run.accruedCostCredits,
-            document: run.document,
+            document,
             reviewLaneFilter: reviewLaneFilter ?? null,
             selection: downstreamTargetNodeIds
               ? { nodeIds: downstreamTargetNodeIds }
@@ -211,6 +226,7 @@ export class WorkflowExecutionService extends Context.Tag(
       const isExecutionLaneComplete = (
         run: WorkflowExecutionStatusResponse,
         laneIndex: number,
+        artifacts: WorkflowRunArtifacts,
       ) => {
         const plan = buildWorkflowExecutionPlan(
           run.document,
@@ -221,29 +237,21 @@ export class WorkflowExecutionService extends Context.Tag(
             (plan.generatorIterationById.get(nodeId)?.iterations ?? 1) >
             laneIndex,
         );
-        return expectedNodeIds.every((nodeId) => {
-          const node = run.document.nodes.find(
-            (candidate) => candidate.id === nodeId,
-          );
-          if (
-            node?.kind === "imageGenerator" ||
-            node?.kind === "videoGenerator"
-          ) {
-            return (node.outputLanes[laneIndex]?.length ?? 0) > 0;
-          }
-          if (node?.kind === "llmGenerator") {
-            return Boolean(node.outputLanes[laneIndex]?.trim());
-          }
-          return false;
-        });
+        return expectedNodeIds.every((nodeId) =>
+          artifacts.outputs.some(
+            (output) =>
+              output.nodeId === nodeId && output.laneIndex === laneIndex,
+          ),
+        );
       };
 
       const areExecutionLanesComplete = (
         run: WorkflowExecutionStatusResponse,
         laneCount: number,
+        artifacts: WorkflowRunArtifacts,
       ) =>
         Array.from({ length: laneCount }, (_, laneIndex) => laneIndex).every(
-          (laneIndex) => isExecutionLaneComplete(run, laneIndex),
+          (laneIndex) => isExecutionLaneComplete(run, laneIndex, artifacts),
         );
 
       const hasLaneOutput = (
@@ -269,81 +277,129 @@ export class WorkflowExecutionService extends Context.Tag(
       const hasApprovedReviewLanes = (
         run: WorkflowExecutionStatusResponse,
         reviewNodeId: string,
-      ) => {
-        const reviewNode = run.document.nodes.find(
-          (node) => node.id === reviewNodeId,
-        );
-
-        return isReviewFullyApproved(reviewNode);
-      };
+        userId: string,
+      ) =>
+        workflowArtifactStore
+          .getRunArtifacts({
+            ownerUserId: userId,
+            runId: run.runId,
+          })
+          .pipe(
+            Effect.map((artifacts) => {
+              const latestByLane = new Map(
+                artifacts.reviewLanes
+                  .filter((lane) => lane.nodeId === reviewNodeId)
+                  .map((lane) => [lane.laneIndex, lane] as const),
+              );
+              for (const lane of artifacts.reviewLanes.filter(
+                (lane) => lane.nodeId === reviewNodeId,
+              )) {
+                const existing = latestByLane.get(lane.laneIndex);
+                if (!existing || existing.attempt < lane.attempt) {
+                  latestByLane.set(lane.laneIndex, lane);
+                }
+              }
+              const latest = Array.from(latestByLane.values());
+              return (
+                latest.length > 0 &&
+                latest.every((lane) => lane.status === "approved")
+              );
+            }),
+          );
 
       const getReviewLaneForDecision = (params: {
         decision: "approve" | "regenerate";
         laneIndex: number;
+        ownerUserId: string;
         reviewNodeId: string;
         run: WorkflowExecutionStatusResponse;
-      }) => {
-        if (params.run.status !== "waiting_for_review") {
-          return Effect.fail(
-            new WorkflowValidationError({
-              message: "Workflow run is not waiting for human review.",
-            }),
-          );
-        }
+      }) =>
+        Effect.gen(function* () {
+          if (params.run.status !== "waiting_for_review") {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Workflow run is not waiting for human review.",
+              }),
+            );
+          }
 
-        const reviewNode = params.run.document.nodes.find(
-          (node) => node.id === params.reviewNodeId,
-        );
-        if (
-          !reviewNode ||
-          (reviewNode.kind !== "imageGenerator" &&
-            reviewNode.kind !== "videoGenerator" &&
-            reviewNode.kind !== "llmGenerator")
-        ) {
-          return Effect.fail(
-            new WorkflowValidationError({
-              message: "Reviewed generator node not found.",
-            }),
+          const reviewNode = params.run.document.nodes.find(
+            (node) => node.id === params.reviewNodeId,
           );
-        }
+          if (
+            !reviewNode ||
+            (reviewNode.kind !== "imageGenerator" &&
+              reviewNode.kind !== "videoGenerator" &&
+              reviewNode.kind !== "llmGenerator")
+          ) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Reviewed generator node not found.",
+              }),
+            );
+          }
 
-        const lane = reviewNode.review.lanes.find(
-          (candidate) => candidate.laneIndex === params.laneIndex,
-        );
-        if (!lane) {
-          return Effect.fail(
-            new WorkflowValidationError({
-              message: `Review lane ${params.laneIndex + 1} does not exist.`,
-            }),
+          const artifacts = yield* workflowArtifactStore.getRunArtifacts({
+            ownerUserId: params.ownerUserId,
+            runId: params.run.runId,
+          });
+          const lane = artifacts.reviewLanes
+            .filter(
+              (candidate) =>
+                candidate.nodeId === params.reviewNodeId &&
+                candidate.laneIndex === params.laneIndex,
+            )
+            .sort((left, right) => right.attempt - left.attempt)[0];
+
+          if (!lane) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: `Review lane ${params.laneIndex + 1} does not exist.`,
+              }),
+            );
+          }
+
+          const projectedLane = reviewNode.review.lanes.find(
+            (candidate) =>
+              candidate.laneIndex === lane.laneIndex &&
+              candidate.attempt === lane.attempt,
           );
-        }
 
-        if (
-          params.decision === "approve" &&
-          lane.status !== "pending" &&
-          lane.status !== "approved"
-        ) {
-          return Effect.fail(
-            new WorkflowValidationError({
-              message: `Review lane ${params.laneIndex + 1} is not pending approval.`,
-            }),
-          );
-        }
+          if (
+            params.decision === "approve" &&
+            lane.status !== "pending" &&
+            lane.status !== "approved"
+          ) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: `Review lane ${params.laneIndex + 1} is not pending approval.`,
+              }),
+            );
+          }
 
-        if (
-          params.decision === "regenerate" &&
-          lane.status !== "pending" &&
-          lane.status !== "regenerating"
-        ) {
-          return Effect.fail(
-            new WorkflowValidationError({
-              message: `Review lane ${params.laneIndex + 1} is not pending regeneration.`,
-            }),
-          );
-        }
+          if (
+            params.decision === "regenerate" &&
+            lane.status !== "pending" &&
+            lane.status !== "regenerating"
+          ) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: `Review lane ${params.laneIndex + 1} is not pending regeneration.`,
+              }),
+            );
+          }
 
-        return Effect.succeed({ lane, reviewNode });
-      };
+          return {
+            lane: {
+              assets: projectedLane?.assets ?? [],
+              attempt: lane.attempt,
+              laneIndex: lane.laneIndex,
+              status: lane.status,
+              text: projectedLane?.text ?? null,
+            },
+            reviewNode,
+          };
+        });
 
       const toPersistenceError = (cause: unknown) =>
         cause instanceof WorkflowAuthorizationError ||
@@ -357,7 +413,7 @@ export class WorkflowExecutionService extends Context.Tag(
 
       const withProjectDocumentRevision = (
         run: WorkflowExecutionStatusResponse,
-        documentRevision: number,
+        documentRevision: number | null,
       ) => ({
         ...run,
         projectDocumentRevision: documentRevision,
@@ -369,30 +425,61 @@ export class WorkflowExecutionService extends Context.Tag(
           : null,
       });
 
-      const persistRunDocument = (
+      const persistRunArtifacts = (
         run: WorkflowExecutionStatusResponse,
         userId: string,
-        mergeExecutionLaneIndex?: number | null,
+        laneIndex?: number | null,
       ) =>
-        Effect.tryPromise({
-          try: async () => {
-            const projectId = run.requestContext?.projectId?.trim();
-            if (!projectId) {
-              throw new WorkflowInfrastructureError({
+        Effect.gen(function* () {
+          const projectId = run.requestContext?.projectId?.trim();
+          if (!projectId) {
+            return yield* Effect.fail(
+              new WorkflowInfrastructureError({
                 message: "Workflow project is missing from execution context.",
-              });
-            }
+              }),
+            );
+          }
 
-            return persistWorkflowExecutionResults({
-              executionDocument: run.document,
-              mergeExecutionLaneIndex,
+          yield* workflowArtifactStore.upsertLaneExecutionResult(
+            buildLaneExecutionResultFromDocument({
+              costCredits: run.accruedCostCredits,
+              document: run.document,
+              documentRevision:
+                run.projectDocumentRevision ??
+                run.requestContext?.documentRevision ??
+                null,
+              laneIndex: laneIndex ?? null,
               ownerUserId: userId,
               projectId,
+              runId: run.runId,
+              status: run.status === "queued" ? "running" : run.status,
               targetNodeIds: run.targetNodeIds,
-            });
-          },
-          catch: toPersistenceError,
+            }),
+          );
+
+          return (
+            run.projectDocumentRevision ??
+            run.requestContext?.documentRevision ??
+            null
+          );
         });
+
+      const hydrateExecutionRequest = (
+        runId: string,
+        userId: string,
+        request: StartWorkflowExecutionRequest,
+      ) =>
+        workflowArtifactStore
+          .getRunArtifacts({ ownerUserId: userId, runId })
+          .pipe(
+            Effect.map((artifacts) => ({
+              ...request,
+              document: buildWorkflowRunProjection({
+                artifacts,
+                document: request.document,
+              }),
+            })),
+          );
 
       const getFilteredContinuationCostDelta = (
         state: WorkflowExecutionStatusResponse,
@@ -411,12 +498,7 @@ export class WorkflowExecutionService extends Context.Tag(
       }) => ({
         ...params.state,
         accruedCostCredits: params.accruedCostCredits,
-        document: mergeWorkflowExecutionDocument({
-          currentDocument: params.currentRun.document,
-          executionDocument: params.state.document,
-          mergeExecutionLaneIndex: params.laneIndex,
-          targetNodeIds: params.state.targetNodeIds,
-        }),
+        document: params.state.document,
         projectDocumentRevision:
           params.currentRun.projectDocumentRevision ??
           params.state.projectDocumentRevision,
@@ -451,10 +533,14 @@ export class WorkflowExecutionService extends Context.Tag(
             catch: toPersistenceError,
           });
 
-          return mergeWorkflowExecutionDocument({
-            currentDocument: project.document,
-            executionDocument: run.document,
-            targetNodeIds: run.targetNodeIds,
+          const artifacts = yield* workflowArtifactStore.getRunArtifacts({
+            ownerUserId: userId,
+            runId: run.runId,
+          });
+
+          return buildWorkflowRunProjection({
+            artifacts,
+            document: project.document,
           });
         });
 
@@ -484,6 +570,7 @@ export class WorkflowExecutionService extends Context.Tag(
         Effect.gen(function* () {
           const request = yield* buildContinuationRequest(
             params.run,
+            params.userId,
             params.reviewLaneFilter,
           );
           const quote = yield* Effect.try({
@@ -520,6 +607,7 @@ export class WorkflowExecutionService extends Context.Tag(
 
           const request = yield* buildContinuationRequest(
             run,
+            userId,
             reviewLaneFilter,
           );
 
@@ -563,11 +651,20 @@ export class WorkflowExecutionService extends Context.Tag(
             userId: params.userId,
             update: (currentRun) =>
               Effect.gen(function* () {
-                yield* getReviewLaneForDecision({
+                const { lane } = yield* getReviewLaneForDecision({
                   decision: "approve",
                   laneIndex: params.laneIndex,
+                  ownerUserId: params.userId,
                   reviewNodeId: params.reviewNodeId,
                   run: currentRun,
+                });
+                yield* workflowArtifactStore.setReviewLaneStatus({
+                  attempt: lane.attempt,
+                  laneIndex: params.laneIndex,
+                  nodeId: params.reviewNodeId,
+                  ownerUserId: params.userId,
+                  runId: params.runId,
+                  status: "approved",
                 });
 
                 const now = new Date().toISOString();
@@ -597,6 +694,11 @@ export class WorkflowExecutionService extends Context.Tag(
                     };
                   },
                 );
+                const isFullyApproved = yield* hasApprovedReviewLanes(
+                  { ...currentRun, document },
+                  params.reviewNodeId,
+                  params.userId,
+                );
                 const nextRunBase = {
                   ...currentRun,
                   activity: "Human review updated.",
@@ -608,18 +710,13 @@ export class WorkflowExecutionService extends Context.Tag(
                       ...currentRun.runtime.nodeStateById,
                       [params.reviewNodeId]: {
                         error: null,
-                        status: hasApprovedReviewLanes(
-                          { ...currentRun, document },
-                          params.reviewNodeId,
-                        )
-                          ? "success"
-                          : "waiting",
+                        status: isFullyApproved ? "success" : "waiting",
                       },
                     },
                   },
                   status: "waiting_for_review" as const,
                 } satisfies WorkflowExecutionStatusResponse;
-                const documentRevision = yield* persistRunDocument(
+                const documentRevision = yield* persistRunArtifacts(
                   nextRunBase,
                   params.userId,
                   params.laneIndex,
@@ -628,9 +725,10 @@ export class WorkflowExecutionService extends Context.Tag(
                   nextRunBase,
                   documentRevision,
                 );
-                const shouldResume = hasApprovedReviewLanes(
+                const shouldResume = yield* hasApprovedReviewLanes(
                   persistedRunBase,
                   params.reviewNodeId,
+                  params.userId,
                 );
                 const activity = shouldResume
                   ? "Human review approved. Queueing workflow resume..."
@@ -890,81 +988,98 @@ export class WorkflowExecutionService extends Context.Tag(
         userId: string;
       }) =>
         Effect.gen(function* () {
-          const { run: regeneratingRun } =
-            yield* workflowRunStore.updateRunWith({
-              runId: params.runId,
-              userId: params.userId,
-              update: (currentRun) =>
-                Effect.gen(function* () {
-                  const { lane } = yield* getReviewLaneForDecision({
-                    decision: "regenerate",
-                    laneIndex: params.laneIndex,
-                    reviewNodeId: params.reviewNodeId,
-                    run: currentRun,
-                  });
+          const {
+            result: { nextAttempt, shouldQueueRegeneration },
+            run: regeneratingRun,
+          } = yield* workflowRunStore.updateRunWith({
+            runId: params.runId,
+            userId: params.userId,
+            update: (currentRun) =>
+              Effect.gen(function* () {
+                const { lane } = yield* getReviewLaneForDecision({
+                  decision: "regenerate",
+                  laneIndex: params.laneIndex,
+                  ownerUserId: params.userId,
+                  reviewNodeId: params.reviewNodeId,
+                  run: currentRun,
+                });
 
-                  if (lane.status === "regenerating") {
-                    return {
-                      result: null,
-                      run: currentRun,
-                    };
-                  }
-
-                  const regenerationCostEstimate =
-                    yield* estimateGeneratorReviewLaneRegenerationCreditCost({
-                      document: currentRun.document,
-                      generatorNodeId: params.reviewNodeId,
-                    });
-                  const reservedCredits = yield* settleRunCost({
-                    reason: "Workflow review lane regeneration reserved.",
-                    run: currentRun,
-                    targetCost:
-                      currentRun.accruedCostCredits + regenerationCostEstimate,
-                    userId: params.userId,
-                  });
-
-                  const now = new Date().toISOString();
-                  const regeneratingDocument = clearReviewDescendantOutputLane(
-                    updateWorkflowDocumentNode(
-                      currentRun.document,
-                      params.reviewNodeId,
-                      (node) =>
-                        node.kind === "imageGenerator" ||
-                        node.kind === "videoGenerator" ||
-                        node.kind === "llmGenerator"
-                          ? {
-                              ...node,
-                              review: {
-                                ...node.review,
-                                lanes: node.review.lanes.map((lane) =>
-                                  lane.laneIndex === params.laneIndex
-                                    ? { ...lane, status: "regenerating" }
-                                    : lane,
-                                ),
-                                updatedAt: now,
-                              },
-                            }
-                          : node,
-                    ),
-                    params.reviewNodeId,
-                    params.laneIndex,
-                  );
-
+                if (lane.status === "regenerating") {
                   return {
-                    result: null,
-                    run: {
-                      ...currentRun,
-                      credits: reservedCredits,
-                      document: regeneratingDocument,
-                      runtime: {
-                        ...currentRun.runtime,
-                        activity: `Regenerating lane ${params.laneIndex + 1} for review...`,
-                      },
-                      status: "waiting_for_review" as const,
+                    result: {
+                      nextAttempt: lane.attempt + 1,
+                      shouldQueueRegeneration: false,
                     },
+                    run: currentRun,
                   };
-                }),
-            });
+                }
+
+                const regenerationCostEstimate =
+                  yield* estimateGeneratorReviewLaneRegenerationCreditCost({
+                    document: currentRun.document,
+                    generatorNodeId: params.reviewNodeId,
+                  });
+                const reservedCredits = yield* settleRunCost({
+                  reason: "Workflow review lane regeneration reserved.",
+                  run: currentRun,
+                  targetCost:
+                    currentRun.accruedCostCredits + regenerationCostEstimate,
+                  userId: params.userId,
+                });
+                const nextAttempt =
+                  yield* workflowArtifactStore.createNextAttempt({
+                    laneIndex: params.laneIndex,
+                    nodeId: params.reviewNodeId,
+                    ownerUserId: params.userId,
+                    runId: params.runId,
+                  });
+
+                const now = new Date().toISOString();
+                const regeneratingDocument = updateWorkflowDocumentNode(
+                  currentRun.document,
+                  params.reviewNodeId,
+                  (node) =>
+                    node.kind === "imageGenerator" ||
+                    node.kind === "videoGenerator" ||
+                    node.kind === "llmGenerator"
+                      ? {
+                          ...node,
+                          review: {
+                            ...node.review,
+                            lanes: node.review.lanes.map((lane) =>
+                              lane.laneIndex === params.laneIndex
+                                ? {
+                                    ...lane,
+                                    attempt: nextAttempt - 1,
+                                    status: "regenerating",
+                                  }
+                                : lane,
+                            ),
+                            updatedAt: now,
+                          },
+                        }
+                      : node,
+                );
+
+                return {
+                  result: { nextAttempt, shouldQueueRegeneration: true },
+                  run: {
+                    ...currentRun,
+                    credits: reservedCredits,
+                    document: regeneratingDocument,
+                    runtime: {
+                      ...currentRun.runtime,
+                      activity: `Regenerating lane ${params.laneIndex + 1} for review...`,
+                    },
+                    status: "waiting_for_review" as const,
+                  },
+                };
+              }),
+          });
+
+          if (!shouldQueueRegeneration) {
+            return regeneratingRun;
+          }
 
           yield* Effect.tryPromise({
             try: () => {
@@ -980,6 +1095,7 @@ export class WorkflowExecutionService extends Context.Tag(
                   : "pending";
               return enqueueWorkflowReviewRegenerationJob(
                 {
+                  attempt: nextAttempt,
                   laneIndex: params.laneIndex,
                   reviewNodeId: params.reviewNodeId,
                   runId: params.runId,
@@ -988,6 +1104,7 @@ export class WorkflowExecutionService extends Context.Tag(
                 },
                 {
                   jobId: createWorkflowReviewRegenerationJobId({
+                    attempt: nextAttempt,
                     laneIndex: params.laneIndex,
                     regenerationKey,
                     reviewNodeId: params.reviewNodeId,
@@ -1007,6 +1124,7 @@ export class WorkflowExecutionService extends Context.Tag(
         });
 
       const executeReviewLaneRegeneration = (params: {
+        attempt: number;
         laneIndex: number;
         reviewNodeId: string;
         runId: string;
@@ -1022,8 +1140,8 @@ export class WorkflowExecutionService extends Context.Tag(
             params.userId,
           );
           const result = yield* regenerateGeneratorReviewLane({
+            attempt: params.attempt,
             document: regenerationDocument,
-            idempotencyKey: `${params.runId}:regenerate:${params.reviewNodeId}`,
             laneIndex: params.laneIndex,
             ports: {
               generateImage: (imageRequest) =>
@@ -1044,11 +1162,27 @@ export class WorkflowExecutionService extends Context.Tag(
                   projectId: regeneratingRun.requestContext?.projectId ?? null,
                   request: videoRequest,
                 }),
+              getNodeLaneOutput: (query) =>
+                workflowArtifactStore.getNodeLaneOutput({
+                  ...query,
+                  ownerUserId: params.userId,
+                }),
             },
             generatorNodeId: params.reviewNodeId,
+            runId: params.runId,
           }).pipe(
             Effect.catchAll((error) =>
               Effect.gen(function* () {
+                yield* workflowArtifactStore
+                  .setReviewLaneStatus({
+                    attempt: params.attempt - 1,
+                    laneIndex: params.laneIndex,
+                    nodeId: params.reviewNodeId,
+                    ownerUserId: params.userId,
+                    runId: params.runId,
+                    status: "pending",
+                  })
+                  .pipe(Effect.catchAll(() => Effect.void));
                 yield* workflowRunStore.updateRunWith({
                   runId: params.runId,
                   userId: params.userId,
@@ -1132,16 +1266,6 @@ export class WorkflowExecutionService extends Context.Tag(
                     );
                   }
 
-                  const document = yield* Effect.try({
-                    try: () =>
-                      mergeWorkflowExecutionDocument({
-                        currentDocument: currentRun.document,
-                        executionDocument: result.document,
-                        mergeExecutionLaneIndex: params.laneIndex,
-                        targetNodeIds: currentRun.targetNodeIds,
-                      }),
-                    catch: toPersistenceError,
-                  });
                   const nextAccruedCostCredits =
                     currentRun.accruedCostCredits + result.costCredits;
                   const credits = yield* settleRunCost({
@@ -1154,14 +1278,14 @@ export class WorkflowExecutionService extends Context.Tag(
                     ...currentRun,
                     accruedCostCredits: nextAccruedCostCredits,
                     credits,
-                    document,
+                    document: result.document,
                     runtime: {
                       ...currentRun.runtime,
                       activity: `Lane ${params.laneIndex + 1} regenerated. Review it again.`,
                     },
                     status: "waiting_for_review" as const,
                   } satisfies WorkflowExecutionStatusResponse;
-                  const documentRevision = yield* persistRunDocument(
+                  const documentRevision = yield* persistRunArtifacts(
                     nextRunBase,
                     params.userId,
                     params.laneIndex,
@@ -1281,15 +1405,26 @@ export class WorkflowExecutionService extends Context.Tag(
             );
           }
 
+          const projectDocument = hydrateWorkflowGraphDocument(
+            project.document,
+          );
+          if (!projectDocument) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Workflow project contains an invalid graph document.",
+              }),
+            );
+          }
+
           const runId = randomUUID();
           const targetNodeIds = resolveWorkflowExecutionTargets(
-            project.document,
+            projectDocument,
             request.selection?.nodeIds ?? [],
             request.target,
           );
 
           WorkflowGraphValidator.validateExecutionTargets(
-            project.document,
+            projectDocument,
             targetNodeIds,
           );
 
@@ -1297,7 +1432,7 @@ export class WorkflowExecutionService extends Context.Tag(
             ...request,
             documentRevision: project.documentRevision,
             document: extractWorkflowExecutionSubgraph(
-              project.document,
+              projectDocument,
               targetNodeIds,
             ),
             projectId,
@@ -1450,98 +1585,100 @@ export class WorkflowExecutionService extends Context.Tag(
       const executeRun = (
         runId: string,
         userId: string,
-        request: StartWorkflowExecutionRequest,
+        submittedRequest: StartWorkflowExecutionRequest,
       ) =>
-        executeWorkflow({
-          request,
-          runId,
-          ports: {
-            generateImage: (imageRequest) =>
-              vertexAi.generateImagesWithNanoBananaPro({
-                ownerUserId: userId,
-                projectId: request.projectId ?? null,
-                request: imageRequest,
-              }),
-            generateVideo: (videoRequest) =>
-              vertexAi.generateVideosWithVeo31({
-                ownerUserId: userId,
-                projectId: request.projectId ?? null,
-                request: videoRequest,
-              }),
-            generateLlm: (llmRequest) =>
-              vertexAi.generateTextWithGemini3Flash({
-                ownerUserId: userId,
-                projectId: request.projectId ?? null,
-                request: llmRequest,
-              }),
-            onCompleted: ({ document, targetNodeIds }) =>
-              Effect.tryPromise({
-                try: async () => {
+        Effect.gen(function* () {
+          const request = yield* hydrateExecutionRequest(
+            runId,
+            userId,
+            submittedRequest,
+          );
+
+          return yield* executeWorkflow({
+            request,
+            runId,
+            ports: {
+              generateImage: (imageRequest) =>
+                vertexAi.generateImagesWithNanoBananaPro({
+                  ownerUserId: userId,
+                  projectId: request.projectId ?? null,
+                  request: imageRequest,
+                }),
+              generateVideo: (videoRequest) =>
+                vertexAi.generateVideosWithVeo31({
+                  ownerUserId: userId,
+                  projectId: request.projectId ?? null,
+                  request: videoRequest,
+                }),
+              generateLlm: (llmRequest) =>
+                vertexAi.generateTextWithGemini3Flash({
+                  ownerUserId: userId,
+                  projectId: request.projectId ?? null,
+                  request: llmRequest,
+                }),
+              getNodeLaneOutput: (query) =>
+                workflowArtifactStore.getNodeLaneOutput({
+                  ...query,
+                  ownerUserId: userId,
+                }),
+              onCompleted: ({ document, finalCostCredits, targetNodeIds }) =>
+                Effect.gen(function* () {
                   const projectId = request.projectId?.trim();
                   if (!projectId) {
-                    throw new WorkflowInfrastructureError({
-                      message:
-                        "Workflow project is missing from execution context.",
-                    });
+                    return yield* Effect.fail(
+                      new WorkflowInfrastructureError({
+                        message:
+                          "Workflow project is missing from execution context.",
+                      }),
+                    );
                   }
 
-                  return persistWorkflowExecutionResults({
-                    executionDocument: document,
-                    mergeExecutionLaneIndex: getRequestLaneIndex(request),
-                    ownerUserId: userId,
-                    projectId,
-                    targetNodeIds,
-                  });
-                },
-                catch: (cause) =>
-                  new WorkflowInfrastructureError({
-                    message: getErrorMessage(cause),
-                    cause,
-                  }),
-              }),
-            onStateChange: (state) =>
-              Effect.gen(function* () {
-                const credits = yield* workflowCreditsService.getRunSummary({
-                  runId,
-                  userId,
-                });
-                const laneIndex = getRequestLaneIndex(request);
-                if (laneIndex === null) {
-                  yield* workflowRunStore
-                    .updateRun({
-                      ...state,
-                      credits,
-                    })
-                    .pipe(Effect.orDie, Effect.asVoid);
-                  return;
-                }
-
-                if (!hasLaneOutput(state, laneIndex)) {
-                  return;
-                }
-
-                yield* workflowRunStore
-                  .updateRunWith({
+                  yield* workflowArtifactStore.upsertLaneExecutionResult(
+                    buildLaneExecutionResultFromDocument({
+                      costCredits: finalCostCredits,
+                      document,
+                      documentRevision: request.documentRevision ?? null,
+                      laneIndex: getRequestLaneIndex(request),
+                      ownerUserId: userId,
+                      projectId,
+                      runId,
+                      status: "success",
+                      targetNodeIds,
+                    }),
+                  );
+                  return request.documentRevision ?? null;
+                }),
+              onStateChange: (state) =>
+                Effect.gen(function* () {
+                  const credits = yield* workflowCreditsService.getRunSummary({
                     runId,
                     userId,
-                    update: (currentRun) =>
-                      Effect.try({
-                        try: () => ({
-                          result: null,
-                          run:
-                            currentRun.status === "waiting_for_review"
-                              ? {
-                                  ...mergeLaneScopedExecutionState({
-                                    accruedCostCredits:
-                                      currentRun.accruedCostCredits,
-                                    currentRun,
-                                    laneIndex,
-                                    state,
-                                  }),
-                                  credits,
-                                }
-                              : currentRun.status === "queued" ||
-                                  currentRun.status === "running"
+                  });
+                  const laneIndex = getRequestLaneIndex(request);
+                  if (laneIndex === null) {
+                    yield* workflowRunStore
+                      .updateRun({
+                        ...state,
+                        credits,
+                      })
+                      .pipe(Effect.orDie, Effect.asVoid);
+                    return;
+                  }
+
+                  if (!hasLaneOutput(state, laneIndex)) {
+                    return;
+                  }
+
+                  yield* workflowRunStore
+                    .updateRunWith({
+                      runId,
+                      userId,
+                      update: (currentRun) =>
+                        Effect.try({
+                          try: () => ({
+                            result: null,
+                            run:
+                              currentRun.status === "waiting_for_review"
                                 ? {
                                     ...mergeLaneScopedExecutionState({
                                       accruedCostCredits:
@@ -1551,124 +1688,33 @@ export class WorkflowExecutionService extends Context.Tag(
                                       state,
                                     }),
                                     credits,
-                                    status: "running" as const,
                                   }
-                                : currentRun,
-                        }),
-                        catch: toPersistenceError,
-                      }),
-                  })
-                  .pipe(Effect.orDie, Effect.asVoid);
-              }).pipe(Effect.orDie),
-          },
-        }).pipe(
-          Effect.tap((state) =>
-            Effect.gen(function* () {
-              const executionLaneFilter = request.executionLaneFilter;
-              if (state.status === "success" && executionLaneFilter) {
-                return yield* workflowRunStore
-                  .updateRunWith({
-                    runId,
-                    userId,
-                    update: (currentRun) =>
-                      Effect.gen(function* () {
-                        if (
-                          currentRun.status !== "queued" &&
-                          currentRun.status !== "running"
-                        ) {
-                          return { result: null, run: currentRun };
-                        }
-
-                        const nextState = yield* Effect.try({
-                          try: () =>
-                            mergeLaneScopedExecutionState({
-                              accruedCostCredits:
-                                currentRun.accruedCostCredits +
-                                getFilteredContinuationCostDelta(
-                                  state,
-                                  request,
-                                ),
-                              currentRun,
-                              laneIndex: executionLaneFilter.laneIndex,
-                              state,
-                            }),
+                                : currentRun.status === "queued" ||
+                                    currentRun.status === "running"
+                                  ? {
+                                      ...mergeLaneScopedExecutionState({
+                                        accruedCostCredits:
+                                          currentRun.accruedCostCredits,
+                                        currentRun,
+                                        laneIndex,
+                                        state,
+                                      }),
+                                      credits,
+                                      status: "running" as const,
+                                    }
+                                  : currentRun,
+                          }),
                           catch: toPersistenceError,
-                        });
-                        const isComplete = areExecutionLanesComplete(
-                          nextState,
-                          executionLaneFilter.laneCount,
-                        );
-                        const settledRun = isComplete
-                          ? {
-                              ...nextState,
-                              finalCostCredits: nextState.accruedCostCredits,
-                              runtime: {
-                                ...nextState.runtime,
-                                activity: "Workflow run finished.",
-                                error: null,
-                                finishedAt: new Date().toISOString(),
-                              },
-                              status: "success" as const,
-                            }
-                          : {
-                              ...nextState,
-                              finalCostCredits: null,
-                              runtime: {
-                                ...nextState.runtime,
-                                activity: `Lane ${executionLaneFilter.laneIndex + 1} completed. Waiting for remaining lanes...`,
-                                finishedAt: null,
-                              },
-                              status: "running" as const,
-                            };
-                        const documentRevision = yield* persistRunDocument(
-                          settledRun,
-                          userId,
-                          executionLaneFilter.laneIndex,
-                        );
-                        const runWithRevision = withProjectDocumentRevision(
-                          settledRun,
-                          documentRevision,
-                        );
-                        const credits = isComplete
-                          ? yield* settleRunCost({
-                              reason: "Workflow execution settled.",
-                              run: runWithRevision,
-                              targetCost: runWithRevision.accruedCostCredits,
-                              userId,
-                            })
-                          : yield* workflowCreditsService.getRunSummary({
-                              runId,
-                              userId,
-                            });
-
-                        return {
-                          result: null,
-                          run: {
-                            ...runWithRevision,
-                            credits,
-                          },
-                        };
-                      }),
-                  })
-                  .pipe(Effect.map(({ run }) => run));
-              }
-
-              if (state.status === "success") {
-                const credits = yield* settleRunCost({
-                  reason: "Workflow execution settled.",
-                  run: state,
-                  targetCost: state.finalCostCredits ?? 0,
-                  userId,
-                });
-                return yield* workflowRunStore.updateRun({
-                  ...state,
-                  credits,
-                });
-              }
-
-              if (state.status === "waiting_for_review") {
+                        }),
+                    })
+                    .pipe(Effect.orDie, Effect.asVoid);
+                }).pipe(Effect.orDie),
+            },
+          }).pipe(
+            Effect.tap((state) =>
+              Effect.gen(function* () {
                 const executionLaneFilter = request.executionLaneFilter;
-                if (executionLaneFilter) {
+                if (state.status === "success" && executionLaneFilter) {
                   return yield* workflowRunStore
                     .updateRunWith({
                       runId,
@@ -1677,13 +1723,9 @@ export class WorkflowExecutionService extends Context.Tag(
                         Effect.gen(function* () {
                           if (
                             currentRun.status !== "queued" &&
-                            currentRun.status !== "running" &&
-                            currentRun.status !== "waiting_for_review"
+                            currentRun.status !== "running"
                           ) {
-                            return {
-                              result: null,
-                              run: currentRun,
-                            };
+                            return { result: null, run: currentRun };
                           }
 
                           const nextState = yield* Effect.try({
@@ -1701,46 +1743,52 @@ export class WorkflowExecutionService extends Context.Tag(
                               }),
                             catch: toPersistenceError,
                           });
+                          yield* persistRunArtifacts(
+                            nextState,
+                            userId,
+                            executionLaneFilter.laneIndex,
+                          );
+                          const artifacts =
+                            yield* workflowArtifactStore.getRunArtifacts({
+                              ownerUserId: userId,
+                              runId,
+                            });
                           const isComplete = areExecutionLanesComplete(
                             nextState,
                             executionLaneFilter.laneCount,
+                            artifacts,
                           );
                           const settledRun = isComplete
                             ? {
                                 ...nextState,
-                                finalCostCredits: null,
+                                finalCostCredits: nextState.accruedCostCredits,
                                 runtime: {
                                   ...nextState.runtime,
-                                  activity: "Workflow is waiting for review.",
+                                  activity: "Workflow run finished.",
                                   error: null,
-                                  finishedAt: null,
+                                  finishedAt: new Date().toISOString(),
                                 },
-                                status: "waiting_for_review" as const,
+                                status: "success" as const,
                               }
                             : {
                                 ...nextState,
                                 finalCostCredits: null,
                                 runtime: {
                                   ...nextState.runtime,
-                                  activity: `Lane ${executionLaneFilter.laneIndex + 1} reached review. Waiting for remaining lanes...`,
+                                  activity: `Lane ${executionLaneFilter.laneIndex + 1} completed. Waiting for remaining lanes...`,
                                   finishedAt: null,
                                 },
                                 status: "running" as const,
                               };
-                          const documentRevision = yield* persistRunDocument(
-                            settledRun,
-                            userId,
-                            executionLaneFilter.laneIndex,
-                          );
                           const runWithRevision = withProjectDocumentRevision(
                             settledRun,
-                            documentRevision,
+                            settledRun.projectDocumentRevision,
                           );
                           const credits = isComplete
                             ? yield* settleRunCost({
-                                reason:
-                                  "Workflow execution paused for human review.",
+                                reason: "Workflow execution settled.",
                                 run: runWithRevision,
+                                targetCost: runWithRevision.accruedCostCredits,
                                 userId,
                               })
                             : yield* workflowCreditsService.getRunSummary({
@@ -1760,145 +1808,260 @@ export class WorkflowExecutionService extends Context.Tag(
                     .pipe(Effect.map(({ run }) => run));
                 }
 
-                const reviewLaneFilter = request.reviewLaneFilter;
-                if (reviewLaneFilter) {
-                  return yield* workflowRunStore
-                    .updateRunWith({
-                      runId,
-                      userId,
-                      update: (currentRun) =>
-                        Effect.gen(function* () {
-                          if (currentRun.status !== "waiting_for_review") {
-                            return {
-                              result: null,
-                              run: currentRun,
-                            };
-                          }
-
-                          const nextState = yield* Effect.try({
-                            try: () =>
-                              mergeLaneScopedExecutionState({
-                                accruedCostCredits:
-                                  currentRun.accruedCostCredits +
-                                  getFilteredContinuationCostDelta(
-                                    state,
-                                    request,
-                                  ),
-                                currentRun,
-                                laneIndex: reviewLaneFilter.laneIndex,
-                                state,
-                              }),
-                            catch: toPersistenceError,
-                          });
-                          const credits = yield* settleRunCost({
-                            reason:
-                              "Workflow execution paused for human review.",
-                            run: nextState,
-                            userId,
-                          });
-                          const documentRevision = yield* persistRunDocument(
-                            nextState,
-                            userId,
-                            reviewLaneFilter.laneIndex,
-                          );
-
-                          return {
-                            result: null,
-                            run: {
-                              ...withProjectDocumentRevision(
-                                nextState,
-                                documentRevision,
-                              ),
-                              credits,
-                            },
-                          };
-                        }),
-                    })
-                    .pipe(Effect.map(({ run }) => run));
+                if (state.status === "success") {
+                  const credits = yield* settleRunCost({
+                    reason: "Workflow execution settled.",
+                    run: state,
+                    targetCost: state.finalCostCredits ?? 0,
+                    userId,
+                  });
+                  return yield* workflowRunStore.updateRun({
+                    ...state,
+                    credits,
+                  });
                 }
 
-                const nextState = state;
-                const credits = yield* settleRunCost({
-                  reason: "Workflow execution paused for human review.",
-                  run: nextState,
-                  userId,
-                });
-                const documentRevision = yield* persistRunDocument(
-                  nextState,
-                  userId,
-                );
-                return yield* workflowRunStore.updateRun({
-                  ...withProjectDocumentRevision(nextState, documentRevision),
-                  credits,
-                });
-              }
-            }),
-          ),
-          Effect.catchAll((error) =>
-            Effect.gen(function* () {
-              const currentRun = yield* workflowRunStore.getRun({
-                runId,
-                userId,
-              });
+                if (state.status === "waiting_for_review") {
+                  const executionLaneFilter = request.executionLaneFilter;
+                  if (executionLaneFilter) {
+                    return yield* workflowRunStore
+                      .updateRunWith({
+                        runId,
+                        userId,
+                        update: (currentRun) =>
+                          Effect.gen(function* () {
+                            if (
+                              currentRun.status !== "queued" &&
+                              currentRun.status !== "running" &&
+                              currentRun.status !== "waiting_for_review"
+                            ) {
+                              return {
+                                result: null,
+                                run: currentRun,
+                              };
+                            }
 
-              if (currentRun.status === "success") {
-                const credits = yield* workflowCreditsService
-                  .getRunSummary({
-                    runId,
+                            const nextState = yield* Effect.try({
+                              try: () =>
+                                mergeLaneScopedExecutionState({
+                                  accruedCostCredits:
+                                    currentRun.accruedCostCredits +
+                                    getFilteredContinuationCostDelta(
+                                      state,
+                                      request,
+                                    ),
+                                  currentRun,
+                                  laneIndex: executionLaneFilter.laneIndex,
+                                  state,
+                                }),
+                              catch: toPersistenceError,
+                            });
+                            yield* persistRunArtifacts(
+                              nextState,
+                              userId,
+                              executionLaneFilter.laneIndex,
+                            );
+                            const artifacts =
+                              yield* workflowArtifactStore.getRunArtifacts({
+                                ownerUserId: userId,
+                                runId,
+                              });
+                            const isComplete = areExecutionLanesComplete(
+                              nextState,
+                              executionLaneFilter.laneCount,
+                              artifacts,
+                            );
+                            const settledRun = isComplete
+                              ? {
+                                  ...nextState,
+                                  finalCostCredits: null,
+                                  runtime: {
+                                    ...nextState.runtime,
+                                    activity: "Workflow is waiting for review.",
+                                    error: null,
+                                    finishedAt: null,
+                                  },
+                                  status: "waiting_for_review" as const,
+                                }
+                              : {
+                                  ...nextState,
+                                  finalCostCredits: null,
+                                  runtime: {
+                                    ...nextState.runtime,
+                                    activity: `Lane ${executionLaneFilter.laneIndex + 1} reached review. Waiting for remaining lanes...`,
+                                    finishedAt: null,
+                                  },
+                                  status: "running" as const,
+                                };
+                            const runWithRevision = withProjectDocumentRevision(
+                              settledRun,
+                              settledRun.projectDocumentRevision,
+                            );
+                            const credits = isComplete
+                              ? yield* settleRunCost({
+                                  reason:
+                                    "Workflow execution paused for human review.",
+                                  run: runWithRevision,
+                                  userId,
+                                })
+                              : yield* workflowCreditsService.getRunSummary({
+                                  runId,
+                                  userId,
+                                });
+
+                            return {
+                              result: null,
+                              run: {
+                                ...runWithRevision,
+                                credits,
+                              },
+                            };
+                          }),
+                      })
+                      .pipe(Effect.map(({ run }) => run));
+                  }
+
+                  const reviewLaneFilter = request.reviewLaneFilter;
+                  if (reviewLaneFilter) {
+                    return yield* workflowRunStore
+                      .updateRunWith({
+                        runId,
+                        userId,
+                        update: (currentRun) =>
+                          Effect.gen(function* () {
+                            if (currentRun.status !== "waiting_for_review") {
+                              return {
+                                result: null,
+                                run: currentRun,
+                              };
+                            }
+
+                            const nextState = yield* Effect.try({
+                              try: () =>
+                                mergeLaneScopedExecutionState({
+                                  accruedCostCredits:
+                                    currentRun.accruedCostCredits +
+                                    getFilteredContinuationCostDelta(
+                                      state,
+                                      request,
+                                    ),
+                                  currentRun,
+                                  laneIndex: reviewLaneFilter.laneIndex,
+                                  state,
+                                }),
+                              catch: toPersistenceError,
+                            });
+                            const credits = yield* settleRunCost({
+                              reason:
+                                "Workflow execution paused for human review.",
+                              run: nextState,
+                              userId,
+                            });
+                            const documentRevision = yield* persistRunArtifacts(
+                              nextState,
+                              userId,
+                              reviewLaneFilter.laneIndex,
+                            );
+
+                            return {
+                              result: null,
+                              run: {
+                                ...withProjectDocumentRevision(
+                                  nextState,
+                                  documentRevision,
+                                ),
+                                credits,
+                              },
+                            };
+                          }),
+                      })
+                      .pipe(Effect.map(({ run }) => run));
+                  }
+
+                  const nextState = state;
+                  const credits = yield* settleRunCost({
+                    reason: "Workflow execution paused for human review.",
+                    run: nextState,
                     userId,
-                  })
-                  .pipe(
-                    Effect.catchAll(() => Effect.succeed(currentRun.credits)),
+                  });
+                  const documentRevision = yield* persistRunArtifacts(
+                    nextState,
+                    userId,
                   );
-                const nextRun = {
-                  ...currentRun,
-                  credits,
-                };
+                  return yield* workflowRunStore.updateRun({
+                    ...withProjectDocumentRevision(nextState, documentRevision),
+                    credits,
+                  });
+                }
+              }),
+            ),
+            Effect.catchAll((error) =>
+              Effect.gen(function* () {
+                const currentRun = yield* workflowRunStore.getRun({
+                  runId,
+                  userId,
+                });
 
-                return yield* workflowRunStore
-                  .updateRun(nextRun)
-                  .pipe(Effect.catchAll(() => Effect.succeed(nextRun)));
-              }
-
-              const settleFailureCost =
-                request.reviewLaneFilter || request.executionLaneFilter
-                  ? settleRunCost({
-                      reason: getErrorMessage(error),
-                      run: currentRun,
-                      targetCost: currentRun.accruedCostCredits,
+                if (currentRun.status === "success") {
+                  const credits = yield* workflowCreditsService
+                    .getRunSummary({
+                      runId,
                       userId,
                     })
-                  : workflowCreditsService.refundExecution({
-                      executionId: runId,
-                      reason: getErrorMessage(error),
-                      userId,
-                    });
-              const credits = yield* settleFailureCost;
-              const failureMessage = getErrorMessage(error);
-              yield* workflowRunStore.updateRun({
-                ...currentRun,
-                activity:
-                  request.executionLaneFilter || request.reviewLaneFilter
-                    ? failureMessage
-                    : currentRun.activity,
-                credits,
-                runtime:
-                  request.executionLaneFilter || request.reviewLaneFilter
-                    ? {
-                        ...currentRun.runtime,
-                        activity: failureMessage,
-                        error: failureMessage,
-                      }
-                    : currentRun.runtime,
-                status:
-                  request.executionLaneFilter && currentRun.status === "queued"
-                    ? "running"
-                    : currentRun.status,
-              });
-              return yield* Effect.fail(error);
-            }),
-          ),
-        );
+                    .pipe(
+                      Effect.catchAll(() => Effect.succeed(currentRun.credits)),
+                    );
+                  const nextRun = {
+                    ...currentRun,
+                    credits,
+                  };
+
+                  return yield* workflowRunStore
+                    .updateRun(nextRun)
+                    .pipe(Effect.catchAll(() => Effect.succeed(nextRun)));
+                }
+
+                const settleFailureCost =
+                  request.reviewLaneFilter || request.executionLaneFilter
+                    ? settleRunCost({
+                        reason: getErrorMessage(error),
+                        run: currentRun,
+                        targetCost: currentRun.accruedCostCredits,
+                        userId,
+                      })
+                    : workflowCreditsService.refundExecution({
+                        executionId: runId,
+                        reason: getErrorMessage(error),
+                        userId,
+                      });
+                const credits = yield* settleFailureCost;
+                const failureMessage = getErrorMessage(error);
+                yield* workflowRunStore.updateRun({
+                  ...currentRun,
+                  activity:
+                    request.executionLaneFilter || request.reviewLaneFilter
+                      ? failureMessage
+                      : currentRun.activity,
+                  credits,
+                  runtime:
+                    request.executionLaneFilter || request.reviewLaneFilter
+                      ? {
+                          ...currentRun.runtime,
+                          activity: failureMessage,
+                          error: failureMessage,
+                        }
+                      : currentRun.runtime,
+                  status:
+                    request.executionLaneFilter &&
+                    currentRun.status === "queued"
+                      ? "running"
+                      : currentRun.status,
+                });
+                return yield* Effect.fail(error);
+              }),
+            ),
+          );
+        });
 
       return WorkflowExecutionService.of({
         approveReviewLane,

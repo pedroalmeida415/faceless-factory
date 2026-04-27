@@ -27,52 +27,6 @@ export function replaceTextOutputLane(
   return nextOutputLanes;
 }
 
-export function replaceMediaOutputLanes(
-  currentOutputLanes: readonly WorkflowAsset[][],
-  executionOutputLanes: readonly WorkflowAsset[][],
-  laneIndex: number | null | undefined,
-) {
-  return laneIndex === null || laneIndex === undefined
-    ? [...executionOutputLanes]
-    : replaceMediaOutputLane(
-        currentOutputLanes,
-        laneIndex,
-        executionOutputLanes[laneIndex] ?? [],
-      );
-}
-
-export function replaceTextOutputLanes(
-  currentOutputLanes: readonly string[],
-  executionOutputLanes: readonly string[],
-  laneIndex: number | null | undefined,
-) {
-  return laneIndex === null || laneIndex === undefined
-    ? [...executionOutputLanes]
-    : replaceTextOutputLane(
-        currentOutputLanes,
-        laneIndex,
-        executionOutputLanes[laneIndex] ?? "",
-      );
-}
-
-export function clearMediaOutputLane(
-  outputLanes: readonly WorkflowAsset[][],
-  laneIndex: number,
-) {
-  return laneIndex < outputLanes.length
-    ? replaceMediaOutputLane(outputLanes, laneIndex, [])
-    : [...outputLanes];
-}
-
-export function clearTextOutputLane(
-  outputLanes: readonly string[],
-  laneIndex: number,
-) {
-  return laneIndex < outputLanes.length
-    ? replaceTextOutputLane(outputLanes, laneIndex, "")
-    : [...outputLanes];
-}
-
 export function getRuntimeValueLane(
   value: RuntimeValue,
   laneIndex: number,

@@ -204,8 +204,6 @@ function toWorkflowNodeData(
         mode: node.mode,
         config: node.config,
         lastPrompt: node.lastPrompt,
-        responseText: node.responseText,
-        outputAssets: node.outputAssets,
         outputLanes: node.outputLanes,
         review: node.review,
         reviewEnabled: node.reviewEnabled,
@@ -220,8 +218,6 @@ function toWorkflowNodeData(
         mode: node.mode,
         config: node.config,
         lastPrompt: node.lastPrompt,
-        responseText: node.responseText,
-        outputAssets: node.outputAssets,
         outputLanes: node.outputLanes,
         review: node.review,
         reviewEnabled: node.reviewEnabled,
@@ -240,7 +236,6 @@ function toWorkflowNodeData(
         outputLanes: node.outputLanes,
         review: node.review,
         reviewEnabled: node.reviewEnabled,
-        responseText: node.responseText,
       };
   }
 }
@@ -398,8 +393,6 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       left.mode === right.mode &&
       left.config === right.config &&
       left.lastPrompt === right.lastPrompt &&
-      left.responseText === right.responseText &&
-      left.outputAssets === right.outputAssets &&
       left.outputLanes === right.outputLanes &&
       left.review === right.review &&
       left.reviewEnabled === right.reviewEnabled
@@ -413,8 +406,6 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       left.mode === right.mode &&
       left.config === right.config &&
       left.lastPrompt === right.lastPrompt &&
-      left.responseText === right.responseText &&
-      left.outputAssets === right.outputAssets &&
       left.outputLanes === right.outputLanes &&
       left.review === right.review &&
       left.reviewEnabled === right.reviewEnabled
@@ -430,8 +421,7 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
     left.lastSystemPrompt === right.lastSystemPrompt &&
     left.outputLanes === right.outputLanes &&
     left.review === right.review &&
-    left.reviewEnabled === right.reviewEnabled &&
-    left.responseText === right.responseText
+    left.reviewEnabled === right.reviewEnabled
   );
 }
 

@@ -12,6 +12,8 @@ import {
   isWorkflowRunLockingStatus,
   type WorkflowExecutionStatusResponse,
 } from "~/lib/workflow/execution/types";
+import { db } from "~/server/db";
+import { workflowRuns } from "~/server/db/schema";
 import { createRedisSubscriber, getRedisClient } from "~/server/redis";
 
 type WorkflowRunRecord = {
@@ -53,6 +55,52 @@ function cloneRun(run: WorkflowExecutionStatusResponse) {
       deserializeStoredWorkflowDocument(clonedRun.document) ??
       clonedRun.document,
   };
+}
+
+function parseRunDate(value: string | null | undefined) {
+  return value ? new Date(value) : null;
+}
+
+async function upsertWorkflowRunLifecycleRecord(record: WorkflowRunRecord) {
+  const run = record.run;
+  const now = new Date();
+
+  await db
+    .insert(workflowRuns)
+    .values({
+      accruedCostCredits: run.accruedCostCredits,
+      documentRevision:
+        run.projectDocumentRevision ??
+        run.requestContext?.documentRevision ??
+        null,
+      finalCostCredits: run.finalCostCredits,
+      finishedAt: parseRunDate(run.runtime.finishedAt),
+      id: run.runId,
+      ownerUserId: record.ownerUserId,
+      projectId: record.projectId,
+      requestContext: run.requestContext,
+      startedAt: parseRunDate(run.runtime.startedAt),
+      status: run.status,
+      targetNodeIds: run.targetNodeIds,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: workflowRuns.id,
+      set: {
+        accruedCostCredits: run.accruedCostCredits,
+        documentRevision:
+          run.projectDocumentRevision ??
+          run.requestContext?.documentRevision ??
+          null,
+        finalCostCredits: run.finalCostCredits,
+        finishedAt: parseRunDate(run.runtime.finishedAt),
+        requestContext: run.requestContext,
+        startedAt: parseRunDate(run.runtime.startedAt),
+        status: run.status,
+        targetNodeIds: run.targetNodeIds,
+        updatedAt: now,
+      },
+    });
 }
 
 async function getAuthorizedRunRecord(runId: string, userId: string) {
@@ -118,6 +166,7 @@ async function updateWorkflowRunRecord(run: WorkflowExecutionStatusResponse) {
     getWorkflowRunChannel(nextRunRecord.run.runId),
     JSON.stringify(nextRunRecord.run),
   );
+  await upsertWorkflowRunLifecycleRecord(nextRunRecord);
 
   if (!isWorkflowRunLockingStatus(nextRunRecord.run.status)) {
     await client.sRem(
@@ -234,8 +283,6 @@ export class WorkflowRunStore extends Context.Tag("WorkflowRunStore")<
     >;
   }
 >() {
-  static readonly functions = Effect.serviceFunctions(this);
-
   static readonly toRunStoreInfraError = (cause: unknown) => {
     if (cause instanceof WorkflowInfrastructureError) {
       return cause;
@@ -301,6 +348,7 @@ export class WorkflowRunStore extends Context.Tag("WorkflowRunStore")<
             getWorkflowProjectRunsKey(nextRunRecord.projectId),
             nextRunRecord.run.runId,
           );
+          await upsertWorkflowRunLifecycleRecord(nextRunRecord);
 
           return cloneRun(nextRunRecord.run);
         },

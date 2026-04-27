@@ -29,6 +29,7 @@ async function main() {
         const workflowExecutionService = yield* WorkflowExecutionService;
         if (job.data.type === "regenerate-review-lane") {
           yield* workflowExecutionService.executeReviewLaneRegeneration({
+            attempt: job.data.attempt,
             laneIndex: job.data.laneIndex,
             reviewNodeId: job.data.reviewNodeId,
             runId: job.data.runId,

@@ -4,14 +4,15 @@ import { and, desc, eq } from "drizzle-orm";
 
 import {
   createEmptyWorkflowDocument,
-  deserializeStoredWorkflowDocument,
-  type WorkflowDocument,
+  deserializeStoredWorkflowGraphDocument,
+  hydrateWorkflowGraphDocument,
+  toWorkflowGraphDocument,
+  type WorkflowGraphDocument,
 } from "~/lib/workflow/document";
 import {
   WorkflowAuthorizationError,
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
-import { mergeWorkflowExecutionDocument } from "~/lib/workflow/execution/result-merge";
 import { extractWorkflowExecutionSubgraph } from "~/lib/workflow/execution/subgraph";
 import {
   DEFAULT_WORKFLOW_PROJECT_NAME,
@@ -49,7 +50,7 @@ async function getWorkflowProjectRow(params: {
 }
 
 function toWorkflowProject(row: WorkflowProjectRow): WorkflowProject {
-  const document = deserializeStoredWorkflowDocument(row.document);
+  const document = deserializeStoredWorkflowGraphDocument(row.document);
 
   if (!document) {
     throw new WorkflowValidationError({
@@ -66,20 +67,28 @@ function toWorkflowProject(row: WorkflowProjectRow): WorkflowProject {
 }
 
 function assertLockedExecutionSliceUnchanged(params: {
-  currentDocument: WorkflowDocument;
+  currentDocument: WorkflowGraphDocument;
   lockedTargetNodeIds: string[];
-  nextDocument: WorkflowDocument;
+  nextDocument: WorkflowGraphDocument;
 }) {
   if (!params.lockedTargetNodeIds.length) {
     return;
   }
 
+  const currentDocument = hydrateWorkflowGraphDocument(params.currentDocument);
+  const nextDocument = hydrateWorkflowGraphDocument(params.nextDocument);
+  if (!currentDocument || !nextDocument) {
+    throw new WorkflowValidationError({
+      message: "Workflow project contains an invalid graph document.",
+    });
+  }
+
   const currentSlice = extractWorkflowExecutionSubgraph(
-    params.currentDocument,
+    currentDocument,
     params.lockedTargetNodeIds,
   );
   const nextSlice = extractWorkflowExecutionSubgraph(
-    params.nextDocument,
+    nextDocument,
     params.lockedTargetNodeIds,
   );
 
@@ -110,7 +119,7 @@ export async function getOrCreateWorkflowProject(
     const [createdProject] = await db
       .insert(workflowProjects)
       .values({
-        document: createEmptyWorkflowDocument(),
+        document: toWorkflowGraphDocument(createEmptyWorkflowDocument()),
         id: randomUUID(),
         lastOpenedAt: now,
         name: DEFAULT_WORKFLOW_PROJECT_NAME,
@@ -152,13 +161,24 @@ export async function getWorkflowProject(params: {
 }
 
 export async function saveWorkflowProjectDocument(params: {
-  document: WorkflowDocument;
+  document: WorkflowGraphDocument;
   documentRevision: number;
   lockedNodeIds?: string[];
   ownerUserId: string;
   projectId: string;
 }): Promise<WorkflowProjectSaveResponse> {
-  WorkflowGraphValidator.validateDocument(params.document);
+  const nextGraphDocument = deserializeStoredWorkflowGraphDocument(
+    params.document,
+  );
+  const nextDocument = nextGraphDocument
+    ? hydrateWorkflowGraphDocument(nextGraphDocument)
+    : null;
+  if (!nextGraphDocument || !nextDocument) {
+    throw new WorkflowValidationError({
+      message: "Workflow project contains an invalid graph document.",
+    });
+  }
+  WorkflowGraphValidator.validateDocument(nextDocument);
 
   const currentProject = await getWorkflowProject({
     ownerUserId: params.ownerUserId,
@@ -168,15 +188,15 @@ export async function saveWorkflowProjectDocument(params: {
   assertLockedExecutionSliceUnchanged({
     currentDocument: currentProject.document,
     lockedTargetNodeIds: params.lockedNodeIds ?? [],
-    nextDocument: params.document,
+    nextDocument,
   });
 
   if (
-    JSON.stringify(currentProject.document) === JSON.stringify(params.document)
+    JSON.stringify(currentProject.document) ===
+    JSON.stringify(nextGraphDocument)
   ) {
     return {
       documentRevision: currentProject.documentRevision,
-      projectId: currentProject.id,
     };
   }
 
@@ -189,7 +209,7 @@ export async function saveWorkflowProjectDocument(params: {
   const [updatedProject] = await db
     .update(workflowProjects)
     .set({
-      document: params.document,
+      document: nextGraphDocument,
       documentRevision: params.documentRevision + 1,
       updatedAt: new Date(),
     })
@@ -202,7 +222,6 @@ export async function saveWorkflowProjectDocument(params: {
     )
     .returning({
       documentRevision: workflowProjects.documentRevision,
-      projectId: workflowProjects.id,
     });
 
   if (!updatedProject) {
@@ -212,55 +231,4 @@ export async function saveWorkflowProjectDocument(params: {
   }
 
   return updatedProject;
-}
-
-export async function persistWorkflowExecutionResults(params: {
-  executionDocument: WorkflowDocument;
-  mergeExecutionLaneIndex?: number | null;
-  ownerUserId: string;
-  projectId: string;
-  targetNodeIds: string[];
-}): Promise<number> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const currentProject = await getWorkflowProject({
-      ownerUserId: params.ownerUserId,
-      projectId: params.projectId,
-    });
-    const nextDocument = mergeWorkflowExecutionDocument({
-      currentDocument: currentProject.document,
-      executionDocument: params.executionDocument,
-      mergeExecutionLaneIndex: params.mergeExecutionLaneIndex,
-      targetNodeIds: params.targetNodeIds,
-    });
-
-    WorkflowGraphValidator.validateDocument(nextDocument);
-
-    const [updatedProject] = await db
-      .update(workflowProjects)
-      .set({
-        document: nextDocument,
-        documentRevision: currentProject.documentRevision + 1,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(
-            workflowProjects.documentRevision,
-            currentProject.documentRevision,
-          ),
-          eq(workflowProjects.id, currentProject.id),
-          eq(workflowProjects.ownerUserId, params.ownerUserId),
-        ),
-      )
-      .returning({ documentRevision: workflowProjects.documentRevision });
-
-    if (updatedProject) {
-      return updatedProject.documentRevision;
-    }
-  }
-
-  throw new WorkflowValidationError({
-    message:
-      "Workflow project changed while persisting execution results. Try again.",
-  });
 }

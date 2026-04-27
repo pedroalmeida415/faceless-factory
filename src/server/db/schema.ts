@@ -7,10 +7,20 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-import type { WorkflowDocument } from "~/lib/workflow/document";
-import type { AssetKind, AssetSource } from "~/lib/workflow/types";
+import type { WorkflowGraphDocument } from "~/lib/workflow/document";
+import type {
+  WorkflowExecutionRequestContext,
+  WorkflowRunStatus,
+} from "~/lib/workflow/execution/types";
+import type {
+  AssetKind,
+  AssetSource,
+  LaneTransformValueType,
+  WorkflowReviewLaneStatus,
+} from "~/lib/workflow/types";
 
 type CreditLedgerEntryKind =
   | "debit"
@@ -91,7 +101,7 @@ export const workflowProjects = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    document: jsonb("document").$type<WorkflowDocument>().notNull(),
+    document: jsonb("document").$type<WorkflowGraphDocument>().notNull(),
     documentRevision: bigint("document_revision", { mode: "number" })
       .default(0)
       .notNull(),
@@ -114,6 +124,56 @@ export const workflowProjects = pgTable(
   }),
 );
 
+export const workflowRuns = pgTable(
+  "workflow_runs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => workflowProjects.id, { onDelete: "cascade" }),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    documentRevision: bigint("document_revision", { mode: "number" }),
+    status: text("status").$type<WorkflowRunStatus>().notNull(),
+    targetNodeIds: jsonb("target_node_ids")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
+    requestContext: jsonb("request_context")
+      .$type<WorkflowExecutionRequestContext | null>()
+      .default(null),
+    accruedCostCredits: bigint("accrued_cost_credits", {
+      mode: "number",
+    })
+      .default(0)
+      .notNull(),
+    finalCostCredits: bigint("final_cost_credits", { mode: "number" }),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => /* @__PURE__ */ new Date())
+      .notNull(),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+    updatedAt: timestamp("updated_at")
+      .$defaultFn(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => ({
+    projectCreatedAtIdx: index("workflow_runs_project_created_at_idx").on(
+      table.projectId,
+      table.createdAt,
+    ),
+    ownerUpdatedAtIdx: index("workflow_runs_owner_updated_at_idx").on(
+      table.ownerUserId,
+      table.updatedAt,
+    ),
+    statusUpdatedAtIdx: index("workflow_runs_status_updated_at_idx").on(
+      table.status,
+      table.updatedAt,
+    ),
+  }),
+);
+
 export const assets = pgTable(
   "assets",
   {
@@ -133,6 +193,13 @@ export const assets = pgTable(
     sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
     model: text("model"),
     externalUri: text("external_uri"),
+    workflowRunId: text("workflow_run_id"),
+    workflowNodeId: text("workflow_node_id"),
+    workflowLaneIndex: bigint("workflow_lane_index", { mode: "number" }),
+    workflowAttempt: bigint("workflow_attempt", { mode: "number" }),
+    workflowDocumentRevision: bigint("workflow_document_revision", {
+      mode: "number",
+    }),
     createdAt: timestamp("created_at")
       .$defaultFn(() => /* @__PURE__ */ new Date())
       .notNull(),
@@ -146,6 +213,145 @@ export const assets = pgTable(
     projectCreatedAtIdx: index("assets_project_created_at_idx").on(
       table.projectId,
       table.createdAt,
+    ),
+    workflowProvenanceIdx: index("assets_workflow_provenance_idx").on(
+      table.workflowRunId,
+      table.workflowNodeId,
+      table.workflowLaneIndex,
+      table.workflowAttempt,
+    ),
+  }),
+);
+
+export const workflowNodeLaneOutputs = pgTable(
+  "workflow_node_lane_outputs",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => workflowProjects.id, { onDelete: "cascade" }),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    laneIndex: bigint("lane_index", { mode: "number" }).notNull(),
+    attempt: bigint("attempt", { mode: "number" }).notNull(),
+    valueType: text("value_type")
+      .$type<Exclude<LaneTransformValueType, null>>()
+      .notNull(),
+    textValue: text("text_value"),
+    assetIds: jsonb("asset_ids").$type<string[]>().default([]).notNull(),
+    inputHash: text("input_hash").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    model: text("model"),
+    promptSnapshot: text("prompt_snapshot"),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => ({
+    laneAttemptUnique: uniqueIndex(
+      "workflow_node_lane_outputs_lane_attempt_unique",
+    ).on(table.runId, table.nodeId, table.laneIndex, table.attempt),
+    idempotencyKeyUnique: uniqueIndex(
+      "workflow_node_lane_outputs_idempotency_key_unique",
+    ).on(table.idempotencyKey),
+    projectRunIdx: index("workflow_node_lane_outputs_project_run_idx").on(
+      table.projectId,
+      table.runId,
+    ),
+    runNodeIdx: index("workflow_node_lane_outputs_run_node_idx").on(
+      table.runId,
+      table.nodeId,
+    ),
+    runNodeLaneIdx: index("workflow_node_lane_outputs_run_node_lane_idx").on(
+      table.runId,
+      table.nodeId,
+      table.laneIndex,
+    ),
+  }),
+);
+
+export const workflowReviewLanes = pgTable(
+  "workflow_review_lanes",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => workflowProjects.id, { onDelete: "cascade" }),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    laneIndex: bigint("lane_index", { mode: "number" }).notNull(),
+    attempt: bigint("attempt", { mode: "number" }).notNull(),
+    valueType: text("value_type")
+      .$type<Exclude<LaneTransformValueType, null>>()
+      .notNull(),
+    status: text("status").$type<WorkflowReviewLaneStatus>().notNull(),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => /* @__PURE__ */ new Date())
+      .notNull(),
+    updatedAt: timestamp("updated_at")
+      .$defaultFn(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => ({
+    laneAttemptUnique: uniqueIndex(
+      "workflow_review_lanes_lane_attempt_unique",
+    ).on(table.runId, table.nodeId, table.laneIndex, table.attempt),
+    runNodeStatusIdx: index("workflow_review_lanes_run_node_status_idx").on(
+      table.runId,
+      table.nodeId,
+      table.status,
+    ),
+    projectRunIdx: index("workflow_review_lanes_project_run_idx").on(
+      table.projectId,
+      table.runId,
+    ),
+  }),
+);
+
+export const workflowArtifactLineage = pgTable(
+  "workflow_artifact_lineage",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    sourceNodeId: text("source_node_id").notNull(),
+    sourceLaneIndex: bigint("source_lane_index", { mode: "number" }).notNull(),
+    sourceAttempt: bigint("source_attempt", { mode: "number" }).notNull(),
+    dependentNodeId: text("dependent_node_id").notNull(),
+    dependentLaneIndex: bigint("dependent_lane_index", {
+      mode: "number",
+    }).notNull(),
+    dependentAttempt: bigint("dependent_attempt", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => ({
+    dependencyUnique: uniqueIndex("workflow_artifact_lineage_unique").on(
+      table.runId,
+      table.sourceNodeId,
+      table.sourceLaneIndex,
+      table.sourceAttempt,
+      table.dependentNodeId,
+      table.dependentLaneIndex,
+      table.dependentAttempt,
+    ),
+    dependentIdx: index("workflow_artifact_lineage_dependent_idx").on(
+      table.runId,
+      table.dependentNodeId,
+      table.dependentLaneIndex,
+      table.dependentAttempt,
+    ),
+    sourceIdx: index("workflow_artifact_lineage_source_idx").on(
+      table.runId,
+      table.sourceNodeId,
+      table.sourceLaneIndex,
+      table.sourceAttempt,
     ),
   }),
 );
@@ -219,6 +425,7 @@ export const userRelations = relations(user, ({ many }) => ({
   session: many(session),
   subscriptions: many(subscription),
   workflowProjects: many(workflowProjects),
+  workflowRuns: many(workflowRuns),
 }));
 
 export const accountRelations = relations(account, ({ one }) => ({
@@ -233,12 +440,26 @@ export const workflowProjectsRelations = relations(
   workflowProjects,
   ({ many, one }) => ({
     assets: many(assets),
+    nodeLaneOutputs: many(workflowNodeLaneOutputs),
+    reviewLanes: many(workflowReviewLanes),
+    runs: many(workflowRuns),
     owner: one(user, {
       fields: [workflowProjects.ownerUserId],
       references: [user.id],
     }),
   }),
 );
+
+export const workflowRunsRelations = relations(workflowRuns, ({ one }) => ({
+  owner: one(user, {
+    fields: [workflowRuns.ownerUserId],
+    references: [user.id],
+  }),
+  project: one(workflowProjects, {
+    fields: [workflowRuns.projectId],
+    references: [workflowProjects.id],
+  }),
+}));
 
 export const assetsRelations = relations(assets, ({ one }) => ({
   owner: one(user, {
@@ -250,6 +471,39 @@ export const assetsRelations = relations(assets, ({ one }) => ({
     references: [workflowProjects.id],
   }),
 }));
+
+export const workflowNodeLaneOutputsRelations = relations(
+  workflowNodeLaneOutputs,
+  ({ one }) => ({
+    owner: one(user, {
+      fields: [workflowNodeLaneOutputs.ownerUserId],
+      references: [user.id],
+    }),
+    project: one(workflowProjects, {
+      fields: [workflowNodeLaneOutputs.projectId],
+      references: [workflowProjects.id],
+    }),
+  }),
+);
+
+export const workflowReviewLanesRelations = relations(
+  workflowReviewLanes,
+  ({ one }) => ({
+    owner: one(user, {
+      fields: [workflowReviewLanes.ownerUserId],
+      references: [user.id],
+    }),
+    project: one(workflowProjects, {
+      fields: [workflowReviewLanes.projectId],
+      references: [workflowProjects.id],
+    }),
+  }),
+);
+
+export const workflowArtifactLineageRelations = relations(
+  workflowArtifactLineage,
+  () => ({}),
+);
 
 export const creditLedgerEntriesRelations = relations(
   creditLedgerEntries,

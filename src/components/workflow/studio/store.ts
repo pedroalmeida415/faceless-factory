@@ -11,13 +11,14 @@ import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 
 import {
+  hydrateWorkflowGraphDocument,
+  toWorkflowGraphDocument,
   updateWorkflowDocumentNode,
   type WorkflowDocument,
   type WorkflowDocumentNode,
   type WorkflowPosition,
 } from "~/lib/workflow/document";
 import { getErrorMessage } from "~/lib/workflow/errors";
-import { mergeWorkflowExecutionDocument } from "~/lib/workflow/execution/result-merge";
 import { collectWorkflowExecutionNodeIds } from "~/lib/workflow/execution/subgraph";
 import type {
   WorkflowCreditsSummary,
@@ -121,7 +122,7 @@ function createHistoryState(): WorkflowHistoryState {
 }
 
 function serializeWorkflowDocument(document: WorkflowDocument) {
-  return JSON.stringify(document);
+  return JSON.stringify(toWorkflowGraphDocument(document));
 }
 
 function hasDocumentChanged(
@@ -136,7 +137,13 @@ function hasDocumentChanged(
 }
 
 function cloneWorkflowDocument(document: WorkflowDocument): WorkflowDocument {
-  return JSON.parse(serializeWorkflowDocument(document)) as WorkflowDocument;
+  const cloned = hydrateWorkflowGraphDocument(
+    JSON.parse(serializeWorkflowDocument(document)),
+  );
+  if (!cloned) {
+    throw new Error("Workflow document could not be cloned.");
+  }
+  return cloned;
 }
 
 function createHistoryEntry(
@@ -374,11 +381,54 @@ function mergeExecutionTargetResults(
   currentDocument: WorkflowDocument,
   executionState: WorkflowExecutionStatusResponse,
 ) {
-  return mergeWorkflowExecutionDocument({
-    currentDocument,
-    executionDocument: executionState.document,
-    targetNodeIds: executionState.targetNodeIds,
-  });
+  const projectedNodeById = new Map(
+    executionState.document.nodes.map((node) => [node.id, node]),
+  );
+
+  return {
+    ...currentDocument,
+    nodes: currentDocument.nodes.map((node) => {
+      const projectedNode = projectedNodeById.get(node.id);
+      if (
+        node.kind === "imageGenerator" &&
+        projectedNode?.kind === "imageGenerator"
+      ) {
+        return {
+          ...node,
+          lastPrompt: projectedNode.lastPrompt,
+          outputLanes: projectedNode.outputLanes,
+          review: projectedNode.review,
+        };
+      }
+
+      if (
+        node.kind === "videoGenerator" &&
+        projectedNode?.kind === "videoGenerator"
+      ) {
+        return {
+          ...node,
+          lastPrompt: projectedNode.lastPrompt,
+          outputLanes: projectedNode.outputLanes,
+          review: projectedNode.review,
+        };
+      }
+
+      if (
+        node.kind === "llmGenerator" &&
+        projectedNode?.kind === "llmGenerator"
+      ) {
+        return {
+          ...node,
+          lastPrompt: projectedNode.lastPrompt,
+          lastSystemPrompt: projectedNode.lastSystemPrompt,
+          outputLanes: projectedNode.outputLanes,
+          review: projectedNode.review,
+        };
+      }
+
+      return node;
+    }),
+  } satisfies WorkflowDocument;
 }
 
 function mergeExecutionRuntimeState(
@@ -535,8 +585,14 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     hydrate: (project) => {
       set((state) => {
         try {
+          const document = hydrateWorkflowGraphDocument(project.document);
+          if (!document) {
+            throw new Error(
+              "Workflow project contains an invalid graph document.",
+            );
+          }
           const nextSnapshot = WorkflowEngine.hydrate(
-            project.document,
+            document,
             DEFAULT_WORKFLOW_ACTIVITY,
           );
 
@@ -1313,7 +1369,7 @@ export function useWorkflowStudioPersistence(project: WorkflowProject) {
         }
 
         return {
-          document: state.document,
+          document: toWorkflowGraphDocument(state.document),
           documentRevision: state.documentRevision,
           projectId: state.projectId,
         };

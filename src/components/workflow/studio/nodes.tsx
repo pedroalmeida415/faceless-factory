@@ -1289,7 +1289,7 @@ const ImageGeneratorNode = memo(function ImageGeneratorNode({
         </NodeNotice>
       ) : null}
 
-      <OutputGallery assets={data.outputAssets} />
+      <OutputGallery assets={data.outputLanes.flat()} />
 
       <GeneratorReviewPanel
         nodeId={id}
@@ -1367,7 +1367,7 @@ const VideoGeneratorNode = memo(function VideoGeneratorNode({
         </NodeNotice>
       ) : null}
 
-      <OutputGallery assets={data.outputAssets} />
+      <OutputGallery assets={data.outputLanes.flat()} />
 
       <GeneratorReviewPanel
         nodeId={id}
@@ -1410,7 +1410,9 @@ const LlmGeneratorNode = memo(function LlmGeneratorNode({
       output={{ id: "text", label: "Text", color: "#f59e0b" }}
       selected={selected}
     >
-      <GeneratedTextPreview text={data.responseText} />
+      <GeneratedTextPreview
+        text={data.outputLanes.filter(Boolean).join("\n\n") || null}
+      />
 
       <GeneratorReviewPanel
         nodeId={id}

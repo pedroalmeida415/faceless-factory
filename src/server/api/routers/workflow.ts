@@ -4,31 +4,27 @@ import { z } from "zod";
 import { ServerRuntime } from "~/effect/server/runtime";
 import {
   deserializeStoredWorkflowDocument,
+  deserializeStoredWorkflowGraphDocument,
   type WorkflowDocument,
+  type WorkflowGraphDocument,
 } from "~/lib/workflow/document";
+import { buildWorkflowRunProjection } from "~/lib/workflow/execution/artifact-projection";
 import type {
   StartWorkflowExecutionRequest,
   WorkflowExecutionStatusResponse,
   WorkflowRunStatus,
 } from "~/lib/workflow/execution/types";
-import {
-  IMAGE_ASPECT_RATIOS,
-  IMAGE_MODEL_IDS,
-  LLM_MODEL_IDS,
-  LLM_THINKING_LEVELS,
-  VIDEO_ASPECT_RATIOS,
-  VIDEO_DURATIONS,
-  VIDEO_MODEL_IDS,
-  VIDEO_RESOLUTIONS,
-} from "~/lib/workflow/types";
 import { toTRPCError } from "~/server/api/errors";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
+import { WorkflowArtifactStore } from "~/server/workflow/artifact-store";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
 import { WorkflowExecutionService } from "~/server/workflow/execution-service";
-import { saveWorkflowProjectDocument } from "~/server/workflow/projects";
+import {
+  getWorkflowProject,
+  saveWorkflowProjectDocument,
+} from "~/server/workflow/projects";
 import { WorkflowRunStore } from "~/server/workflow/run-store";
 import { WorkflowStorage } from "~/server/workflow/storage";
-import { VertexAi } from "~/server/workflow/vertex";
 
 const workflowAssetSchema = z.object({
   id: z.string(),
@@ -44,13 +40,6 @@ const workflowAssetSchema = z.object({
   model: z.string().nullable(),
 });
 
-const videoDurationSchema = z.custom<(typeof VIDEO_DURATIONS)[number]>(
-  (value) =>
-    typeof value === "number" &&
-    VIDEO_DURATIONS.includes(value as (typeof VIDEO_DURATIONS)[number]),
-  "Invalid video duration.",
-);
-
 const workflowDocumentSchema = z
   .custom<WorkflowDocument>(
     (value) => Boolean(deserializeStoredWorkflowDocument(value)),
@@ -60,6 +49,18 @@ const workflowDocumentSchema = z
     (value) =>
       deserializeStoredWorkflowDocument(value) as NonNullable<
         ReturnType<typeof deserializeStoredWorkflowDocument>
+      >,
+  );
+
+const workflowGraphDocumentSchema = z
+  .custom<WorkflowGraphDocument>(
+    (value) => Boolean(deserializeStoredWorkflowGraphDocument(value)),
+    "Invalid workflow graph document.",
+  )
+  .transform(
+    (value) =>
+      deserializeStoredWorkflowGraphDocument(value) as NonNullable<
+        ReturnType<typeof deserializeStoredWorkflowGraphDocument>
       >,
   );
 
@@ -102,13 +103,48 @@ const workflowReviewLaneDecisionSchema = z.object({
 });
 
 const saveWorkflowProjectSchema = z.object({
-  document: workflowDocumentSchema,
+  document: workflowGraphDocumentSchema,
   documentRevision: z.number().int().nonnegative(),
   projectId: z.string().min(1),
 });
 
 function isTerminalStatus(status: WorkflowRunStatus) {
   return status === "success" || status === "error";
+}
+
+function projectExecutionState(
+  run: WorkflowExecutionStatusResponse,
+  userId: string,
+) {
+  return ServerRuntime.runPromise(
+    Effect.gen(function* () {
+      const workflowArtifactStore = yield* WorkflowArtifactStore;
+      const artifacts = yield* workflowArtifactStore.getRunArtifacts({
+        ownerUserId: userId,
+        runId: run.runId,
+      });
+      const projectId = run.requestContext?.projectId?.trim();
+      const project = projectId
+        ? yield* Effect.tryPromise({
+            try: () =>
+              getWorkflowProject({
+                ownerUserId: userId,
+                projectId,
+              }),
+            catch: (cause) => cause,
+          }).pipe(Effect.catchAll(() => Effect.succeed(null)))
+        : null;
+      const document = project?.document ?? run.document;
+
+      return {
+        ...run,
+        document: buildWorkflowRunProjection({
+          artifacts,
+          document,
+        }),
+      } satisfies WorkflowExecutionStatusResponse;
+    }),
+  );
 }
 
 export const workflowRouter = createTRPCRouter({
@@ -198,18 +234,26 @@ export const workflowRouter = createTRPCRouter({
       });
 
       try {
-        yield subscription.initialRun;
+        const initialRun = await projectExecutionState(
+          subscription.initialRun,
+          ctx.session.user.id,
+        );
+        yield initialRun;
 
-        if (isTerminalStatus(subscription.initialRun.status)) {
+        if (isTerminalStatus(initialRun.status)) {
           return;
         }
 
         while (!signal?.aborted) {
           const nextRun = pendingRuns.shift();
           if (nextRun) {
-            yield nextRun;
+            const projectedRun = await projectExecutionState(
+              nextRun,
+              ctx.session.user.id,
+            );
+            yield projectedRun;
 
-            if (isTerminalStatus(nextRun.status)) {
+            if (isTerminalStatus(projectedRun.status)) {
               return;
             }
 
@@ -285,82 +329,4 @@ export const workflowRouter = createTRPCRouter({
       throw toTRPCError(error);
     }),
   ),
-
-  generateImage: protectedProcedure
-    .input(
-      z.object({
-        model: z.enum(IMAGE_MODEL_IDS),
-        mode: z.string().nullable(),
-        prompt: z.string(),
-        referenceImages: z.array(workflowAssetSchema).optional(),
-        aspectRatio: z.enum(IMAGE_ASPECT_RATIOS).optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) =>
-      ServerRuntime.runPromise(
-        Effect.gen(function* () {
-          const vertexAi = yield* VertexAi;
-          return yield* vertexAi.generateImagesWithNanoBananaPro({
-            ownerUserId: ctx.session.user.id,
-            request: input,
-          });
-        }),
-      ).catch((error) => {
-        throw toTRPCError(error);
-      }),
-    ),
-
-  generateVideo: protectedProcedure
-    .input(
-      z.object({
-        model: z.enum(VIDEO_MODEL_IDS),
-        mode: z.string().nullable(),
-        prompt: z.string(),
-        referenceImages: z.array(workflowAssetSchema).optional(),
-        aspectRatio: z.enum(VIDEO_ASPECT_RATIOS).optional(),
-        durationSeconds: videoDurationSchema.optional(),
-        generateAudio: z.boolean().optional(),
-        resolution: z.enum(VIDEO_RESOLUTIONS).optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) =>
-      ServerRuntime.runPromise(
-        Effect.gen(function* () {
-          const vertexAi = yield* VertexAi;
-          return yield* vertexAi.generateVideosWithVeo31({
-            ownerUserId: ctx.session.user.id,
-            request: input,
-          });
-        }),
-      ).catch((error) => {
-        throw toTRPCError(error);
-      }),
-    ),
-
-  generateLlm: protectedProcedure
-    .input(
-      z.object({
-        model: z.enum(LLM_MODEL_IDS),
-        mode: z.string().nullable(),
-        prompt: z.string(),
-        systemPrompt: z.string().nullable().optional(),
-        referenceImages: z.array(workflowAssetSchema).optional(),
-        temperature: z.number().min(0).max(2).optional(),
-        thinkingLevel: z.enum(LLM_THINKING_LEVELS).optional(),
-        maxOutputTokens: z.number().int().positive().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) =>
-      ServerRuntime.runPromise(
-        Effect.gen(function* () {
-          const vertexAi = yield* VertexAi;
-          return yield* vertexAi.generateTextWithGemini3Flash({
-            ownerUserId: ctx.session.user.id,
-            request: input,
-          });
-        }),
-      ).catch((error) => {
-        throw toTRPCError(error);
-      }),
-    ),
 });

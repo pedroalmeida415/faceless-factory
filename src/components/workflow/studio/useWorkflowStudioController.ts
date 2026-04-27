@@ -2,11 +2,9 @@
 
 import { useCallback, useMemo } from "react";
 
-import {
-  runNode as runWorkflowNode,
-  uploadFilesToNode as uploadWorkflowFilesToNode,
-} from "~/components/workflow/studio/runner";
 import { ClientRuntime } from "~/effect/client/runtime";
+import { WorkflowAssetService } from "~/lib/workflow/services/workflow-asset-service";
+import { WorkflowExecutionService } from "~/lib/workflow/services/workflow-execution-service";
 import { api } from "~/trpc/react";
 import type { StudioContextValue } from "./context";
 import {
@@ -84,7 +82,9 @@ export function useWorkflowStudioController() {
 
   const uploadFilesToNode = useCallback(
     async (nodeId: string, files: File[]) => {
-      await ClientRuntime.runPromise(uploadWorkflowFilesToNode(nodeId, files));
+      await ClientRuntime.runPromise(
+        WorkflowAssetService.uploadFilesToNode(nodeId, files),
+      );
 
       if (projectId) {
         await utils.workflow.listAssets.invalidate({ projectId });
@@ -94,7 +94,9 @@ export function useWorkflowStudioController() {
   );
 
   const runNode = useCallback(async (nodeId: string) => {
-    await ClientRuntime.runPromise(runWorkflowNode(nodeId));
+    await ClientRuntime.runPromise(
+      WorkflowExecutionService.run({ type: "node", nodeId }),
+    );
   }, []);
 
   const contextValue = useMemo<StudioContextValue>(

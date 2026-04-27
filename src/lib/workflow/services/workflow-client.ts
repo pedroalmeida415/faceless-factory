@@ -12,15 +12,7 @@ import type {
   WorkflowProjectSaveRequest,
   WorkflowProjectSaveResponse,
 } from "~/lib/workflow/project";
-import type {
-  GenerateImageRequest,
-  GenerateImageResponse,
-  GenerateLlmRequest,
-  GenerateLlmResponse,
-  GenerateVideoRequest,
-  GenerateVideoResponse,
-  UploadAssetResponse,
-} from "~/lib/workflow/types";
+import type { UploadAssetResponse } from "~/lib/workflow/types";
 import { getTrpcClient } from "~/trpc/react";
 
 const trpcClient = getTrpcClient();
@@ -121,39 +113,6 @@ export const WorkflowClientService = {
           cause,
         }),
     }) as Effect.Effect<WorkflowExecutionStatusResponse, WorkflowRequestError>;
-  },
-
-  generateImage(input: GenerateImageRequest) {
-    return Effect.tryPromise({
-      try: () => trpcClient.workflow.generateImage.mutate(input),
-      catch: (cause) =>
-        new WorkflowRequestError({
-          message: getErrorMessage(cause),
-          cause,
-        }),
-    }) as Effect.Effect<GenerateImageResponse, WorkflowRequestError>;
-  },
-
-  generateLlm(input: GenerateLlmRequest) {
-    return Effect.tryPromise({
-      try: () => trpcClient.workflow.generateLlm.mutate(input),
-      catch: (cause) =>
-        new WorkflowRequestError({
-          message: getErrorMessage(cause),
-          cause,
-        }),
-    }) as Effect.Effect<GenerateLlmResponse, WorkflowRequestError>;
-  },
-
-  generateVideo(input: GenerateVideoRequest) {
-    return Effect.tryPromise({
-      try: () => trpcClient.workflow.generateVideo.mutate(input),
-      catch: (cause) =>
-        new WorkflowRequestError({
-          message: getErrorMessage(cause),
-          cause,
-        }),
-    }) as Effect.Effect<GenerateVideoResponse, WorkflowRequestError>;
   },
 
   uploadAsset(file: File, projectId: string) {

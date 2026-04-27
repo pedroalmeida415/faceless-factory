@@ -313,8 +313,6 @@ export class VertexAi extends Context.Tag("VertexAi")<
     >;
   }
 >() {
-  static readonly functions = Effect.serviceFunctions(this);
-
   static readonly Live = Layer.effect(
     this,
     Effect.gen(function* () {
@@ -626,7 +624,6 @@ export class VertexAi extends Context.Tag("VertexAi")<
 
           return {
             assets,
-            responseText: response.text || null,
             model,
           } satisfies GenerateImageResponse;
         });

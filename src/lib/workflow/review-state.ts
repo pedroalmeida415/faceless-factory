@@ -2,11 +2,6 @@ import type { WorkflowDocumentNode } from "~/lib/workflow/document";
 import type { RuntimeValue } from "~/lib/workflow/lanes";
 import type { WorkflowAsset, WorkflowReviewLane } from "~/lib/workflow/types";
 
-export type StaleReviewLane = {
-  generatorNodeId: string;
-  laneIndex: number;
-};
-
 type ReviewableGeneratorNode = Extract<
   WorkflowDocumentNode,
   { kind: "imageGenerator" | "videoGenerator" | "llmGenerator" }
@@ -101,25 +96,6 @@ export function syncGeneratorReviewForOutput(
       ? node.review.lanes.map((lane) => [lane.laneIndex, lane])
       : [],
   );
-  const staleLaneIndices = Array.from(
-    new Set([
-      ...params.inputValue.lanes.flatMap((_, laneIndex) =>
-        isSameReviewLaneValue(
-          params.inputValue,
-          laneIndex,
-          existingByIndex.get(laneIndex),
-        )
-          ? []
-          : [laneIndex],
-      ),
-      ...node.review.lanes.flatMap((lane) =>
-        lane.laneIndex >= params.inputValue.lanes.length
-          ? [lane.laneIndex]
-          : [],
-      ),
-    ]),
-  );
-
   return {
     node: {
       ...node,
@@ -136,16 +112,6 @@ export function syncGeneratorReviewForOutput(
         valueType: params.inputValue.type,
       },
     },
-    staleLaneIndices,
-  };
-}
-
-export function createEmptyWorkflowReviewState() {
-  return {
-    lanes: [],
-    sourceNodeId: null,
-    updatedAt: null,
-    valueType: null,
   };
 }
 

@@ -33,12 +33,10 @@ import type {
   WorkflowGeneratorResult,
   WorkflowLlmResult,
   WorkflowNodeKind,
-  WorkflowReviewLane,
   WorkflowReviewState,
 } from "~/lib/workflow/types";
 
 export const WORKFLOW_DOCUMENT_VERSION = 9;
-export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v9";
 export const WORKFLOW_GRID_STEP = 5;
 
 export type WorkflowPosition = {
@@ -133,6 +131,38 @@ export type WorkflowDocumentNode =
   | VideoGeneratorWorkflowNode
   | LlmGeneratorWorkflowNode;
 
+type ImageGeneratorGraphWorkflowNode = WorkflowDocumentNodeBase &
+  ImageGeneratorSettings &
+  Pick<GeneratorReviewFields, "reviewEnabled"> & {
+    kind: "imageGenerator";
+  };
+
+type VideoGeneratorGraphWorkflowNode = WorkflowDocumentNodeBase &
+  VideoGeneratorSettings &
+  Pick<GeneratorReviewFields, "reviewEnabled"> & {
+    kind: "videoGenerator";
+  };
+
+type LlmGeneratorGraphWorkflowNode = WorkflowDocumentNodeBase &
+  LlmGeneratorSettings &
+  Pick<GeneratorReviewFields, "reviewEnabled"> & {
+    kind: "llmGenerator";
+  };
+
+type WorkflowGraphDocumentNode =
+  | PromptWorkflowNode
+  | ListWorkflowNode
+  | AssetWorkflowNode
+  | LaneReorderWorkflowNode
+  | LaneSelectWorkflowNode
+  | LaneSplitWorkflowNode
+  | LaneMergeWorkflowNode
+  | LaneZipAlignWorkflowNode
+  | LaneAccumulatorWorkflowNode
+  | ImageGeneratorGraphWorkflowNode
+  | VideoGeneratorGraphWorkflowNode
+  | LlmGeneratorGraphWorkflowNode;
+
 export type WorkflowDocumentEdge = {
   id: string;
   source: string;
@@ -144,6 +174,12 @@ export type WorkflowDocumentEdge = {
 export type WorkflowDocument = {
   version: typeof WORKFLOW_DOCUMENT_VERSION;
   nodes: WorkflowDocumentNode[];
+  edges: WorkflowDocumentEdge[];
+};
+
+export type WorkflowGraphDocument = {
+  version: typeof WORKFLOW_DOCUMENT_VERSION;
+  nodes: WorkflowGraphDocumentNode[];
   edges: WorkflowDocumentEdge[];
 };
 
@@ -177,8 +213,6 @@ export function snapWorkflowPositionToGrid(
 function createWorkflowGeneratorResult(): WorkflowGeneratorResult {
   return {
     lastPrompt: "",
-    responseText: null,
-    outputAssets: [],
     outputLanes: [],
   };
 }
@@ -188,7 +222,6 @@ function createWorkflowLlmResult(): WorkflowLlmResult {
     lastPrompt: "",
     lastSystemPrompt: "",
     outputLanes: [],
-    responseText: null,
   };
 }
 
@@ -420,80 +453,11 @@ function asWorkflowAssets(value: unknown) {
     .filter((asset): asset is WorkflowAsset => Boolean(asset));
 }
 
-function asWorkflowAssetLanes(value: unknown) {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return Array.from({ length: value.length }, (_, index) =>
-    asWorkflowAssets(value[index]),
-  );
-}
-
-function asWorkflowTextLanes(value: unknown) {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return Array.from({ length: value.length }, (_, index) => {
-    const entry = value[index];
-    const text = isString(entry) ? entry.trim() : "";
-    return text;
-  });
-}
-
-function asWorkflowReviewLane(value: unknown): WorkflowReviewLane | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-
-  const laneIndex = isNumber(value.laneIndex)
-    ? Math.max(0, Math.trunc(value.laneIndex))
-    : null;
-  if (laneIndex === null) {
-    return null;
-  }
-
-  const status =
-    value.status === "approved" ||
-    value.status === "rejected" ||
-    value.status === "regenerating"
-      ? value.status
-      : "pending";
-
-  return {
-    assets: asWorkflowAssets(value.assets),
-    attempt: isNumber(value.attempt)
-      ? Math.max(0, Math.trunc(value.attempt))
-      : 0,
-    laneIndex,
-    status,
-    text: asNullableString(value.text, null),
-  };
-}
-
-function normalizeWorkflowReviewState(value: unknown): WorkflowReviewState {
-  if (!isRecord(value)) {
-    return createWorkflowReviewState();
-  }
-
-  return {
-    lanes: Array.isArray(value.lanes)
-      ? value.lanes
-          .map((lane) => asWorkflowReviewLane(lane))
-          .filter((lane): lane is WorkflowReviewLane => Boolean(lane))
-      : [],
-    sourceNodeId: asNullableString(value.sourceNodeId, null),
-    updatedAt: asNullableString(value.updatedAt, null),
-    valueType: asLaneReorderValueType(value.valueType),
-  };
-}
-
 function normalizeGeneratorReviewFields(
   value: Record<string, unknown>,
 ): GeneratorReviewFields {
   return {
-    review: normalizeWorkflowReviewState(value.review),
+    review: createWorkflowReviewState(),
     reviewEnabled: value.reviewEnabled === true,
   };
 }
@@ -524,20 +488,6 @@ function asLanePermutation(value: unknown) {
         Number.isInteger(entry) && entry >= 0 ? [entry as number] : [],
       )
     : [];
-}
-
-function normalizeWorkflowGeneratorResult(
-  value: Record<string, unknown>,
-  fallback: WorkflowGeneratorResult,
-): WorkflowGeneratorResult {
-  const outputLanes = asWorkflowAssetLanes(value.outputLanes);
-
-  return {
-    lastPrompt: asString(value.lastPrompt, fallback.lastPrompt),
-    responseText: asNullableString(value.responseText, fallback.responseText),
-    outputAssets: outputLanes.flat(),
-    outputLanes,
-  };
 }
 
 function asListItems(value: unknown) {
@@ -761,7 +711,6 @@ function normalizeWorkflowNode(
         ...settings,
         label: asString(value.label, baseNode.label),
         ...normalizeGeneratorReviewFields(value),
-        ...normalizeWorkflowGeneratorResult(value, baseNode),
       };
     }
     case "videoGenerator": {
@@ -783,7 +732,6 @@ function normalizeWorkflowNode(
         ...settings,
         label: asString(value.label, baseNode.label),
         ...normalizeGeneratorReviewFields(value),
-        ...normalizeWorkflowGeneratorResult(value, baseNode),
       };
     }
     case "llmGenerator": {
@@ -805,16 +753,6 @@ function normalizeWorkflowNode(
         ...settings,
         label: asString(value.label, baseNode.label),
         ...normalizeGeneratorReviewFields(value),
-        lastPrompt: asString(value.lastPrompt, baseNode.lastPrompt),
-        lastSystemPrompt: asString(
-          value.lastSystemPrompt,
-          baseNode.lastSystemPrompt,
-        ),
-        outputLanes: asWorkflowTextLanes(value.outputLanes),
-        responseText: asNullableString(
-          value.responseText,
-          baseNode.responseText,
-        ),
       };
     }
   }
@@ -880,6 +818,35 @@ export function updateWorkflowDocumentNode(
   } satisfies WorkflowDocument;
 }
 
+export function toWorkflowGraphDocument(
+  document: WorkflowDocument | WorkflowGraphDocument,
+): WorkflowGraphDocument {
+  return {
+    ...document,
+    nodes: document.nodes.map((node) => {
+      if (node.kind === "imageGenerator" || node.kind === "videoGenerator") {
+        const { lastPrompt, outputLanes, review, ...graphNode } = node as
+          | ImageGeneratorWorkflowNode
+          | VideoGeneratorWorkflowNode;
+        return graphNode;
+      }
+
+      if (node.kind === "llmGenerator") {
+        const {
+          lastPrompt,
+          lastSystemPrompt,
+          outputLanes,
+          review,
+          ...graphNode
+        } = node as LlmGeneratorWorkflowNode;
+        return graphNode;
+      }
+
+      return node;
+    }),
+  } satisfies WorkflowGraphDocument;
+}
+
 export function specializeWorkflowNodeForValueType(
   node: WorkflowDocumentNode,
   valueType: WorkflowValueType,
@@ -925,4 +892,13 @@ export function deserializeStoredWorkflowDocument(raw: unknown) {
   }
 
   return null;
+}
+
+export function deserializeStoredWorkflowGraphDocument(raw: unknown) {
+  const document = deserializeStoredWorkflowDocument(raw);
+  return document ? toWorkflowGraphDocument(document) : null;
+}
+
+export function hydrateWorkflowGraphDocument(document: WorkflowGraphDocument) {
+  return deserializeStoredWorkflowDocument(document);
 }

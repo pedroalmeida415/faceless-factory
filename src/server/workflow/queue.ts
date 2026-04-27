@@ -43,6 +43,7 @@ export function createWorkflowExecutionLaneJobId(params: {
 }
 
 export function createWorkflowReviewRegenerationJobId(params: {
+  attempt?: number | null;
   laneIndex: number;
   regenerationKey?: string | null;
   reviewNodeId: string;
@@ -53,6 +54,7 @@ export function createWorkflowReviewRegenerationJobId(params: {
     "regenerate",
     params.reviewNodeId,
     params.laneIndex,
+    params.attempt ?? "latest",
     params.regenerationKey ?? "pending",
   );
 }
@@ -65,6 +67,7 @@ export type WorkflowExecutionJobData =
       userId: string;
     }
   | {
+      attempt: number;
       laneIndex: number;
       reviewNodeId: string;
       runId: string;

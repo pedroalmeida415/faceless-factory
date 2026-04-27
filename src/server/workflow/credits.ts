@@ -129,8 +129,6 @@ export class WorkflowCreditsService extends Context.Tag(
     >;
   }
 >() {
-  static readonly functions = Effect.serviceFunctions(this);
-
   static readonly toCreditsInfraError = (cause: unknown) => {
     if (cause instanceof WorkflowInfrastructureError) {
       return cause;
