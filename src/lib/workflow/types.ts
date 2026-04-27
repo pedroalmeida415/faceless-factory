@@ -36,7 +36,12 @@ export const PROMPT_DISPLAY_MODES = [
 
 export type AssetKind = "image" | "video";
 export type AssetSource = "upload" | "generated";
-export type WorkflowNodeStatus = "idle" | "running" | "success" | "error";
+export type WorkflowNodeStatus =
+  | "idle"
+  | "running"
+  | "waiting"
+  | "success"
+  | "error";
 export type WorkflowNodeKind =
   | "list"
   | "prompt"
@@ -46,6 +51,7 @@ export type WorkflowNodeKind =
   | "laneSplit"
   | "laneMerge"
   | "laneZipAlign"
+  | "laneAccumulator"
   | "imageGenerator"
   | "videoGenerator"
   | "llmGenerator";
@@ -135,6 +141,36 @@ export type LaneZipAlignNodeFields = {
   valueType: LaneTransformValueType;
 };
 
+export type LaneAccumulatorNodeFields = {
+  valueType: LaneTransformValueType;
+};
+
+export type WorkflowReviewLaneStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "regenerating";
+
+export type WorkflowReviewLane = {
+  laneIndex: number;
+  status: WorkflowReviewLaneStatus;
+  attempt: number;
+  assets: WorkflowAsset[];
+  text: string | null;
+};
+
+export type WorkflowReviewState = {
+  sourceNodeId: string | null;
+  updatedAt: string | null;
+  valueType: LaneTransformValueType;
+  lanes: WorkflowReviewLane[];
+};
+
+export type GeneratorReviewFields = {
+  reviewEnabled: boolean;
+  review: WorkflowReviewState;
+};
+
 export type WorkflowGeneratorResult = {
   lastPrompt: string;
   responseText: string | null;
@@ -145,6 +181,7 @@ export type WorkflowGeneratorResult = {
 export type WorkflowLlmResult = {
   lastPrompt: string;
   lastSystemPrompt: string;
+  outputLanes: string[];
   responseText: string | null;
 };
 
@@ -210,20 +247,28 @@ export type LaneZipAlignNodeData = BaseNodeData &
     kind: "laneZipAlign";
   };
 
+export type LaneAccumulatorNodeData = BaseNodeData &
+  LaneAccumulatorNodeFields & {
+    kind: "laneAccumulator";
+  };
+
 export type ImageGeneratorNodeData = BaseNodeData &
   WorkflowGeneratorResult &
+  GeneratorReviewFields &
   ImageGeneratorSettings & {
     kind: "imageGenerator";
   };
 
 export type VideoGeneratorNodeData = BaseNodeData &
   WorkflowGeneratorResult &
+  GeneratorReviewFields &
   VideoGeneratorSettings & {
     kind: "videoGenerator";
   };
 
 export type LlmGeneratorNodeData = BaseNodeData &
   WorkflowLlmResult &
+  GeneratorReviewFields &
   LlmGeneratorSettings & {
     kind: "llmGenerator";
   };
@@ -237,6 +282,7 @@ export type WorkflowNodeData =
   | LaneSplitNodeData
   | LaneMergeNodeData
   | LaneZipAlignNodeData
+  | LaneAccumulatorNodeData
   | ImageGeneratorNodeData
   | VideoGeneratorNodeData
   | LlmGeneratorNodeData;
@@ -246,6 +292,7 @@ export type UploadAssetResponse = {
 };
 
 export type GenerateImageRequest = {
+  idempotencyKey?: string | null;
   model: ImageGeneratorModelId;
   mode: string | null;
   prompt: string;
@@ -260,6 +307,7 @@ export type GenerateImageResponse = {
 };
 
 export type GenerateVideoRequest = {
+  idempotencyKey?: string | null;
   model: VideoGeneratorModelId;
   mode: string | null;
   prompt: string;
@@ -278,6 +326,7 @@ export type GenerateVideoResponse = {
 };
 
 export type GenerateLlmRequest = {
+  idempotencyKey?: string | null;
   model: LlmGeneratorModelId;
   mode: string | null;
   prompt: string;

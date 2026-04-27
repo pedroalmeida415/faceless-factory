@@ -328,6 +328,7 @@ export const LlmGeneratorService = {
     result: {
       lastPrompt: string;
       lastSystemPrompt: string;
+      outputLanes: string[];
       responseText: string | null;
     },
   ): LlmGeneratorWorkflowNode {
@@ -335,6 +336,7 @@ export const LlmGeneratorService = {
       ...node,
       lastPrompt: result.lastPrompt,
       lastSystemPrompt: result.lastSystemPrompt,
+      outputLanes: result.outputLanes,
       responseText: result.responseText,
     };
   },
@@ -362,6 +364,7 @@ export const WorkflowNodeAssetService = {
           ...node,
           lastPrompt: "",
           lastSystemPrompt: "",
+          outputLanes: [],
           responseText: null,
         };
       default:

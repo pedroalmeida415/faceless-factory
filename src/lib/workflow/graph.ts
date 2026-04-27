@@ -6,6 +6,7 @@ import type {
   WorkflowDocumentEdge,
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
+import { getRuntimeValueLane } from "~/lib/workflow/execution/output-lanes";
 import {
   type GeneratorHandleDefinition,
   getImageGeneratorHandleDefinitions,
@@ -26,6 +27,8 @@ import { getLlmGeneratorHandleDefinitions } from "~/lib/workflow/llm-models";
 import {
   getLaneSplitOutputHandleId,
   getNodeOutputHandleId,
+  LANE_ACCUMULATOR_INPUT_HANDLE_ID,
+  LANE_ACCUMULATOR_OUTPUT_HANDLE_ID,
   LANE_REORDER_INPUT_HANDLE_ID,
   LANE_REORDER_OUTPUT_HANDLE_ID,
   LANE_TRANSFORM_INPUT_HANDLE_ID,
@@ -34,6 +37,10 @@ import {
   PROMPT_VARIABLE_PATTERN,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
+import {
+  getApprovedReviewLaneRuntimeValue,
+  getApprovedReviewRuntimeValue,
+} from "~/lib/workflow/review-state";
 import { isGeneratorNodeKind, type WorkflowAsset } from "~/lib/workflow/types";
 
 export type { MediaRuntimeValue, RuntimeValue, TextRuntimeValue };
@@ -427,6 +434,51 @@ export function getLaneTransformInputValue(
   );
 }
 
+function getSingleInputValue(
+  document: WorkflowDocument,
+  nodeId: string,
+  handleId: string,
+  path: ReadonlySet<string>,
+  nodeMap: NodeMap,
+  incomingByTarget: IncomingByTarget,
+): RuntimeValue | null {
+  const incomingEdges = getIncomingEdgesForHandle(
+    incomingByTarget,
+    nodeId,
+    handleId,
+  );
+  const edge = incomingEdges[0];
+  if (!edge || incomingEdges.length !== 1) {
+    return null;
+  }
+
+  return getWorkflowNodeRuntimeValue(
+    document,
+    edge.source,
+    new Set(path),
+    nodeMap,
+    incomingByTarget,
+    edge.sourceHandle,
+  );
+}
+
+export function getLaneAccumulatorInputValue(
+  document: WorkflowDocument,
+  nodeId: string,
+  path: ReadonlySet<string> = new Set(),
+  nodeMap = toNodeMap(document),
+  incomingByTarget = buildIncomingByTarget(document.edges),
+) {
+  return getSingleInputValue(
+    document,
+    nodeId,
+    LANE_ACCUMULATOR_INPUT_HANDLE_ID,
+    path,
+    nodeMap,
+    incomingByTarget,
+  );
+}
+
 function getLaneTransformInputValues(
   document: WorkflowDocument,
   nodeId: string,
@@ -563,6 +615,23 @@ function resolveLaneZipAlignRuntimeValue(
   });
 }
 
+function resolveLaneAccumulatorRuntimeValue(
+  document: WorkflowDocument,
+  node: Extract<WorkflowDocumentNode, { kind: "laneAccumulator" }>,
+  path: ReadonlySet<string>,
+  nodeMap: NodeMap,
+  incomingByTarget: IncomingByTarget,
+): RuntimeValue | null {
+  const inputValue = getLaneAccumulatorInputValue(
+    document,
+    node.id,
+    path,
+    nodeMap,
+    incomingByTarget,
+  );
+  return inputValue && inputValue.type === node.valueType ? inputValue : null;
+}
+
 function getGeneratorRepeatableHandlePrefixes(
   node: WorkflowDocumentNode,
   edges: WorkflowDocumentEdge[],
@@ -620,7 +689,8 @@ export function normalizeLaneReorderValueTypes(
       node.kind !== "laneSelect" &&
       node.kind !== "laneSplit" &&
       node.kind !== "laneMerge" &&
-      node.kind !== "laneZipAlign"
+      node.kind !== "laneZipAlign" &&
+      node.kind !== "laneAccumulator"
     ) {
       return node;
     }
@@ -628,7 +698,9 @@ export function normalizeLaneReorderValueTypes(
     const inputHandleId =
       node.kind === "laneReorder"
         ? LANE_REORDER_INPUT_HANDLE_ID
-        : LANE_TRANSFORM_INPUT_HANDLE_ID;
+        : node.kind === "laneAccumulator"
+          ? LANE_ACCUMULATOR_INPUT_HANDLE_ID
+          : LANE_TRANSFORM_INPUT_HANDLE_ID;
     const inputEdges = getIncomingEdgesForHandle(
       incomingByTarget,
       node.id,
@@ -690,6 +762,10 @@ export function findFirstWorkflowHandleIdByValueType(
     node.kind === "laneZipAlign"
   ) {
     return LANE_TRANSFORM_INPUT_HANDLE_ID;
+  }
+
+  if (node.kind === "laneAccumulator") {
+    return LANE_ACCUMULATOR_INPUT_HANDLE_ID;
   }
 
   if (node.kind === "prompt") {
@@ -774,6 +850,10 @@ function getNodeOutputValueType(
       return normalizedHandleId === LANE_TRANSFORM_OUTPUT_HANDLE_ID
         ? node.valueType
         : null;
+    case "laneAccumulator":
+      return normalizedHandleId === LANE_ACCUMULATOR_OUTPUT_HANDLE_ID
+        ? node.valueType
+        : null;
     case "laneSplit": {
       const outputIndex = Number(normalizedHandleId.replace("lane-", ""));
       return Number.isInteger(outputIndex) &&
@@ -819,6 +899,12 @@ function getNodeInputValueType(
     node.kind === "laneZipAlign"
   ) {
     return handleId === LANE_TRANSFORM_INPUT_HANDLE_ID ? node.valueType : null;
+  }
+
+  if (node.kind === "laneAccumulator") {
+    return handleId === LANE_ACCUMULATOR_INPUT_HANDLE_ID
+      ? node.valueType
+      : null;
   }
 
   if (node.kind === "list" || !isGeneratorNodeKind(node.kind)) {
@@ -914,6 +1000,14 @@ export function getWorkflowNodeRuntimeValue(
         nodeMap,
         incomingByTarget,
       );
+    case "laneAccumulator":
+      return resolveLaneAccumulatorRuntimeValue(
+        document,
+        node,
+        nextPath,
+        nodeMap,
+        incomingByTarget,
+      );
     case "imageGenerator":
     case "videoGenerator":
     case "llmGenerator":
@@ -921,12 +1015,12 @@ export function getWorkflowNodeRuntimeValue(
   }
 }
 
-export function getWorkflowGeneratorOutputRuntimeValue(
+export function getWorkflowGeneratorRawOutputRuntimeValue(
   node: WorkflowDocumentNode,
 ): RuntimeValue | null {
   switch (node.kind) {
     case "imageGenerator": {
-      return node.outputLanes.length
+      return node.outputLanes.some((lane) => lane.length)
         ? {
             type: "image",
             lanes: node.outputLanes,
@@ -934,7 +1028,7 @@ export function getWorkflowGeneratorOutputRuntimeValue(
         : null;
     }
     case "videoGenerator": {
-      return node.outputLanes.length
+      return node.outputLanes.some((lane) => lane.length)
         ? {
             type: "video",
             lanes: node.outputLanes,
@@ -942,12 +1036,42 @@ export function getWorkflowGeneratorOutputRuntimeValue(
         : null;
     }
     case "llmGenerator":
-      return node.responseText?.trim()
-        ? toTextRuntimeValue([node.responseText])
+      return node.outputLanes.some((lane) => lane.trim())
+        ? {
+            type: "text",
+            lanes: node.outputLanes,
+          }
         : null;
     default:
       return null;
   }
+}
+
+export function getWorkflowGeneratorOutputRuntimeValue(
+  node: WorkflowDocumentNode,
+  options?: { laneIndex?: number | null },
+): RuntimeValue | null {
+  const laneIndex = options?.laneIndex;
+  if (
+    (node.kind === "imageGenerator" ||
+      node.kind === "videoGenerator" ||
+      node.kind === "llmGenerator") &&
+    node.reviewEnabled
+  ) {
+    const rawOutput = getWorkflowGeneratorRawOutputRuntimeValue(node);
+    return rawOutput && laneIndex !== null && laneIndex !== undefined
+      ? getApprovedReviewLaneRuntimeValue(node, laneIndex, {
+          inputValue: rawOutput,
+        })
+      : rawOutput
+        ? getApprovedReviewRuntimeValue(node, { inputValue: rawOutput })
+        : null;
+  }
+
+  const rawOutput = getWorkflowGeneratorRawOutputRuntimeValue(node);
+  return rawOutput && laneIndex !== null && laneIndex !== undefined
+    ? getRuntimeValueLane(rawOutput, laneIndex)
+    : rawOutput;
 }
 
 function buildMediaBatchPlan(values: MediaRuntimeValue[]): MediaBatchPlan {
@@ -1119,7 +1243,8 @@ function conflictsWithSingleInputHandle(
 ) {
   if (
     connection.targetHandle !== LANE_REORDER_INPUT_HANDLE_ID &&
-    connection.targetHandle !== LANE_TRANSFORM_INPUT_HANDLE_ID
+    connection.targetHandle !== LANE_TRANSFORM_INPUT_HANDLE_ID &&
+    connection.targetHandle !== LANE_ACCUMULATOR_INPUT_HANDLE_ID
   ) {
     return false;
   }
@@ -1139,6 +1264,12 @@ function conflictsWithSingleInputHandle(
         (edge) =>
           edge.target === connection.target &&
           edge.targetHandle === LANE_TRANSFORM_INPUT_HANDLE_ID,
+      )) ||
+    (targetNode?.kind === "laneAccumulator" &&
+      document.edges.some(
+        (edge) =>
+          edge.target === connection.target &&
+          edge.targetHandle === LANE_ACCUMULATOR_INPUT_HANDLE_ID,
       ))
   );
 }
@@ -1203,6 +1334,16 @@ function hasCompatibleConnection(
       targetNode.kind === "laneMerge" ||
       targetNode.kind === "laneZipAlign") &&
     connection.targetHandle === LANE_TRANSFORM_INPUT_HANDLE_ID
+  ) {
+    return Boolean(
+      sourceValueType &&
+        (!targetNode.valueType || targetNode.valueType === sourceValueType),
+    );
+  }
+
+  if (
+    targetNode.kind === "laneAccumulator" &&
+    connection.targetHandle === LANE_ACCUMULATOR_INPUT_HANDLE_ID
   ) {
     return Boolean(
       sourceValueType &&

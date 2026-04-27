@@ -1,14 +1,13 @@
 import { Effect } from "effect";
 
 import { getErrorMessage, WorkflowRequestError } from "~/lib/workflow/errors";
-import type { WorkflowExecutionTarget } from "~/lib/workflow/execution/types";
+import {
+  isWorkflowRunActiveStatus,
+  type WorkflowExecutionTarget,
+} from "~/lib/workflow/execution/types";
 import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
 import { WorkflowPersistenceService } from "~/lib/workflow/services/workflow-persistence-service";
 import { WorkflowStudioStoreService } from "~/lib/workflow/services/workflow-studio-store-service";
-
-function isActiveRunStatus(status: "queued" | "running" | "success" | "error") {
-  return status === "queued" || status === "running";
-}
 
 export const WorkflowExecutionService = {
   run(target: WorkflowExecutionTarget) {
@@ -48,7 +47,7 @@ export const WorkflowExecutionService = {
       yield* workflowStudioStore.setActiveRunId(executionState.runId);
       yield* workflowStudioStore.applyServerExecutionState(executionState);
 
-      if (!isActiveRunStatus(executionState.status)) {
+      if (!isWorkflowRunActiveStatus(executionState.status)) {
         yield* workflowStudioStore.clearActiveRunId();
         return;
       }
@@ -66,7 +65,10 @@ export const WorkflowExecutionService = {
                 ),
               )
                 .then(() => {
-                  if (isActiveRunStatus(nextExecutionState.status) || settled) {
+                  if (
+                    isWorkflowRunActiveStatus(nextExecutionState.status) ||
+                    settled
+                  ) {
                     return;
                   }
 

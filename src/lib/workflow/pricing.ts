@@ -13,12 +13,11 @@ import {
   getImageGeneratorModelCreditCost,
   getVideoGeneratorModelCreditCost,
 } from "~/lib/workflow/generator-models";
+import { LLM_ESTIMATED_CREDIT_COST } from "~/lib/workflow/llm-models";
 import type {
   GenerateImageRequest,
   GenerateVideoRequest,
 } from "~/lib/workflow/types";
-
-const LLM_ESTIMATED_CREDIT_COST = 1;
 
 export type WorkflowExecutionPriceLineItem = {
   nodeId: string;

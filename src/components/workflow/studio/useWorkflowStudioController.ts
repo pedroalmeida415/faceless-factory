@@ -68,6 +68,9 @@ export function useWorkflowStudioController() {
   const setVideoGeneratorConfigValue = useWorkflowStudioStore(
     (state) => state.setVideoGeneratorConfigValue,
   );
+  const setGeneratorReviewEnabled = useWorkflowStudioStore(
+    (state) => state.setGeneratorReviewEnabled,
+  );
 
   const getGeneratorIterationInfo = useCallback((nodeId: string) => {
     const { document } = useWorkflowStudioStore.getState();
@@ -117,6 +120,7 @@ export function useWorkflowStudioController() {
       setImageGeneratorConfigValue,
       setLlmGeneratorConfigValue,
       setVideoGeneratorConfigValue,
+      setGeneratorReviewEnabled,
       runNode,
     }),
     [
@@ -131,6 +135,7 @@ export function useWorkflowStudioController() {
       setLaneSplitCount,
       setLaneZipAlignMode,
       runNode,
+      setGeneratorReviewEnabled,
       setImageGeneratorConfigValue,
       setImageGeneratorMode,
       setImageGeneratorModel,

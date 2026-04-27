@@ -15,7 +15,9 @@ import {
 } from "~/lib/workflow/node-definitions";
 import type {
   AssetNodeFields,
+  GeneratorReviewFields,
   ImageGeneratorSettings,
+  LaneAccumulatorNodeFields,
   LaneMergeNodeFields,
   LaneReorderNodeFields,
   LaneSelectNodeFields,
@@ -31,10 +33,12 @@ import type {
   WorkflowGeneratorResult,
   WorkflowLlmResult,
   WorkflowNodeKind,
+  WorkflowReviewLane,
+  WorkflowReviewState,
 } from "~/lib/workflow/types";
 
-export const WORKFLOW_DOCUMENT_VERSION = 7;
-export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v7";
+export const WORKFLOW_DOCUMENT_VERSION = 9;
+export const WORKFLOW_STORAGE_KEY = "faceless-factory.workflow.v9";
 export const WORKFLOW_GRID_STEP = 5;
 
 export type WorkflowPosition = {
@@ -89,20 +93,28 @@ export type LaneZipAlignWorkflowNode = WorkflowDocumentNodeBase &
     kind: "laneZipAlign";
   };
 
+export type LaneAccumulatorWorkflowNode = WorkflowDocumentNodeBase &
+  LaneAccumulatorNodeFields & {
+    kind: "laneAccumulator";
+  };
+
 export type ImageGeneratorWorkflowNode = WorkflowDocumentNodeBase &
   ImageGeneratorSettings &
+  GeneratorReviewFields &
   WorkflowGeneratorResult & {
     kind: "imageGenerator";
   };
 
 export type VideoGeneratorWorkflowNode = WorkflowDocumentNodeBase &
   VideoGeneratorSettings &
+  GeneratorReviewFields &
   WorkflowGeneratorResult & {
     kind: "videoGenerator";
   };
 
 export type LlmGeneratorWorkflowNode = WorkflowDocumentNodeBase &
   LlmGeneratorSettings &
+  GeneratorReviewFields &
   WorkflowLlmResult & {
     kind: "llmGenerator";
   };
@@ -116,6 +128,7 @@ export type WorkflowDocumentNode =
   | LaneSplitWorkflowNode
   | LaneMergeWorkflowNode
   | LaneZipAlignWorkflowNode
+  | LaneAccumulatorWorkflowNode
   | ImageGeneratorWorkflowNode
   | VideoGeneratorWorkflowNode
   | LlmGeneratorWorkflowNode;
@@ -174,7 +187,24 @@ function createWorkflowLlmResult(): WorkflowLlmResult {
   return {
     lastPrompt: "",
     lastSystemPrompt: "",
+    outputLanes: [],
     responseText: null,
+  };
+}
+
+function createWorkflowReviewState(): WorkflowReviewState {
+  return {
+    lanes: [],
+    sourceNodeId: null,
+    updatedAt: null,
+    valueType: null,
+  };
+}
+
+function createGeneratorReviewFields(): GeneratorReviewFields {
+  return {
+    review: createWorkflowReviewState(),
+    reviewEnabled: false,
   };
 }
 
@@ -260,6 +290,14 @@ function makeWorkflowNode(
         mode: "zip",
         valueType: null,
       };
+    case "laneAccumulator":
+      return {
+        id,
+        kind,
+        label,
+        position,
+        valueType: null,
+      };
     case "imageGenerator":
       return {
         id,
@@ -268,6 +306,7 @@ function makeWorkflowNode(
         position,
         ...createDefaultImageGeneratorSettings(),
         ...createWorkflowGeneratorResult(),
+        ...createGeneratorReviewFields(),
       };
     case "videoGenerator":
       return {
@@ -277,6 +316,7 @@ function makeWorkflowNode(
         position,
         ...createDefaultVideoGeneratorSettings(),
         ...createWorkflowGeneratorResult(),
+        ...createGeneratorReviewFields(),
       };
     case "llmGenerator":
       return {
@@ -286,6 +326,7 @@ function makeWorkflowNode(
         position,
         ...createDefaultLlmGeneratorSettings(),
         ...createWorkflowLlmResult(),
+        ...createGeneratorReviewFields(),
       };
   }
 }
@@ -312,6 +353,7 @@ function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
     value === "laneSplit" ||
     value === "laneMerge" ||
     value === "laneZipAlign" ||
+    value === "laneAccumulator" ||
     value === "imageGenerator" ||
     value === "videoGenerator" ||
     value === "llmGenerator"
@@ -383,9 +425,77 @@ function asWorkflowAssetLanes(value: unknown) {
     return [];
   }
 
-  return value
-    .map((lane) => asWorkflowAssets(lane))
-    .filter((lane) => lane.length);
+  return Array.from({ length: value.length }, (_, index) =>
+    asWorkflowAssets(value[index]),
+  );
+}
+
+function asWorkflowTextLanes(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from({ length: value.length }, (_, index) => {
+    const entry = value[index];
+    const text = isString(entry) ? entry.trim() : "";
+    return text;
+  });
+}
+
+function asWorkflowReviewLane(value: unknown): WorkflowReviewLane | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const laneIndex = isNumber(value.laneIndex)
+    ? Math.max(0, Math.trunc(value.laneIndex))
+    : null;
+  if (laneIndex === null) {
+    return null;
+  }
+
+  const status =
+    value.status === "approved" ||
+    value.status === "rejected" ||
+    value.status === "regenerating"
+      ? value.status
+      : "pending";
+
+  return {
+    assets: asWorkflowAssets(value.assets),
+    attempt: isNumber(value.attempt)
+      ? Math.max(0, Math.trunc(value.attempt))
+      : 0,
+    laneIndex,
+    status,
+    text: asNullableString(value.text, null),
+  };
+}
+
+function normalizeWorkflowReviewState(value: unknown): WorkflowReviewState {
+  if (!isRecord(value)) {
+    return createWorkflowReviewState();
+  }
+
+  return {
+    lanes: Array.isArray(value.lanes)
+      ? value.lanes
+          .map((lane) => asWorkflowReviewLane(lane))
+          .filter((lane): lane is WorkflowReviewLane => Boolean(lane))
+      : [],
+    sourceNodeId: asNullableString(value.sourceNodeId, null),
+    updatedAt: asNullableString(value.updatedAt, null),
+    valueType: asLaneReorderValueType(value.valueType),
+  };
+}
+
+function normalizeGeneratorReviewFields(
+  value: Record<string, unknown>,
+): GeneratorReviewFields {
+  return {
+    review: normalizeWorkflowReviewState(value.review),
+    reviewEnabled: value.reviewEnabled === true,
+  };
 }
 
 function asLaneReorderMode(value: unknown): LaneReorderNodeFields["mode"] {
@@ -619,6 +729,19 @@ function normalizeWorkflowNode(
         valueType: asLaneReorderValueType(value.valueType),
       };
     }
+    case "laneAccumulator": {
+      const baseNode = makeWorkflowNode(
+        id,
+        value.kind,
+        position,
+      ) as LaneAccumulatorWorkflowNode;
+
+      return {
+        ...baseNode,
+        label: asString(value.label, baseNode.label),
+        valueType: asLaneReorderValueType(value.valueType),
+      };
+    }
     case "imageGenerator": {
       const baseNode = makeWorkflowNode(
         id,
@@ -637,6 +760,7 @@ function normalizeWorkflowNode(
         ...baseNode,
         ...settings,
         label: asString(value.label, baseNode.label),
+        ...normalizeGeneratorReviewFields(value),
         ...normalizeWorkflowGeneratorResult(value, baseNode),
       };
     }
@@ -658,6 +782,7 @@ function normalizeWorkflowNode(
         ...baseNode,
         ...settings,
         label: asString(value.label, baseNode.label),
+        ...normalizeGeneratorReviewFields(value),
         ...normalizeWorkflowGeneratorResult(value, baseNode),
       };
     }
@@ -679,11 +804,13 @@ function normalizeWorkflowNode(
         ...baseNode,
         ...settings,
         label: asString(value.label, baseNode.label),
+        ...normalizeGeneratorReviewFields(value),
         lastPrompt: asString(value.lastPrompt, baseNode.lastPrompt),
         lastSystemPrompt: asString(
           value.lastSystemPrompt,
           baseNode.lastSystemPrompt,
         ),
+        outputLanes: asWorkflowTextLanes(value.outputLanes),
         responseText: asNullableString(
           value.responseText,
           baseNode.responseText,
@@ -771,7 +898,8 @@ export function specializeWorkflowNodeForValueType(
     node.kind === "laneSelect" ||
     node.kind === "laneSplit" ||
     node.kind === "laneMerge" ||
-    node.kind === "laneZipAlign"
+    node.kind === "laneZipAlign" ||
+    node.kind === "laneAccumulator"
     ? {
         ...node,
         valueType,

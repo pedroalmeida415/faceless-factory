@@ -1,11 +1,7 @@
 import { Effect } from "effect";
 
 import type { WorkflowDocument } from "~/lib/workflow/document";
-import {
-  type WorkflowExecutionError,
-  WorkflowValidationError,
-} from "~/lib/workflow/errors";
-import type { WorkflowExecutionPortError } from "~/lib/workflow/execution/types";
+import { WorkflowValidationError } from "~/lib/workflow/errors";
 import {
   buildGeneratorAssetBatchPlan,
   buildTextRuntimeValue,
@@ -25,21 +21,18 @@ type IncomingByTarget = Map<
   }>
 >;
 
-type EvaluateNode = (
+type EvaluateNode<E> = (
   currentId: string,
   path: ReadonlySet<string>,
   sourceHandleId?: string | null,
-) => Effect.Effect<
-  RuntimeValue,
-  WorkflowExecutionError | WorkflowExecutionPortError
->;
+) => Effect.Effect<RuntimeValue, E>;
 
-function getInputValues(
+function getInputValues<E>(
   path: ReadonlySet<string>,
   targetId: string,
   handleId: string,
   incomingByTarget: IncomingByTarget,
-  evaluateNode: EvaluateNode,
+  evaluateNode: EvaluateNode<E>,
 ) {
   const incomingEdges = getIncomingEdgesForHandle(
     incomingByTarget,
@@ -56,7 +49,7 @@ function getInputValues(
   );
 }
 
-export function coerceTextInputBatch(
+export function coerceTextInputBatch<E>(
   document: WorkflowDocument,
   path: ReadonlySet<string>,
   targetId: string,
@@ -66,7 +59,7 @@ export function coerceTextInputBatch(
     required: boolean;
   },
   incomingByTarget: IncomingByTarget,
-  evaluateNode: EvaluateNode,
+  evaluateNode: EvaluateNode<E>,
 ) {
   return Effect.gen(function* () {
     const textHandle = getGeneratorInputHandles(document, targetId).find(
@@ -113,13 +106,13 @@ export function coerceTextInputBatch(
   });
 }
 
-export function coerceMediaInputBatches(
+export function coerceMediaInputBatches<E>(
   document: WorkflowDocument,
   path: ReadonlySet<string>,
   targetId: string,
   valueType: "image" | "video",
   incomingByTarget: IncomingByTarget,
-  evaluateNode: EvaluateNode,
+  evaluateNode: EvaluateNode<E>,
 ) {
   return Effect.gen(function* () {
     const mediaHandles = getGeneratorInputHandles(document, targetId).filter(

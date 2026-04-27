@@ -784,6 +784,7 @@ export function setGeneratorConfigValue(
 
 export function buildImageGenerationRequest(params: {
   settings: ImageGeneratorSettings;
+  idempotencyKey?: string | null;
   imageInputsByHandle: Record<string, WorkflowAsset[]>;
   prompt: string;
 }) {
@@ -799,12 +800,14 @@ export function buildImageGenerationRequest(params: {
 
   return {
     ...request,
+    idempotencyKey: params.idempotencyKey ?? null,
     prompt: params.prompt,
   } satisfies GenerateImageRequest;
 }
 
 export function buildVideoGenerationRequest(params: {
   settings: VideoGeneratorSettings;
+  idempotencyKey?: string | null;
   imageInputsByHandle: Record<string, WorkflowAsset[]>;
   prompt: string;
 }) {
@@ -820,6 +823,7 @@ export function buildVideoGenerationRequest(params: {
 
   return {
     ...request,
+    idempotencyKey: params.idempotencyKey ?? null,
     prompt: params.prompt,
   } satisfies GenerateVideoRequest;
 }

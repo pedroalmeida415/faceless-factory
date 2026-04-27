@@ -2,6 +2,7 @@ import type { WorkflowDocument } from "~/lib/workflow/document";
 import type {
   WorkflowCreditsSummary,
   WorkflowExecutionNodeRuntimeState,
+  WorkflowExecutionRequestContext,
   WorkflowExecutionRuntimeState,
   WorkflowExecutionStatusResponse,
   WorkflowRunStatus,
@@ -57,20 +58,24 @@ export function toWorkflowStudioRuntimeState(
 export function buildWorkflowExecutionStatusResponse(params: {
   runId: string;
   targetNodeIds: string[];
+  accruedCostCredits?: number | null;
   projectDocumentRevision?: number | null;
   finalCostCredits?: number | null;
   document: WorkflowDocument;
   runtime: WorkflowExecutionRuntimeState;
+  requestContext?: WorkflowExecutionRequestContext | null;
   status: WorkflowRunStatus;
   credits?: WorkflowCreditsSummary | null;
 }): WorkflowExecutionStatusResponse {
   return {
+    accruedCostCredits: params.accruedCostCredits ?? 0,
     runId: params.runId,
     targetNodeIds: params.targetNodeIds,
     projectDocumentRevision: params.projectDocumentRevision ?? null,
     finalCostCredits: params.finalCostCredits ?? null,
     document: params.document,
     runtime: params.runtime,
+    requestContext: params.requestContext ?? null,
     activity: params.runtime.activity,
     credits: params.credits ?? null,
     status: params.status,

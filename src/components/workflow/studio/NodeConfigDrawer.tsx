@@ -17,6 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
+import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
 import { cn } from "~/lib/utils";
 import type {
@@ -200,6 +201,7 @@ function getDrawerHeading(node: WorkflowDocumentNode) {
     case "laneSplit":
     case "laneMerge":
     case "laneZipAlign":
+    case "laneAccumulator":
       return {
         description:
           "Transform lanes on this branch without mutating upstream output.",
@@ -221,6 +223,37 @@ function getDrawerHeading(node: WorkflowDocumentNode) {
         title: "Run Any LLM",
       } as const;
   }
+}
+
+function GeneratorReviewConfigPanel({
+  enabled,
+  nodeId,
+}: {
+  enabled: boolean;
+  nodeId: string;
+}) {
+  const setGeneratorReviewEnabled = useWorkflowStudioStore(
+    (state) => state.setGeneratorReviewEnabled,
+  );
+
+  return (
+    <NodeFieldCard label="Review">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm">Require approval</p>
+          <p className="text-muted-foreground text-xs">
+            Generated lanes pause here until approved or regenerated.
+          </p>
+        </div>
+        <Switch
+          checked={enabled}
+          onCheckedChange={(checked) =>
+            setGeneratorReviewEnabled(nodeId, checked)
+          }
+        />
+      </div>
+    </NodeFieldCard>
+  );
 }
 
 function ListConfigPanel({ node }: { node: ListWorkflowNode }) {
@@ -374,6 +407,10 @@ function ImageGeneratorConfigPanel({
           setImageGeneratorConfigValue(node.id, key, value)
         }
       />
+      <GeneratorReviewConfigPanel
+        enabled={node.reviewEnabled}
+        nodeId={node.id}
+      />
     </div>
   );
 }
@@ -458,6 +495,10 @@ function VideoGeneratorConfigPanel({
           setVideoGeneratorConfigValue(node.id, key, value)
         }
       />
+      <GeneratorReviewConfigPanel
+        enabled={node.reviewEnabled}
+        nodeId={node.id}
+      />
     </div>
   );
 }
@@ -500,6 +541,10 @@ function LlmGeneratorConfigPanel({ node }: { node: LlmGeneratorWorkflowNode }) {
 
       <LlmEstimatePanel nodeId={node.id} />
       <WorkflowExecutionEstimateWarning nodeId={node.id} />
+      <GeneratorReviewConfigPanel
+        enabled={node.reviewEnabled}
+        nodeId={node.id}
+      />
     </div>
   );
 }
@@ -517,6 +562,7 @@ function NodeConfigPanel({ node }: { node: WorkflowDocumentNode }) {
     case "laneSplit":
     case "laneMerge":
     case "laneZipAlign":
+    case "laneAccumulator":
       return <LaneReorderConfigPanel node={node} />;
     case "imageGenerator":
       return <ImageGeneratorConfigPanel node={node} />;
@@ -556,6 +602,7 @@ function isSameNodeConfig(
     case "laneSplit":
     case "laneMerge":
     case "laneZipAlign":
+    case "laneAccumulator":
       return (
         right.kind === left.kind &&
         JSON.stringify(left) === JSON.stringify(right)

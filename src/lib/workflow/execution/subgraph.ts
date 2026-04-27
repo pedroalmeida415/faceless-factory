@@ -1,6 +1,7 @@
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import {
   buildIncomingByTarget,
+  buildOutgoingBySource,
   getAlignedLaneCount,
   getGeneratorInputHandles,
   getIncomingEdgesForHandle,
@@ -12,6 +13,7 @@ import {
   getLaneSplitValidationMessage,
 } from "~/lib/workflow/lanes";
 import {
+  LANE_ACCUMULATOR_INPUT_HANDLE_ID,
   LANE_REORDER_INPUT_HANDLE_ID,
   LANE_TRANSFORM_INPUT_HANDLE_ID,
   PROMPT_VARIABLE_PATTERN,
@@ -68,6 +70,7 @@ function getNodeOutputValueType(
     case "laneSplit":
     case "laneMerge":
     case "laneZipAlign":
+    case "laneAccumulator":
       return node.valueType;
     case "imageGenerator":
       return "image";
@@ -383,6 +386,22 @@ function resolveNodePlan(
           }
         : zipAlignPlannedValues(node.valueType, values, node.mode);
     }
+    case "laneAccumulator": {
+      const incomingEdge = getIncomingEdgesForHandle(
+        context.incomingByTarget,
+        node.id,
+        LANE_ACCUMULATOR_INPUT_HANDLE_ID,
+      )[0];
+      const value = incomingEdge
+        ? resolveNodePlan(
+            context,
+            incomingEdge.source,
+            nextPath,
+            incomingEdge.sourceHandle,
+          )
+        : null;
+      return value?.type === node.valueType ? value : null;
+    }
     case "prompt":
       return resolvePromptPlan(context, node, nextPath);
     case "imageGenerator":
@@ -475,4 +494,43 @@ export function collectExecutableWorkflowGeneratorNodeIds(
   targetNodeIds: string[],
 ) {
   return buildWorkflowExecutionPlan(document, targetNodeIds).executableNodeIds;
+}
+
+export function collectDownstreamWorkflowGeneratorNodeIds(
+  document: WorkflowDocument,
+  sourceNodeId: string,
+  allowedNodeIds?: ReadonlySet<string>,
+) {
+  const outgoingBySource = buildOutgoingBySource(document.edges);
+  const nodeById = new Map(document.nodes.map((node) => [node.id, node]));
+  const visited = new Set<string>();
+  const stack = (outgoingBySource.get(sourceNodeId) ?? []).map(
+    (edge) => edge.target,
+  );
+  const generatorIds: string[] = [];
+
+  while (stack.length) {
+    const nodeId = stack.shift();
+    if (!nodeId || visited.has(nodeId)) {
+      continue;
+    }
+
+    visited.add(nodeId);
+    const node = nodeById.get(nodeId);
+    if (
+      node &&
+      (node.kind === "imageGenerator" ||
+        node.kind === "videoGenerator" ||
+        node.kind === "llmGenerator") &&
+      (!allowedNodeIds || allowedNodeIds.has(node.id))
+    ) {
+      generatorIds.push(node.id);
+    }
+
+    for (const edge of outgoingBySource.get(nodeId) ?? []) {
+      stack.push(edge.target);
+    }
+  }
+
+  return generatorIds;
 }

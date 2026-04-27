@@ -30,6 +30,7 @@ export type WorkflowExecutionSelection = {
 };
 
 export type StartWorkflowExecutionRequest = {
+  accruedCostCredits?: number | null;
   document: WorkflowDocument;
   projectId?: string | null;
   target: WorkflowExecutionTarget;
@@ -37,9 +38,39 @@ export type StartWorkflowExecutionRequest = {
   clientRunId?: string | null;
   documentRevision?: number | null;
   idempotencyKey?: string | null;
+  executionLaneFilter?: {
+    laneCount: number;
+    laneIndex: number;
+  } | null;
+  reviewLaneFilter?: {
+    laneIndex: number;
+    reviewNodeId: string;
+  } | null;
 };
 
-export type WorkflowRunStatus = "queued" | "running" | "success" | "error";
+export type WorkflowRunStatus =
+  | "queued"
+  | "running"
+  | "waiting_for_review"
+  | "success"
+  | "error";
+
+export function isWorkflowRunActiveStatus(status: WorkflowRunStatus) {
+  return (
+    status === "queued" ||
+    status === "running" ||
+    status === "waiting_for_review"
+  );
+}
+
+export function isWorkflowRunLockingStatus(status: WorkflowRunStatus) {
+  return status === "queued" || status === "running";
+}
+
+export type WorkflowExecutionRequestContext = Omit<
+  StartWorkflowExecutionRequest,
+  "document" | "executionLaneFilter" | "reviewLaneFilter"
+>;
 
 export type WorkflowExecutionNodeRuntimeState = {
   status: WorkflowNodeStatus;
@@ -62,12 +93,14 @@ export type WorkflowCreditsSummary = {
 };
 
 export type WorkflowExecutionStatusResponse = {
+  accruedCostCredits: number;
   runId: string;
   targetNodeIds: string[];
   projectDocumentRevision: number | null;
   finalCostCredits: number | null;
   document: WorkflowDocument;
   runtime: WorkflowExecutionRuntimeState;
+  requestContext: WorkflowExecutionRequestContext | null;
   activity: string;
   credits: WorkflowCreditsSummary | null;
   status: WorkflowRunStatus;
@@ -82,6 +115,10 @@ export type WorkflowExecutionPortError =
   | WorkflowInfrastructureError
   | WorkflowStorageError
   | WorkflowValidationError;
+
+export class WorkflowReviewPause {
+  readonly _tag = "WorkflowReviewPause";
+}
 
 export type WorkflowExecutionPorts = {
   readonly generateImage: (

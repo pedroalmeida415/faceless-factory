@@ -23,6 +23,7 @@ import {
 } from "~/lib/workflow/types";
 
 export const SYSTEM_PROMPT_INPUT_HANDLE_ID = "systemPrompt";
+export const LLM_ESTIMATED_CREDIT_COST = 1;
 
 const IMAGE_INPUT_PREFIX = "image-input-";
 const GEMINI_3_FLASH_INPUT_USD_PER_MILLION_TOKENS = 0.5;
@@ -225,6 +226,7 @@ export function getLlmGeneratorHandleDefinitions(
 
 export function buildLlmGenerationRequest(params: {
   settings: LlmGeneratorSettings;
+  idempotencyKey?: string | null;
   imageInputsByHandle: Record<string, WorkflowAsset[]>;
   prompt: string;
   systemPrompt: string | null;
@@ -232,6 +234,7 @@ export function buildLlmGenerationRequest(params: {
   const config = normalizeConfig(params.settings.config);
 
   return {
+    idempotencyKey: params.idempotencyKey ?? null,
     maxOutputTokens: getConfigNumber(config, "maxOutputTokens", 2048),
     mode: params.settings.mode,
     model: params.settings.model,

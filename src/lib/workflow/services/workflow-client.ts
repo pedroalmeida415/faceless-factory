@@ -93,6 +93,36 @@ export const WorkflowClientService = {
     } satisfies Unsubscribable;
   },
 
+  approveReviewLane(input: {
+    laneIndex: number;
+    reviewNodeId: string;
+    runId: string;
+  }) {
+    return Effect.tryPromise({
+      try: () => trpcClient.workflow.approveReviewLane.mutate(input),
+      catch: (cause) =>
+        new WorkflowRequestError({
+          message: getErrorMessage(cause),
+          cause,
+        }),
+    }) as Effect.Effect<WorkflowExecutionStatusResponse, WorkflowRequestError>;
+  },
+
+  rejectReviewLane(input: {
+    laneIndex: number;
+    reviewNodeId: string;
+    runId: string;
+  }) {
+    return Effect.tryPromise({
+      try: () => trpcClient.workflow.rejectReviewLane.mutate(input),
+      catch: (cause) =>
+        new WorkflowRequestError({
+          message: getErrorMessage(cause),
+          cause,
+        }),
+    }) as Effect.Effect<WorkflowExecutionStatusResponse, WorkflowRequestError>;
+  },
+
   generateImage(input: GenerateImageRequest) {
     return Effect.tryPromise({
       try: () => trpcClient.workflow.generateImage.mutate(input),

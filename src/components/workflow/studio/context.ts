@@ -52,6 +52,7 @@ export type StudioContextValue = {
     key: string,
     value: GeneratorConfigValue,
   ) => void;
+  setGeneratorReviewEnabled: (nodeId: string, enabled: boolean) => void;
   runNode: (nodeId: string) => Promise<void>;
 };
 

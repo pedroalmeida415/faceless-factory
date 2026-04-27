@@ -9,6 +9,7 @@ import {
 import type {
   StartWorkflowExecutionRequest,
   WorkflowExecutionStatusResponse,
+  WorkflowRunStatus,
 } from "~/lib/workflow/execution/types";
 import {
   IMAGE_ASPECT_RATIOS,
@@ -68,37 +69,45 @@ const workflowExecutionTargetSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("node"),
-    nodeId: z.string(),
+    nodeId: z.string().min(1),
   }),
 ]);
 
-const workflowExecutionRequestSchema = z.object({
-  document: workflowDocumentSchema,
-  projectId: z.string(),
-  target: workflowExecutionTargetSchema,
-  clientRunId: z.string().nullable().optional(),
-  documentRevision: z.number().nullable().optional(),
-  idempotencyKey: z.string().nullable().optional(),
-  selection: z
-    .object({
-      nodeIds: z.array(z.string()),
-    })
-    .nullable()
-    .optional(),
-});
+const workflowExecutionRequestSchema = z
+  .object({
+    document: workflowDocumentSchema,
+    projectId: z.string().min(1),
+    target: workflowExecutionTargetSchema,
+    clientRunId: z.string().nullable().optional(),
+    documentRevision: z.number().nullable().optional(),
+    idempotencyKey: z.string().nullable().optional(),
+    selection: z
+      .object({
+        nodeIds: z.array(z.string().min(1)),
+      })
+      .nullable()
+      .optional(),
+  })
+  .strict();
 
 const workflowExecutionEventsSchema = z.object({
   lastEventId: z.string().nullish(),
   runId: z.string(),
 });
 
+const workflowReviewLaneDecisionSchema = z.object({
+  laneIndex: z.number().int().nonnegative(),
+  reviewNodeId: z.string().min(1),
+  runId: z.string().min(1),
+});
+
 const saveWorkflowProjectSchema = z.object({
   document: workflowDocumentSchema,
   documentRevision: z.number().int().nonnegative(),
-  projectId: z.string(),
+  projectId: z.string().min(1),
 });
 
-function isTerminalStatus(status: "queued" | "running" | "success" | "error") {
+function isTerminalStatus(status: WorkflowRunStatus) {
   return status === "success" || status === "error";
 }
 
@@ -227,6 +236,42 @@ export const workflowRouter = createTRPCRouter({
         subscription.unsubscribe();
       }
     }),
+
+  approveReviewLane: protectedProcedure
+    .input(workflowReviewLaneDecisionSchema)
+    .mutation(async ({ ctx, input }) =>
+      ServerRuntime.runPromise(
+        Effect.gen(function* () {
+          const workflowExecutionService = yield* WorkflowExecutionService;
+          return yield* workflowExecutionService.approveReviewLane({
+            laneIndex: input.laneIndex,
+            reviewNodeId: input.reviewNodeId,
+            runId: input.runId,
+            userId: ctx.session.user.id,
+          });
+        }),
+      ).catch((error) => {
+        throw toTRPCError(error);
+      }),
+    ),
+
+  rejectReviewLane: protectedProcedure
+    .input(workflowReviewLaneDecisionSchema)
+    .mutation(async ({ ctx, input }) =>
+      ServerRuntime.runPromise(
+        Effect.gen(function* () {
+          const workflowExecutionService = yield* WorkflowExecutionService;
+          return yield* workflowExecutionService.rejectReviewLane({
+            laneIndex: input.laneIndex,
+            reviewNodeId: input.reviewNodeId,
+            runId: input.runId,
+            userId: ctx.session.user.id,
+          });
+        }),
+      ).catch((error) => {
+        throw toTRPCError(error);
+      }),
+    ),
 
   getCredits: protectedProcedure.query(async ({ ctx }) =>
     ServerRuntime.runPromise(

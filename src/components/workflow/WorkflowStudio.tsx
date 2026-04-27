@@ -87,6 +87,7 @@ const WORKFLOW_NODE_KINDS: WorkflowNodeKind[] = [
   "laneSplit",
   "laneMerge",
   "laneZipAlign",
+  "laneAccumulator",
   "llmGenerator",
   "imageGenerator",
   "videoGenerator",

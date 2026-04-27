@@ -27,6 +27,16 @@ async function main() {
     await ServerRuntime.runPromise(
       Effect.gen(function* () {
         const workflowExecutionService = yield* WorkflowExecutionService;
+        if (job.data.type === "regenerate-review-lane") {
+          yield* workflowExecutionService.executeReviewLaneRegeneration({
+            laneIndex: job.data.laneIndex,
+            reviewNodeId: job.data.reviewNodeId,
+            runId: job.data.runId,
+            userId: job.data.userId,
+          });
+          return;
+        }
+
         yield* workflowExecutionService.executeRun(
           job.data.runId,
           job.data.userId,
@@ -50,6 +60,18 @@ async function main() {
     try {
       const job = await getWorkflowExecutionJob(jobId);
       if (!job) {
+        return;
+      }
+
+      const maxAttempts = job.opts.attempts ?? 1;
+      if (job.attemptsMade < maxAttempts) {
+        return;
+      }
+
+      if (
+        job.data.type === "execute-run" &&
+        job.data.request.executionLaneFilter
+      ) {
         return;
       }
 

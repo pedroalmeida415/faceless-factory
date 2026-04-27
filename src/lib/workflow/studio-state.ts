@@ -186,6 +186,14 @@ function toWorkflowNodeData(
         mode: node.mode,
         valueType: node.valueType,
       };
+    case "laneAccumulator":
+      return {
+        kind: node.kind,
+        label: node.label,
+        status,
+        error,
+        valueType: node.valueType,
+      };
     case "imageGenerator":
       return {
         kind: node.kind,
@@ -199,6 +207,8 @@ function toWorkflowNodeData(
         responseText: node.responseText,
         outputAssets: node.outputAssets,
         outputLanes: node.outputLanes,
+        review: node.review,
+        reviewEnabled: node.reviewEnabled,
       };
     case "videoGenerator":
       return {
@@ -213,6 +223,8 @@ function toWorkflowNodeData(
         responseText: node.responseText,
         outputAssets: node.outputAssets,
         outputLanes: node.outputLanes,
+        review: node.review,
+        reviewEnabled: node.reviewEnabled,
       };
     case "llmGenerator":
       return {
@@ -225,6 +237,9 @@ function toWorkflowNodeData(
         config: node.config,
         lastPrompt: node.lastPrompt,
         lastSystemPrompt: node.lastSystemPrompt,
+        outputLanes: node.outputLanes,
+        review: node.review,
+        reviewEnabled: node.reviewEnabled,
         responseText: node.responseText,
       };
   }
@@ -370,6 +385,12 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
     );
   }
 
+  if (left.kind === "laneAccumulator") {
+    return (
+      right.kind === "laneAccumulator" && left.valueType === right.valueType
+    );
+  }
+
   if (left.kind === "imageGenerator") {
     return (
       right.kind === "imageGenerator" &&
@@ -379,7 +400,9 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       left.lastPrompt === right.lastPrompt &&
       left.responseText === right.responseText &&
       left.outputAssets === right.outputAssets &&
-      left.outputLanes === right.outputLanes
+      left.outputLanes === right.outputLanes &&
+      left.review === right.review &&
+      left.reviewEnabled === right.reviewEnabled
     );
   }
 
@@ -392,7 +415,9 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       left.lastPrompt === right.lastPrompt &&
       left.responseText === right.responseText &&
       left.outputAssets === right.outputAssets &&
-      left.outputLanes === right.outputLanes
+      left.outputLanes === right.outputLanes &&
+      left.review === right.review &&
+      left.reviewEnabled === right.reviewEnabled
     );
   }
 
@@ -403,6 +428,9 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
     left.config === right.config &&
     left.lastPrompt === right.lastPrompt &&
     left.lastSystemPrompt === right.lastSystemPrompt &&
+    left.outputLanes === right.outputLanes &&
+    left.review === right.review &&
+    left.reviewEnabled === right.reviewEnabled &&
     left.responseText === right.responseText
   );
 }

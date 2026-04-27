@@ -11,6 +11,7 @@ import {
   WorkflowAuthorizationError,
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
+import { mergeWorkflowExecutionDocument } from "~/lib/workflow/execution/result-merge";
 import { extractWorkflowExecutionSubgraph } from "~/lib/workflow/execution/subgraph";
 import {
   DEFAULT_WORKFLOW_PROJECT_NAME,
@@ -62,80 +63,6 @@ function toWorkflowProject(row: WorkflowProjectRow): WorkflowProject {
     document,
     documentRevision: row.documentRevision,
   };
-}
-
-function applyExecutionResultsToDocument(params: {
-  currentDocument: WorkflowDocument;
-  executionDocument: WorkflowDocument;
-  targetNodeIds: string[];
-}) {
-  const executionNodeById = new Map(
-    params.executionDocument.nodes.map((node) => [node.id, node]),
-  );
-
-  return {
-    ...params.currentDocument,
-    nodes: params.currentDocument.nodes.map((node) => {
-      if (!params.targetNodeIds.includes(node.id)) {
-        return node;
-      }
-
-      const executionNode = executionNodeById.get(node.id);
-      if (!executionNode) {
-        throw new WorkflowValidationError({
-          message: `Execution result for node ${node.id} is missing.`,
-        });
-      }
-
-      if (node.kind !== executionNode.kind) {
-        throw new WorkflowValidationError({
-          message: `Execution result for node ${node.id} has an incompatible type.`,
-        });
-      }
-
-      if (
-        node.kind === "imageGenerator" &&
-        executionNode.kind === "imageGenerator"
-      ) {
-        return {
-          ...node,
-          lastPrompt: executionNode.lastPrompt,
-          outputAssets: executionNode.outputAssets,
-          outputLanes: executionNode.outputLanes,
-          responseText: executionNode.responseText,
-        };
-      }
-
-      if (
-        node.kind === "videoGenerator" &&
-        executionNode.kind === "videoGenerator"
-      ) {
-        return {
-          ...node,
-          lastPrompt: executionNode.lastPrompt,
-          outputAssets: executionNode.outputAssets,
-          outputLanes: executionNode.outputLanes,
-          responseText: executionNode.responseText,
-        };
-      }
-
-      if (
-        node.kind === "llmGenerator" &&
-        executionNode.kind === "llmGenerator"
-      ) {
-        return {
-          ...node,
-          lastPrompt: executionNode.lastPrompt,
-          lastSystemPrompt: executionNode.lastSystemPrompt,
-          responseText: executionNode.responseText,
-        };
-      }
-
-      throw new WorkflowValidationError({
-        message: `Node ${node.id} is not an executable generator target.`,
-      });
-    }),
-  } satisfies WorkflowDocument;
 }
 
 function assertLockedExecutionSliceUnchanged(params: {
@@ -289,6 +216,7 @@ export async function saveWorkflowProjectDocument(params: {
 
 export async function persistWorkflowExecutionResults(params: {
   executionDocument: WorkflowDocument;
+  mergeExecutionLaneIndex?: number | null;
   ownerUserId: string;
   projectId: string;
   targetNodeIds: string[];
@@ -298,9 +226,10 @@ export async function persistWorkflowExecutionResults(params: {
       ownerUserId: params.ownerUserId,
       projectId: params.projectId,
     });
-    const nextDocument = applyExecutionResultsToDocument({
+    const nextDocument = mergeWorkflowExecutionDocument({
       currentDocument: currentProject.document,
       executionDocument: params.executionDocument,
+      mergeExecutionLaneIndex: params.mergeExecutionLaneIndex,
       targetNodeIds: params.targetNodeIds,
     });
 

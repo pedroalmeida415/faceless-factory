@@ -1,5 +1,6 @@
 "use client";
 
+import { Effect } from "effect";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { type NodeProps, useUpdateNodeInternals } from "reactflow";
 import { Badge } from "~/components/ui/badge";
@@ -19,6 +20,7 @@ import {
   WORKFLOW_IMAGE_UPLOAD_ACCEPT,
   WORKFLOW_VIDEO_UPLOAD_ACCEPT,
 } from "~/lib/workflow/assets";
+import { getErrorMessage } from "~/lib/workflow/errors";
 import {
   type GeneratorControlDefinition,
   getImageGeneratorControlDefinitions,
@@ -27,6 +29,7 @@ import {
   getVideoGeneratorModeOptions,
 } from "~/lib/workflow/generator-models";
 import {
+  getLaneAccumulatorInputValue,
   getLaneReorderInputValue,
   getLaneTransformInputValue,
 } from "~/lib/workflow/graph";
@@ -36,11 +39,17 @@ import {
   getLaneSelectionValidationMessage,
   getLaneSplitValidationMessage,
 } from "~/lib/workflow/lanes";
-import { getLaneSplitOutputHandleId } from "~/lib/workflow/node-definitions";
+import {
+  getLaneSplitOutputHandleId,
+  LANE_ACCUMULATOR_INPUT_HANDLE_ID,
+  LANE_ACCUMULATOR_OUTPUT_HANDLE_ID,
+} from "~/lib/workflow/node-definitions";
+import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
 import type {
   AssetNodeData,
   GeneratorConfigValue,
   ImageGeneratorNodeData,
+  LaneAccumulatorNodeData,
   LaneMergeNodeData,
   LaneReorderNodeData,
   LaneSelectNodeData,
@@ -51,6 +60,7 @@ import type {
   PromptNodeData,
   VideoGeneratorNodeData,
   WorkflowNodeData,
+  WorkflowReviewState,
 } from "~/lib/workflow/types";
 import { useStudioContext } from "./context";
 import { PromptEditor } from "./prompt-editor";
@@ -951,6 +961,159 @@ const LaneZipAlignNode = memo(function LaneZipAlignNode({
   );
 }, isSameNodeRender);
 
+const LaneAccumulatorNode = memo(function LaneAccumulatorNode({
+  id,
+  data,
+  selected,
+}: NodeProps<LaneAccumulatorNodeData>) {
+  const document = useWorkflowStudioStore((state) => state.document);
+  const inputValue = getLaneAccumulatorInputValue(document, id);
+  const laneCount =
+    inputValue?.type === data.valueType ? inputValue.lanes.length : null;
+  const color = getLaneValueTypeColor(data.valueType);
+  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Lane";
+
+  return (
+    <NodeShell
+      data={data}
+      id={id}
+      inputs={[
+        { id: LANE_ACCUMULATOR_INPUT_HANDLE_ID, label: valueTypeLabel, color },
+      ]}
+      output={
+        data.valueType
+          ? {
+              id: LANE_ACCUMULATOR_OUTPUT_HANDLE_ID,
+              label: valueTypeLabel,
+              color,
+            }
+          : null
+      }
+      selected={selected}
+    >
+      <NodeNotice tone="accent">
+        {data.valueType
+          ? `Waits for all ${laneCount ?? "upstream"} lanes before continuing.`
+          : "Connect lanes to create an explicit batch barrier."}
+      </NodeNotice>
+    </NodeShell>
+  );
+}, isSameNodeRender);
+
+function GeneratorReviewPanel({
+  nodeId,
+  review,
+  reviewEnabled,
+  valueType,
+}: {
+  nodeId: string;
+  review: WorkflowReviewState;
+  reviewEnabled: boolean;
+  valueType: "text" | "image" | "video";
+}) {
+  const document = useWorkflowStudioStore((state) => state.document);
+  const activeRunId = useWorkflowStudioStore((state) => state.activeRunId);
+  const applyServerExecutionState = useWorkflowStudioStore(
+    (state) => state.applyServerExecutionState,
+  );
+  const setActivity = useWorkflowStudioStore((state) => state.setActivity);
+  const node = document.nodes.find((candidate) => candidate.id === nodeId);
+  const laneCount =
+    node && (node.kind === "imageGenerator" || node.kind === "videoGenerator")
+      ? node.outputLanes.length
+      : node?.kind === "llmGenerator"
+        ? node.outputLanes.length
+        : null;
+  const reviewLanes = review.lanes;
+
+  const decideLane = useCallback(
+    (laneIndex: number, decision: "approve" | "reject") => {
+      if (!activeRunId) {
+        setActivity("Run the workflow before reviewing lanes.");
+        return;
+      }
+
+      const effect =
+        decision === "approve"
+          ? WorkflowClientService.approveReviewLane({
+              laneIndex,
+              reviewNodeId: nodeId,
+              runId: activeRunId,
+            })
+          : WorkflowClientService.rejectReviewLane({
+              laneIndex,
+              reviewNodeId: nodeId,
+              runId: activeRunId,
+            });
+
+      void Effect.runPromise(effect)
+        .then((executionState) => {
+          applyServerExecutionState(executionState);
+        })
+        .catch((error) => {
+          setActivity(getErrorMessage(error));
+        });
+    },
+    [activeRunId, applyServerExecutionState, nodeId, setActivity],
+  );
+
+  if (!reviewEnabled) {
+    return null;
+  }
+
+  return (
+    <>
+      <NodeNotice tone="accent">
+        Review is enabled. Approved lanes continue downstream; regenerated lanes
+        replace this generator output.
+      </NodeNotice>
+
+      {laneCount !== null && !reviewLanes.length ? (
+        <NodeNotice>{`${laneCount} lanes will be reviewed when execution reaches this node.`}</NodeNotice>
+      ) : null}
+
+      {reviewLanes.map((lane) => (
+        <NodeFieldCard
+          key={lane.laneIndex}
+          label={`Lane ${lane.laneIndex + 1}`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <Badge variant="outline">{lane.status}</Badge>
+            <span className="text-muted-foreground text-xs">
+              Attempt {lane.attempt + 1}
+            </span>
+          </div>
+          {valueType === "text" ? (
+            <p className="whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-sm">
+              {lane.text || "No text output."}
+            </p>
+          ) : (
+            <OutputGallery assets={lane.assets} />
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <ShellButton
+              className="justify-center"
+              disabled={
+                lane.status === "approved" || lane.status === "regenerating"
+              }
+              onClick={() => decideLane(lane.laneIndex, "approve")}
+            >
+              Approve
+            </ShellButton>
+            <ShellButton
+              className="justify-center"
+              disabled={lane.status !== "pending"}
+              onClick={() => decideLane(lane.laneIndex, "reject")}
+            >
+              Regenerate
+            </ShellButton>
+          </div>
+        </NodeFieldCard>
+      ))}
+    </>
+  );
+}
+
 export function GeneratorControlGrid({
   controls,
   config,
@@ -1128,6 +1291,13 @@ const ImageGeneratorNode = memo(function ImageGeneratorNode({
 
       <OutputGallery assets={data.outputAssets} />
 
+      <GeneratorReviewPanel
+        nodeId={id}
+        review={data.review}
+        reviewEnabled={data.reviewEnabled}
+        valueType="image"
+      />
+
       <ShellButton
         className="w-full justify-center"
         onClick={() => void runNode(id)}
@@ -1199,6 +1369,13 @@ const VideoGeneratorNode = memo(function VideoGeneratorNode({
 
       <OutputGallery assets={data.outputAssets} />
 
+      <GeneratorReviewPanel
+        nodeId={id}
+        review={data.review}
+        reviewEnabled={data.reviewEnabled}
+        valueType="video"
+      />
+
       <ShellButton
         className="w-full justify-center"
         onClick={() => void runNode(id)}
@@ -1235,6 +1412,13 @@ const LlmGeneratorNode = memo(function LlmGeneratorNode({
     >
       <GeneratedTextPreview text={data.responseText} />
 
+      <GeneratorReviewPanel
+        nodeId={id}
+        review={data.review}
+        reviewEnabled={data.reviewEnabled}
+        valueType="text"
+      />
+
       <ShellButton
         className="w-full justify-center"
         onClick={() => void runNode(id)}
@@ -1254,6 +1438,7 @@ export const nodeTypes = {
   laneSplit: LaneSplitNode,
   laneMerge: LaneMergeNode,
   laneZipAlign: LaneZipAlignNode,
+  laneAccumulator: LaneAccumulatorNode,
   imageGenerator: ImageGeneratorNode,
   videoGenerator: VideoGeneratorNode,
   llmGenerator: LlmGeneratorNode,

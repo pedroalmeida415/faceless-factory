@@ -11,21 +11,74 @@ import type { StartWorkflowExecutionRequest } from "~/lib/workflow/execution/typ
 
 const WORKFLOW_EXECUTION_QUEUE_NAME = "workflow-execution";
 const WORKFLOW_EXECUTION_JOB_NAME = "execute-run";
+const WORKFLOW_REVIEW_REGENERATION_JOB_NAME = "regenerate-review-lane";
 const WORKFLOW_EXECUTION_HISTORY_AGE_SECONDS = 60 * 60 * 24;
 
-export type WorkflowExecutionJobData = {
-  request: StartWorkflowExecutionRequest;
+function toWorkflowJobId(...parts: readonly (number | string)[]) {
+  return parts.map((part) => encodeURIComponent(String(part))).join("~");
+}
+
+export function createWorkflowContinuationJobId(params: {
+  laneIndex?: number | null;
+  reviewNodeId?: string | null;
   runId: string;
-  userId: string;
-};
+}) {
+  return params.reviewNodeId &&
+    params.laneIndex !== null &&
+    params.laneIndex !== undefined
+    ? toWorkflowJobId(
+        params.runId,
+        "resume",
+        params.reviewNodeId,
+        params.laneIndex ?? "all",
+      )
+    : toWorkflowJobId(params.runId, "resume", "all");
+}
+
+export function createWorkflowExecutionLaneJobId(params: {
+  laneIndex: number;
+  runId: string;
+}) {
+  return toWorkflowJobId(params.runId, "lane", params.laneIndex);
+}
+
+export function createWorkflowReviewRegenerationJobId(params: {
+  laneIndex: number;
+  regenerationKey?: string | null;
+  reviewNodeId: string;
+  runId: string;
+}) {
+  return toWorkflowJobId(
+    params.runId,
+    "regenerate",
+    params.reviewNodeId,
+    params.laneIndex,
+    params.regenerationKey ?? "pending",
+  );
+}
+
+export type WorkflowExecutionJobData =
+  | {
+      request: StartWorkflowExecutionRequest;
+      runId: string;
+      type: "execute-run";
+      userId: string;
+    }
+  | {
+      laneIndex: number;
+      reviewNodeId: string;
+      runId: string;
+      type: "regenerate-review-lane";
+      userId: string;
+    };
 
 const workflowQueueConnection = {
   url: env.REDIS_URL,
 };
 
 const workflowWorkerOptions: Omit<WorkerOptions, "connection"> = {
-  concurrency: 1,
-  maxStalledCount: 0,
+  concurrency: 8,
+  maxStalledCount: 1,
   removeOnComplete: {
     age: WORKFLOW_EXECUTION_HISTORY_AGE_SECONDS,
     count: 100,
@@ -46,7 +99,11 @@ export function getWorkflowExecutionQueue() {
     {
       connection: workflowQueueConnection,
       defaultJobOptions: {
-        attempts: 1,
+        attempts: 3,
+        backoff: {
+          type: "exponential",
+          delay: 2_000,
+        },
         removeOnComplete: workflowWorkerOptions.removeOnComplete,
         removeOnFail: workflowWorkerOptions.removeOnFail,
       },
@@ -56,10 +113,26 @@ export function getWorkflowExecutionQueue() {
   return globalForWorkflowQueue.__workflowExecutionQueue;
 }
 
-export function enqueueWorkflowExecutionJob(data: WorkflowExecutionJobData) {
+export function enqueueWorkflowExecutionJob(
+  data: Extract<WorkflowExecutionJobData, { type: "execute-run" }>,
+  options: { jobId?: string } = {},
+) {
   return getWorkflowExecutionQueue().add(WORKFLOW_EXECUTION_JOB_NAME, data, {
-    jobId: data.runId,
+    jobId: options.jobId ?? data.runId,
   });
+}
+
+export function enqueueWorkflowReviewRegenerationJob(
+  data: Extract<WorkflowExecutionJobData, { type: "regenerate-review-lane" }>,
+  options: { jobId?: string } = {},
+) {
+  return getWorkflowExecutionQueue().add(
+    WORKFLOW_REVIEW_REGENERATION_JOB_NAME,
+    data,
+    {
+      jobId: options.jobId ?? createWorkflowReviewRegenerationJobId(data),
+    },
+  );
 }
 
 export function getWorkflowExecutionJob(jobId: string) {

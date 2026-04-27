@@ -17,11 +17,16 @@ import {
   type WorkflowPosition,
 } from "~/lib/workflow/document";
 import { getErrorMessage } from "~/lib/workflow/errors";
+import { mergeWorkflowExecutionDocument } from "~/lib/workflow/execution/result-merge";
 import { collectWorkflowExecutionNodeIds } from "~/lib/workflow/execution/subgraph";
 import type {
   WorkflowCreditsSummary,
   WorkflowExecutionRuntimeState,
   WorkflowExecutionStatusResponse,
+} from "~/lib/workflow/execution/types";
+import {
+  isWorkflowRunActiveStatus,
+  isWorkflowRunLockingStatus,
 } from "~/lib/workflow/execution/types";
 import type { WorkflowHandleReference } from "~/lib/workflow/graph";
 import type { WorkflowValueType } from "~/lib/workflow/node-definitions";
@@ -117,6 +122,17 @@ function createHistoryState(): WorkflowHistoryState {
 
 function serializeWorkflowDocument(document: WorkflowDocument) {
   return JSON.stringify(document);
+}
+
+function hasDocumentChanged(
+  previousDocument: WorkflowDocument,
+  nextDocument: WorkflowDocument,
+) {
+  return (
+    previousDocument !== nextDocument &&
+    serializeWorkflowDocument(previousDocument) !==
+      serializeWorkflowDocument(nextDocument)
+  );
 }
 
 function cloneWorkflowDocument(document: WorkflowDocument): WorkflowDocument {
@@ -282,18 +298,24 @@ function commitSnapshot(
   nextSnapshot: WorkflowStudioSnapshot,
   options: {
     historyEntry?: WorkflowHistoryEntry;
+    persistDocument?: boolean;
     recordHistory?: boolean;
   } = {},
 ) {
   const previousSnapshot = snapshotFromState(state);
   const shouldRecordHistory = options.recordHistory !== false;
+  const documentChanged = hasDocumentChanged(
+    previousSnapshot.document,
+    nextSnapshot.document,
+  );
 
   if (shouldRecordHistory) {
-    const documentChanged =
-      (options.historyEntry?.document ?? previousSnapshot.document) !==
-      nextSnapshot.document;
+    const historyDocumentChanged = hasDocumentChanged(
+      options.historyEntry?.document ?? previousSnapshot.document,
+      nextSnapshot.document,
+    );
 
-    if (documentChanged) {
+    if (historyDocumentChanged) {
       pushHistoryEntry(
         state,
         options.historyEntry ?? createHistoryEntry(previousSnapshot),
@@ -302,6 +324,9 @@ function commitSnapshot(
   }
 
   applySnapshotToState(state, nextSnapshot);
+  if (documentChanged && options.persistDocument !== false) {
+    state.localDocumentVersion += 1;
+  }
   syncHistoryFlags(state);
 }
 
@@ -310,6 +335,7 @@ function runSnapshotMutation(
   buildNextSnapshot: () => WorkflowStudioSnapshot,
   options?: {
     historyEntry?: WorkflowHistoryEntry;
+    persistDocument?: boolean;
     recordHistory?: boolean;
   },
 ) {
@@ -324,86 +350,35 @@ function restoreHistoryEntry(
   state: WorkflowStudioState,
   entry: WorkflowHistoryEntry,
 ) {
-  applySnapshotToState(
-    state,
-    WorkflowEngine.syncState({
-      document: cloneWorkflowDocument(entry.document),
-      editor: {
-        selectedEdgeIds: [...entry.selectedEdgeIds],
-        selectedNodeIds: [...entry.selectedNodeIds],
-        nodeDimensionsById: state.editor.nodeDimensionsById,
-      },
-      runtime: state.runtime,
-    }),
+  const nextSnapshot = WorkflowEngine.syncState({
+    document: cloneWorkflowDocument(entry.document),
+    editor: {
+      selectedEdgeIds: [...entry.selectedEdgeIds],
+      selectedNodeIds: [...entry.selectedNodeIds],
+      nodeDimensionsById: state.editor.nodeDimensionsById,
+    },
+    runtime: state.runtime,
+  });
+  const documentChanged = hasDocumentChanged(
+    state.document,
+    nextSnapshot.document,
   );
+
+  applySnapshotToState(state, nextSnapshot);
+  if (documentChanged) {
+    state.localDocumentVersion += 1;
+  }
 }
 
 function mergeExecutionTargetResults(
   currentDocument: WorkflowDocument,
   executionState: WorkflowExecutionStatusResponse,
 ) {
-  if (executionState.status !== "success") {
-    return currentDocument;
-  }
-
-  const executionNodeById = new Map(
-    executionState.document.nodes.map((node) => [node.id, node]),
-  );
-  const targetNodeIds = new Set(executionState.targetNodeIds);
-
-  return {
-    ...currentDocument,
-    nodes: currentDocument.nodes.map((node) => {
-      if (!targetNodeIds.has(node.id)) {
-        return node;
-      }
-
-      const executionNode = executionNodeById.get(node.id);
-      if (!executionNode || executionNode.kind !== node.kind) {
-        return node;
-      }
-
-      if (
-        node.kind === "imageGenerator" &&
-        executionNode.kind === "imageGenerator"
-      ) {
-        return {
-          ...node,
-          lastPrompt: executionNode.lastPrompt,
-          outputAssets: executionNode.outputAssets,
-          outputLanes: executionNode.outputLanes,
-          responseText: executionNode.responseText,
-        };
-      }
-
-      if (
-        node.kind === "videoGenerator" &&
-        executionNode.kind === "videoGenerator"
-      ) {
-        return {
-          ...node,
-          lastPrompt: executionNode.lastPrompt,
-          outputAssets: executionNode.outputAssets,
-          outputLanes: executionNode.outputLanes,
-          responseText: executionNode.responseText,
-        };
-      }
-
-      if (
-        node.kind === "llmGenerator" &&
-        executionNode.kind === "llmGenerator"
-      ) {
-        return {
-          ...node,
-          lastPrompt: executionNode.lastPrompt,
-          lastSystemPrompt: executionNode.lastSystemPrompt,
-          responseText: executionNode.responseText,
-        };
-      }
-
-      return node;
-    }),
-  } satisfies WorkflowDocument;
+  return mergeWorkflowExecutionDocument({
+    currentDocument,
+    executionDocument: executionState.document,
+    targetNodeIds: executionState.targetNodeIds,
+  });
 }
 
 function mergeExecutionRuntimeState(
@@ -426,6 +401,7 @@ type WorkflowStudioState = {
   document: WorkflowDocument;
   documentRevision: number | null;
   editor: WorkflowEditorState;
+  localDocumentVersion: number;
   projectId: string | null;
   runtime: WorkflowRuntimeState;
   activeRunId: string | null;
@@ -501,6 +477,7 @@ type WorkflowStudioState = {
     key: string,
     value: GeneratorConfigValue,
   ) => void;
+  setGeneratorReviewEnabled: (nodeId: string, enabled: boolean) => void;
   setNodePosition: (
     nodeId: string,
     position: WorkflowPosition,
@@ -538,6 +515,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     document: initialSnapshot.document,
     documentRevision: null,
     editor: initialSnapshot.editor,
+    localDocumentVersion: 0,
     projectId: null,
     runtime: initialSnapshot.runtime,
     activeRunId: null,
@@ -567,6 +545,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           state.documentRevision = project.documentRevision;
           state.isStreamingExecutionStatus = false;
           state.lockedNodeIds = [];
+          state.localDocumentVersion = 0;
           state.lastExecutionFinishedAt = null;
           state.lastKnownCredits = null;
           state.lastServerRuntime = null;
@@ -578,6 +557,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           state.documentRevision = null;
           state.isStreamingExecutionStatus = false;
           state.lockedNodeIds = [];
+          state.localDocumentVersion = 0;
           state.lastExecutionFinishedAt = null;
           state.lastKnownCredits = null;
           state.lastServerRuntime = null;
@@ -608,22 +588,18 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
                 executionState,
               ),
             }),
-          { recordHistory: false },
+          { persistDocument: false, recordHistory: false },
         );
 
-        state.activeRunId =
-          executionState.status === "queued" ||
-          executionState.status === "running"
-            ? executionState.runId
-            : null;
-        state.lockedNodeIds =
-          executionState.status === "queued" ||
-          executionState.status === "running"
-            ? executionState.targetNodeIds
-            : [];
-        state.isStreamingExecutionStatus =
-          executionState.status === "queued" ||
-          executionState.status === "running";
+        state.activeRunId = isWorkflowRunActiveStatus(executionState.status)
+          ? executionState.runId
+          : null;
+        state.lockedNodeIds = isWorkflowRunLockingStatus(executionState.status)
+          ? executionState.targetNodeIds
+          : [];
+        state.isStreamingExecutionStatus = isWorkflowRunActiveStatus(
+          executionState.status,
+        );
         state.documentRevision =
           executionState.projectDocumentRevision ?? state.documentRevision;
         state.lastExecutionFinishedAt = executionState.runtime.finishedAt;
@@ -873,6 +849,16 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       get().updateDocumentNode(nodeId, (node) =>
         node.kind === "videoGenerator"
           ? VideoGeneratorService.setConfigValue(node, key, value)
+          : node,
+      );
+    },
+
+    setGeneratorReviewEnabled: (nodeId, enabled) => {
+      get().updateDocumentNode(nodeId, (node) =>
+        node.kind === "imageGenerator" ||
+        node.kind === "videoGenerator" ||
+        node.kind === "llmGenerator"
+          ? { ...node, reviewEnabled: enabled }
           : node,
       );
     },
@@ -1306,7 +1292,9 @@ export function useWorkflowStudioPersistence(project: WorkflowProject) {
   const hydrate = useWorkflowStudioStore((state) => state.hydrate);
   const projectId = useWorkflowStudioStore((state) => state.projectId);
   const ready = useWorkflowStudioStore((state) => state.ready);
-  const workflowDocument = useWorkflowStudioStore((state) => state.document);
+  const localDocumentVersion = useWorkflowStudioStore(
+    (state) => state.localDocumentVersion,
+  );
   const hasHydratedProject = useRef(false);
 
   useEffect(() => {
@@ -1346,7 +1334,7 @@ export function useWorkflowStudioPersistence(project: WorkflowProject) {
   }, [hydrate, project]);
 
   useEffect(() => {
-    void workflowDocument;
+    void localDocumentVersion;
 
     if (!ready || !projectId) {
       return;
@@ -1358,7 +1346,7 @@ export function useWorkflowStudioPersistence(project: WorkflowProject) {
     }
 
     WorkflowPersistenceService.scheduleSave();
-  }, [projectId, ready, workflowDocument]);
+  }, [localDocumentVersion, projectId, ready]);
 
   useEffect(() => {
     if (!ready) {

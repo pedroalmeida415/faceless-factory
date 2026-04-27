@@ -39,6 +39,72 @@ type GenerateVideosOperation = Awaited<
   ReturnType<GoogleGenAI["models"]["generateVideos"]>
 >;
 
+type VertexCallLogContext = {
+  idempotencyKey: string | null;
+  location: string;
+  model: string;
+  operation: string;
+  params?: Record<string, boolean | number | string | null>;
+};
+
+function getErrorName(cause: unknown) {
+  return cause instanceof Error ? cause.name : typeof cause;
+}
+
+function getErrorMessage(cause: unknown) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+function getProviderError(cause: unknown) {
+  const message = getErrorMessage(cause);
+  try {
+    const parsed = JSON.parse(message) as {
+      error?: { code?: number; message?: string; status?: string };
+    };
+    return parsed.error
+      ? {
+          providerCode: parsed.error.code ?? null,
+          providerMessage: parsed.error.message ?? null,
+          providerStatus: parsed.error.status ?? null,
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function logVertexCallStart(context: VertexCallLogContext) {
+  console.info("Vertex AI call started", context);
+}
+
+function logVertexCallSuccess(
+  context: VertexCallLogContext,
+  startedAt: number,
+  result?: Record<string, boolean | number | string | null>,
+) {
+  console.info("Vertex AI call succeeded", {
+    ...context,
+    durationMs: Date.now() - startedAt,
+    result,
+  });
+}
+
+function logVertexCallFailure(
+  context: VertexCallLogContext,
+  startedAt: number,
+  cause: unknown,
+) {
+  console.error("Vertex AI call failed", {
+    ...context,
+    durationMs: Date.now() - startedAt,
+    error: {
+      message: getErrorMessage(cause),
+      name: getErrorName(cause),
+      ...getProviderError(cause),
+    },
+  });
+}
+
 function readServiceAccountCredentials() {
   if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
     const parsed = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON) as {
@@ -153,6 +219,7 @@ function pollVideosOperation(
   client: GoogleGenAI,
   operation: GenerateVideosOperation,
   timeoutAt: number,
+  logContext: VertexCallLogContext,
 ): Effect.Effect<GenerateVideosOperation, WorkflowGenerationError> {
   if (operation.done) {
     return Effect.succeed(operation);
@@ -169,7 +236,26 @@ function pollVideosOperation(
   return Effect.gen(function* () {
     yield* Effect.sleep(10_000);
     const nextOperation = yield* Effect.tryPromise({
-      try: () => client.operations.getVideosOperation({ operation }),
+      try: async () => {
+        const startedAt = Date.now();
+        const context = {
+          ...logContext,
+          operation: "videos.getOperation",
+        } satisfies VertexCallLogContext;
+        logVertexCallStart(context);
+        try {
+          const response = await client.operations.getVideosOperation({
+            operation,
+          });
+          logVertexCallSuccess(context, startedAt, {
+            done: response.done ?? false,
+          });
+          return response;
+        } catch (cause) {
+          logVertexCallFailure(context, startedAt, cause);
+          throw cause;
+        }
+      },
       catch: (cause) =>
         new WorkflowGenerationError({
           message: "Failed while polling Veo generation.",
@@ -177,7 +263,12 @@ function pollVideosOperation(
         }),
     });
 
-    return yield* pollVideosOperation(client, nextOperation, timeoutAt);
+    return yield* pollVideosOperation(
+      client,
+      nextOperation,
+      timeoutAt,
+      logContext,
+    );
   });
 }
 
@@ -295,6 +386,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
         ownerUserId,
         projectId: _projectId = null,
         request: {
+          idempotencyKey = null,
           model,
           mode: _mode,
           prompt,
@@ -328,7 +420,8 @@ export class VertexAi extends Context.Tag("VertexAi")<
             );
           }
 
-          const client = yield* createVertexClientEffect(getLlmLocation());
+          const location = getLlmLocation();
+          const client = yield* createVertexClientEffect(location);
           const imageParts = yield* Effect.forEach(
             referenceImages,
             (asset) => toLlmImagePart(ownerUserId, asset),
@@ -337,24 +430,53 @@ export class VertexAi extends Context.Tag("VertexAi")<
             },
           );
           const response = yield* Effect.tryPromise({
-            try: () =>
-              client.models.generateContent({
+            try: async () => {
+              const startedAt = Date.now();
+              const context = {
+                idempotencyKey,
+                location,
                 model: GEMINI_3_FLASH_PREVIEW_MODEL_ID,
-                contents: [
-                  {
-                    role: "user",
-                    parts: [{ text: promptText }, ...imageParts],
-                  },
-                ],
-                config: {
+                operation: "models.generateContent.text",
+                params: {
                   maxOutputTokens,
-                  systemInstruction: systemPromptText || undefined,
+                  promptLength: promptText.length,
+                  referenceImageCount: referenceImages.length,
+                  systemPromptLength: systemPromptText?.length ?? 0,
                   temperature,
-                  thinkingConfig: {
-                    thinkingLevel: toThinkingLevel(thinkingLevel),
-                  },
+                  thinkingLevel,
                 },
-              }),
+              } satisfies VertexCallLogContext;
+              logVertexCallStart(context);
+              try {
+                const result = await client.models.generateContent({
+                  model: GEMINI_3_FLASH_PREVIEW_MODEL_ID,
+                  contents: [
+                    {
+                      role: "user",
+                      parts: [{ text: promptText }, ...imageParts],
+                    },
+                  ],
+                  config: {
+                    maxOutputTokens,
+                    systemInstruction: systemPromptText || undefined,
+                    temperature,
+                    thinkingConfig: {
+                      thinkingLevel: toThinkingLevel(thinkingLevel),
+                    },
+                  },
+                });
+                logVertexCallSuccess(context, startedAt, {
+                  candidatesTokenCount:
+                    result.usageMetadata?.candidatesTokenCount ?? 0,
+                  promptTokenCount: result.usageMetadata?.promptTokenCount ?? 0,
+                  totalTokenCount: result.usageMetadata?.totalTokenCount ?? 0,
+                });
+                return result;
+              } catch (cause) {
+                logVertexCallFailure(context, startedAt, cause);
+                throw cause;
+              }
+            },
             catch: (cause) =>
               new WorkflowGenerationError({
                 message: "Vertex AI text generation failed.",
@@ -381,6 +503,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
         ownerUserId,
         projectId = null,
         request: {
+          idempotencyKey = null,
           model,
           mode: _mode,
           prompt,
@@ -402,7 +525,8 @@ export class VertexAi extends Context.Tag("VertexAi")<
             );
           }
 
-          const client = yield* createVertexClientEffect(getImageLocation());
+          const location = getImageLocation();
+          const client = yield* createVertexClientEffect(location);
           const imageParts = yield* Effect.forEach(
             referenceImages,
             toInlineImagePart,
@@ -411,23 +535,46 @@ export class VertexAi extends Context.Tag("VertexAi")<
             },
           );
           const response = yield* Effect.tryPromise({
-            try: () =>
-              client.models.generateContent({
+            try: async () => {
+              const startedAt = Date.now();
+              const context = {
+                idempotencyKey,
+                location,
                 model: NANO_BANANA_PRO_MODEL_ID,
-                contents: [
-                  {
-                    role: "user",
-                    parts: [{ text: promptText }, ...imageParts],
-                  },
-                ],
-                config: {
-                  responseModalities: [Modality.TEXT, Modality.IMAGE],
-                  imageConfig: {
-                    aspectRatio,
-                    outputMimeType: "image/png",
-                  },
+                operation: "models.generateContent.image",
+                params: {
+                  aspectRatio,
+                  promptLength: promptText.length,
+                  referenceImageCount: referenceImages.length,
                 },
-              }),
+              } satisfies VertexCallLogContext;
+              logVertexCallStart(context);
+              try {
+                const result = await client.models.generateContent({
+                  model: NANO_BANANA_PRO_MODEL_ID,
+                  contents: [
+                    {
+                      role: "user",
+                      parts: [{ text: promptText }, ...imageParts],
+                    },
+                  ],
+                  config: {
+                    responseModalities: [Modality.TEXT, Modality.IMAGE],
+                    imageConfig: {
+                      aspectRatio,
+                      outputMimeType: "image/png",
+                    },
+                  },
+                });
+                logVertexCallSuccess(context, startedAt, {
+                  imagePartCount: pickImageParts(result).length,
+                });
+                return result;
+              } catch (cause) {
+                logVertexCallFailure(context, startedAt, cause);
+                throw cause;
+              }
+            },
             catch: (cause) =>
               new WorkflowGenerationError({
                 message: "Vertex AI image generation failed.",
@@ -488,6 +635,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
         ownerUserId,
         projectId = null,
         request: {
+          idempotencyKey = null,
           model,
           mode: _mode,
           prompt,
@@ -544,7 +692,8 @@ export class VertexAi extends Context.Tag("VertexAi")<
             );
           }
 
-          const client = yield* createVertexClientEffect(getVideoLocation());
+          const location = getVideoLocation();
+          const client = yield* createVertexClientEffect(location);
           const sourceImage = firstFrame
             ? yield* toSdkImage(firstFrame)
             : undefined;
@@ -558,24 +707,52 @@ export class VertexAi extends Context.Tag("VertexAi")<
                 })
               : undefined;
           const operation = yield* Effect.tryPromise({
-            try: () =>
-              client.models.generateVideos({
+            try: async () => {
+              const startedAt = Date.now();
+              const context = {
+                idempotencyKey,
+                location,
                 model: VEO_31_FAST_MODEL_ID,
-                source: {
-                  prompt: promptText || undefined,
-                  image: sourceImage,
-                },
-                config: {
-                  numberOfVideos: 1,
-                  durationSeconds,
+                operation: "models.generateVideos",
+                params: {
                   aspectRatio,
+                  durationSeconds,
                   generateAudio,
-                  lastFrame: lastFrameImage,
+                  hasFirstFrame: Boolean(firstFrame),
+                  hasLastFrame: Boolean(lastFrame),
+                  promptLength: promptText.length,
+                  referenceImageCount: referenceImages.length,
                   resolution,
-                  personGeneration: "allow_adult",
-                  referenceImages: referenceImageAssets,
                 },
-              }),
+              } satisfies VertexCallLogContext;
+              logVertexCallStart(context);
+              try {
+                const result = await client.models.generateVideos({
+                  model: VEO_31_FAST_MODEL_ID,
+                  source: {
+                    prompt: promptText || undefined,
+                    image: sourceImage,
+                  },
+                  config: {
+                    numberOfVideos: 1,
+                    durationSeconds,
+                    aspectRatio,
+                    generateAudio,
+                    lastFrame: lastFrameImage,
+                    resolution,
+                    personGeneration: "allow_adult",
+                    referenceImages: referenceImageAssets,
+                  },
+                });
+                logVertexCallSuccess(context, startedAt, {
+                  done: result.done ?? false,
+                });
+                return result;
+              } catch (cause) {
+                logVertexCallFailure(context, startedAt, cause);
+                throw cause;
+              }
+            },
             catch: (cause) =>
               new WorkflowGenerationError({
                 message: "Vertex AI video generation failed.",
@@ -587,6 +764,12 @@ export class VertexAi extends Context.Tag("VertexAi")<
             client,
             operation,
             Date.now() + 6 * 60 * 1000,
+            {
+              idempotencyKey,
+              location,
+              model: VEO_31_FAST_MODEL_ID,
+              operation: "videos.getOperation",
+            },
           );
 
           if (completedOperation.error) {
