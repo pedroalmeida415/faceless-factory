@@ -82,26 +82,23 @@ export function buildWorkflowApprovedRunProjection(params: {
   artifacts: WorkflowRunArtifacts;
   document: WorkflowDocument | WorkflowGraphDocument;
 }) {
-  const latestReviewLanes = getLatestReviewLaneArtifacts(params.artifacts);
-  const approvedReviewIdentity = new Set(
-    latestReviewLanes
-      .filter((lane) => lane.status === "approved")
-      .map((lane) => `${lane.nodeId}:${lane.laneIndex}:${lane.attempt}`),
-  );
-  const reviewedNodeIds = new Set(latestReviewLanes.map((lane) => lane.nodeId));
+  const document =
+    hydrateWorkflowGraphDocument(toWorkflowGraphDocument(params.document)) ??
+    (params.document as WorkflowDocument);
 
   return buildWorkflowArtifactProjection({
-    artifacts: {
-      laneResults: params.artifacts.laneResults.filter(
-        (result) =>
-          result.status === "error" ||
-          !reviewedNodeIds.has(result.nodeId) ||
-          approvedReviewIdentity.has(
-            `${result.nodeId}:${result.laneIndex}:${result.attempt}`,
-          ),
+    artifacts: params.artifacts,
+    document: {
+      ...document,
+      nodes: document.nodes.map((node) =>
+        (node.kind === "imageGenerator" ||
+          node.kind === "videoGenerator" ||
+          node.kind === "llmGenerator") &&
+        node.reviewEnabled
+          ? { ...node, outputLanes: [] }
+          : node,
       ),
     },
-    document: params.document,
   });
 }
 

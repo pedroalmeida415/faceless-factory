@@ -8,6 +8,7 @@ import {
   type WorkflowDocumentNode,
 } from "~/lib/workflow/document";
 import {
+  buildWorkflowApprovedRunProjection,
   buildWorkflowRunProjection,
   getWorkflowVisibleCompletionOutputs,
 } from "~/lib/workflow/execution/artifact-projection";
@@ -19,6 +20,7 @@ import {
   getWorkflowLaneKey,
   getWorkflowLaneSettlement,
 } from "~/lib/workflow/execution/lane-dependencies";
+import { buildWorkflowExecutionPlan } from "~/lib/workflow/execution/subgraph";
 import type {
   NodeLaneOutputArtifact,
   WorkflowRunArtifacts,
@@ -29,6 +31,7 @@ import {
   isWorkflowRunLockingStatus,
 } from "~/lib/workflow/execution/types";
 import { PROMPT_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
+import type { WorkflowAsset } from "~/lib/workflow/types";
 
 const imageInput = (index: number) => `image-input-${index}`;
 
@@ -54,6 +57,21 @@ function lanePlan(params: {
   });
 }
 
+function executionLanePlan(params: {
+  document: WorkflowDocument;
+  targetNodeIds: string[];
+}) {
+  const executionPlan = buildWorkflowExecutionPlan(
+    params.document,
+    params.targetNodeIds,
+  );
+  return buildWorkflowLaneDependencyPlan({
+    document: params.document,
+    generatorIterationById: executionPlan.generatorIterationById,
+    targetNodeIds: params.targetNodeIds,
+  });
+}
+
 function output(
   nodeId: string,
   laneIndex: number,
@@ -74,6 +92,34 @@ function output(
     runId: "run",
     value: { lanes: [`${nodeId}:${laneIndex}`], type: "text" },
     ...params,
+  };
+}
+
+function imageOutput(
+  nodeId: string,
+  laneIndex: number,
+  params?: Partial<NodeLaneOutputArtifact>,
+): NodeLaneOutputArtifact {
+  const asset = workflowAsset(`${nodeId}-${laneIndex}`);
+  return output(nodeId, laneIndex, {
+    value: { lanes: [[asset]], type: "image" },
+    ...params,
+  });
+}
+
+function workflowAsset(id: string): WorkflowAsset {
+  return {
+    createdAt: "2026-01-01T00:00:00.000Z",
+    externalUri: null,
+    fileName: `${id}.png`,
+    id,
+    kind: "image",
+    mimeType: "image/png",
+    model: null,
+    size: 1,
+    source: "generated",
+    storagePath: `generated/${id}.png`,
+    url: `/api/assets/${id}`,
   };
 }
 
@@ -396,6 +442,95 @@ describe("workflow lane dependencies", () => {
         plan,
       }).some((job) => job.nodeId === video.id && job.laneIndex === 0),
       true,
+    );
+  });
+
+  test("approved review projection keeps pending lane cardinality for downstream transforms", () => {
+    const reviewed = {
+      ...node("imageGenerator", "reviewed"),
+      outputLanes: [
+        [workflowAsset("reviewed-0")],
+        [workflowAsset("reviewed-1")],
+      ],
+      reviewEnabled: true,
+    };
+    const image = node("imageGenerator", "image");
+    const reorder = {
+      ...node("laneReorder", "shift"),
+      shift: 1,
+      valueType: "image" as const,
+    };
+    const video = {
+      ...node("videoGenerator", "video"),
+      mode: "first-last-frame" as const,
+    };
+    const document: WorkflowDocument = {
+      edges: [
+        {
+          id: "reviewed-image",
+          source: reviewed.id,
+          sourceHandle: "images",
+          target: image.id,
+          targetHandle: imageInput(0),
+        },
+        {
+          id: "image-video-first",
+          source: image.id,
+          sourceHandle: "images",
+          target: video.id,
+          targetHandle: "first-frame",
+        },
+        {
+          id: "image-shift",
+          source: image.id,
+          sourceHandle: "images",
+          target: reorder.id,
+          targetHandle: "input",
+        },
+        {
+          id: "shift-video-last",
+          source: reorder.id,
+          sourceHandle: "output",
+          target: video.id,
+          targetHandle: "last-frame",
+        },
+      ],
+      nodes: [reviewed, image, reorder, video],
+      version: WORKFLOW_DOCUMENT_VERSION,
+    };
+    const artifacts: WorkflowRunArtifacts = {
+      laneResults: [
+        success(imageOutput(reviewed.id, 0, { reviewStatus: "approved" })),
+        success(imageOutput(reviewed.id, 1, { reviewStatus: "approved" })),
+        success(imageOutput(reviewed.id, 2, { reviewStatus: "regenerating" })),
+        success(imageOutput(image.id, 0)),
+        success(imageOutput(image.id, 1)),
+      ],
+    };
+    const projected = buildWorkflowApprovedRunProjection({
+      artifacts,
+      document,
+    });
+    const plan = executionLanePlan({
+      document: projected,
+      targetNodeIds: [reviewed.id, image.id, video.id],
+    });
+
+    assert.deepEqual(
+      plan.jobs.find((job) => job.nodeId === video.id && job.laneIndex === 1)
+        ?.dependencies,
+      [
+        { laneIndex: 1, nodeId: image.id },
+        { laneIndex: 2, nodeId: image.id },
+      ],
+    );
+    assert.equal(
+      getReadyWorkflowLaneJobs({
+        blockedLanes: materializedBlockedLaneKeys(artifacts),
+        completedLanes: visibleLaneKeys(artifacts),
+        plan,
+      }).some((job) => job.nodeId === video.id && job.laneIndex === 1),
+      false,
     );
   });
 

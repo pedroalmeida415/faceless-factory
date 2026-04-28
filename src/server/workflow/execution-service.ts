@@ -63,6 +63,7 @@ import {
   estimateWorkflowExecution,
   type WorkflowExecutionPriceQuote,
 } from "~/lib/workflow/pricing";
+import { getReviewLaneCount } from "~/lib/workflow/review-state";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 import {
   buildLaneExecutionResultFromDocument,
@@ -731,7 +732,7 @@ export class WorkflowExecutionService extends Context.Tag(
             reviewNode.kind === "llmGenerator")
             ? Math.max(
                 reviewNode.outputLanes.length,
-                reviewNode.review.lanes.length,
+                getReviewLaneCount(reviewNode),
               )
             : 0;
 

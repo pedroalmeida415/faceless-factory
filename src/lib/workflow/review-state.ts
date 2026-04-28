@@ -126,10 +126,11 @@ export function getApprovedReviewRuntimeValue(
   }
 
   if (params) {
+    const laneCount = getReviewLaneCount(node);
     if (
       node.review.sourceNodeId !== node.id ||
       params.inputValue.type !== node.review.valueType ||
-      params.inputValue.lanes.length !== node.review.lanes.length
+      params.inputValue.lanes.length !== laneCount
     ) {
       return null;
     }
@@ -151,7 +152,8 @@ export function getApprovedReviewRuntimeValue(
   const lanes = node.review.lanes
     .filter((lane) => lane.status === "approved")
     .sort((left, right) => left.laneIndex - right.laneIndex);
-  if (!lanes.length || lanes.length !== node.review.lanes.length) {
+  const laneCount = getReviewLaneCount(node);
+  if (!lanes.length || lanes.length !== laneCount) {
     return null;
   }
 
@@ -213,14 +215,30 @@ export function getApprovedReviewLaneRuntimeValue(
   }
 }
 
+export function getReviewLaneCount(node: ReviewableGeneratorNode) {
+  return node.reviewEnabled && node.review.valueType !== null
+    ? node.review.lanes.reduce(
+        (count, lane) => Math.max(count, lane.laneIndex + 1),
+        0,
+      )
+    : 0;
+}
+
 export function isReviewFullyApproved(node: WorkflowDocumentNode | undefined) {
+  if (
+    node === undefined ||
+    (node.kind !== "imageGenerator" &&
+      node.kind !== "videoGenerator" &&
+      node.kind !== "llmGenerator") ||
+    !node.reviewEnabled
+  ) {
+    return false;
+  }
+
+  const laneCount = getReviewLaneCount(node);
   return (
-    node !== undefined &&
-    (node.kind === "imageGenerator" ||
-      node.kind === "videoGenerator" ||
-      node.kind === "llmGenerator") &&
-    node.reviewEnabled &&
-    node.review.lanes.length > 0 &&
+    laneCount > 0 &&
+    node.review.lanes.length === laneCount &&
     node.review.lanes.every((lane) => lane.status === "approved")
   );
 }

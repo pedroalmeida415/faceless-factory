@@ -19,6 +19,7 @@ import {
   PROMPT_VARIABLE_PATTERN,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
+import { getReviewLaneCount } from "~/lib/workflow/review-state";
 
 export type GeneratorIterationInfo = {
   hasIterator: boolean;
@@ -236,9 +237,15 @@ function planGeneratorNode(
   context.executableNodeIds.push(node.id);
   context.generatorIterationById.set(node.id, DEFAULT_GENERATOR_ITERATION_INFO);
 
-  const info = toGeneratorIterationInfo(
+  const inputInfo = toGeneratorIterationInfo(
     resolveGeneratorInputPlans(context, node.id, path),
   );
+  const reviewLaneCount = getReviewLaneCount(node);
+  const info = {
+    ...inputInfo,
+    hasIterator: inputInfo.hasIterator || reviewLaneCount > 1,
+    iterations: Math.max(inputInfo.iterations, reviewLaneCount),
+  };
   context.generatorIterationById.set(node.id, info);
   return info;
 }
@@ -403,12 +410,25 @@ function resolveNodePlan(
 
       const awaitingReviewOutput =
         getWorkflowGeneratorAwaitingReviewRuntimeValue(node);
+      const reviewLaneCount = getReviewLaneCount(node);
       if (awaitingReviewOutput && !context.targetNodeIdSet.has(node.id)) {
         context.reviewBarrierNodeIds.add(node.id);
         return {
-          laneCount: awaitingReviewOutput.lanes.length,
+          laneCount: Math.max(
+            awaitingReviewOutput.lanes.length,
+            reviewLaneCount,
+          ),
           mismatched: false,
           type: awaitingReviewOutput.type,
+        };
+      }
+
+      if (reviewLaneCount > 0 && !context.targetNodeIdSet.has(node.id)) {
+        context.reviewBarrierNodeIds.add(node.id);
+        return {
+          laneCount: reviewLaneCount,
+          mismatched: false,
+          type: node.review.valueType ?? outputType,
         };
       }
 
