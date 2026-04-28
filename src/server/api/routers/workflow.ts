@@ -211,6 +211,22 @@ export const workflowRouter = createTRPCRouter({
       });
     }),
 
+  quoteExecution: protectedProcedure
+    .input(workflowExecutionRequestSchema)
+    .query(async ({ ctx, input }) => {
+      const request = input as StartWorkflowExecutionRequest;
+      const userId = ctx.session.user.id;
+
+      return ServerRuntime.runPromise(
+        Effect.gen(function* () {
+          const workflowExecutionService = yield* WorkflowExecutionService;
+          return yield* workflowExecutionService.quoteRun(userId, request);
+        }),
+      ).catch((error) => {
+        throw toTRPCError(error);
+      });
+    }),
+
   executionEvents: protectedProcedure
     .input(workflowExecutionEventsSchema)
     .subscription(async function* ({ ctx, input, signal }) {

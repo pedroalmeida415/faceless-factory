@@ -32,6 +32,10 @@ import {
   getWorkflowLaneSettlement,
 } from "~/lib/workflow/execution/lane-dependencies";
 import {
+  getGeneratorLaneValueType,
+  selectReusableWorkflowLaneOutputs,
+} from "~/lib/workflow/execution/lane-result-reuse";
+import {
   buildWorkflowExecutionStatusResponse,
   createWorkflowExecutionRuntimeState,
 } from "~/lib/workflow/execution/runtime-state";
@@ -54,17 +58,18 @@ import {
   getSuccessfulWorkflowLaneOutputs,
   WorkflowLaneDependencyMissing,
 } from "~/lib/workflow/execution/types";
-import { estimateWorkflowExecution } from "~/lib/workflow/pricing";
+import {
+  estimateWorkflowExecution,
+  type WorkflowExecutionPriceQuote,
+} from "~/lib/workflow/pricing";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 import {
   buildLaneExecutionResultFromDocument,
   WorkflowArtifactStore,
 } from "~/server/workflow/artifact-store";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
-import {
-  getWorkflowProject,
-  saveWorkflowProjectExecutionResults,
-} from "~/server/workflow/projects";
+import { WorkflowProjectStore } from "~/server/workflow/project-store";
+import { saveWorkflowProjectExecutionResults } from "~/server/workflow/projects";
 import {
   createWorkflowExecutionLaneJobId,
   createWorkflowReviewRegenerationJobId,
@@ -88,6 +93,15 @@ export class WorkflowExecutionService extends Context.Tag(
       | WorkflowAuthorizationError
       | WorkflowCreditsError
       | WorkflowExecutionPortError
+      | WorkflowInfrastructureError
+      | WorkflowValidationError
+    >;
+    readonly quoteRun: (
+      userId: string,
+      request: StartWorkflowExecutionRequest,
+    ) => Effect.Effect<
+      WorkflowExecutionPriceQuote,
+      | WorkflowAuthorizationError
       | WorkflowInfrastructureError
       | WorkflowValidationError
     >;
@@ -180,6 +194,7 @@ export class WorkflowExecutionService extends Context.Tag(
       const vertexAi = yield* VertexAi;
       const workflowCreditsService = yield* WorkflowCreditsService;
       const workflowArtifactStore = yield* WorkflowArtifactStore;
+      const workflowProjectStore = yield* WorkflowProjectStore;
       const workflowRunStore = yield* WorkflowRunStore;
 
       const buildContinuationRequest = (
@@ -263,6 +278,135 @@ export class WorkflowExecutionService extends Context.Tag(
           targetNodeIds,
         });
       };
+
+      const getReusablePriorLaneOutputs = (params: {
+        document: StartWorkflowExecutionRequest["document"];
+        excludeRunId?: string | null;
+        ownerUserId: string;
+        projectId: string;
+        targetNodeIds: readonly string[];
+      }) =>
+        Effect.gen(function* () {
+          const dependencyPlan = getExecutionDependencyPlan(
+            params.document,
+            params.targetNodeIds,
+          );
+          const nodeById = new Map(
+            params.document.nodes.map((node) => [node.id, node]),
+          );
+          const priorResultCandidates =
+            yield* workflowArtifactStore.getProjectLaneReuseCandidates({
+              excludeRunId: params.excludeRunId ?? null,
+              lanes: dependencyPlan.jobs,
+              ownerUserId: params.ownerUserId,
+              projectId: params.projectId,
+            });
+
+          return selectReusableWorkflowLaneOutputs({
+            candidates: priorResultCandidates,
+            expectedLanes: dependencyPlan.jobs.flatMap((job) => {
+              const valueType = getGeneratorLaneValueType(
+                nodeById.get(job.nodeId),
+              );
+              return valueType ? [{ ...job, valueType }] : [];
+            }),
+          });
+        });
+
+      const quoteRun = (
+        userId: string,
+        request: StartWorkflowExecutionRequest,
+      ) =>
+        Effect.gen(function* () {
+          const projectId = request.projectId?.trim();
+          if (!projectId) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "A workflow project is required to quote execution.",
+              }),
+            );
+          }
+
+          if (
+            request.documentRevision === null ||
+            request.documentRevision === undefined
+          ) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message:
+                  "Workflow project must be saved before execution is quoted.",
+              }),
+            );
+          }
+
+          const project = yield* workflowProjectStore.getProject({
+            ownerUserId: userId,
+            projectId,
+          });
+
+          if (project.documentRevision !== request.documentRevision) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message:
+                  "Workflow project changed before execution quote. Save again and retry.",
+              }),
+            );
+          }
+
+          const projectDocument = hydrateWorkflowGraphDocument(
+            project.document,
+          );
+          if (!projectDocument) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Workflow project contains an invalid graph document.",
+              }),
+            );
+          }
+
+          const targetNodeIds = resolveWorkflowExecutionTargets(
+            projectDocument,
+            request.selection?.nodeIds ?? [],
+            request.target,
+          );
+          WorkflowGraphValidator.validateExecutionTargets(
+            projectDocument,
+            targetNodeIds,
+          );
+          const document = extractWorkflowExecutionSubgraph(
+            projectDocument,
+            targetNodeIds,
+          );
+          const executionPlan = buildWorkflowExecutionPlan(
+            document,
+            targetNodeIds,
+          );
+          const reusableLaneOutputs = yield* getReusablePriorLaneOutputs({
+            document,
+            ownerUserId: userId,
+            projectId,
+            targetNodeIds: Array.from(
+              new Set([
+                ...executionPlan.executableNodeIds,
+                ...executionPlan.reviewBarrierNodeIds,
+              ]),
+            ),
+          });
+
+          return estimateWorkflowExecution(
+            {
+              ...request,
+              document,
+              documentRevision: project.documentRevision,
+              projectId,
+            },
+            {
+              completedLaneKeys: new Set(
+                reusableLaneOutputs.map(getWorkflowLaneKey),
+              ),
+            },
+          );
+        });
 
       const getMaterializedLaneKeys = (artifacts: WorkflowRunArtifacts) =>
         new Set(
@@ -976,13 +1120,9 @@ export class WorkflowExecutionService extends Context.Tag(
             return run.document;
           }
 
-          const project = yield* Effect.tryPromise({
-            try: () =>
-              getWorkflowProject({
-                ownerUserId: userId,
-                projectId,
-              }),
-            catch: toPersistenceError,
+          const project = yield* workflowProjectStore.getProject({
+            ownerUserId: userId,
+            projectId,
           });
 
           const artifacts = yield* workflowArtifactStore.getRunArtifacts({
@@ -2099,20 +2239,9 @@ export class WorkflowExecutionService extends Context.Tag(
             );
           }
 
-          const project = yield* Effect.tryPromise({
-            try: () =>
-              getWorkflowProject({
-                ownerUserId: userId,
-                projectId,
-              }),
-            catch: (cause) =>
-              cause instanceof WorkflowAuthorizationError ||
-              cause instanceof WorkflowValidationError
-                ? cause
-                : new WorkflowInfrastructureError({
-                    message: getErrorMessage(cause),
-                    cause,
-                  }),
+          const project = yield* workflowProjectStore.getProject({
+            ownerUserId: userId,
+            projectId,
           });
 
           if (project.documentRevision !== request.documentRevision) {
@@ -2167,7 +2296,19 @@ export class WorkflowExecutionService extends Context.Tag(
               ...executionPlan.reviewBarrierNodeIds,
             ]),
           );
-          const priceQuote = estimateWorkflowExecution(submittedRequest);
+          const reusableLaneOutputs = yield* getReusablePriorLaneOutputs({
+            document: submittedRequest.document,
+            excludeRunId: runId,
+            ownerUserId: userId,
+            projectId,
+            targetNodeIds: artifactNodeIds,
+          });
+          const reusableLaneKeys = new Set(
+            reusableLaneOutputs.map(getWorkflowLaneKey),
+          );
+          const priceQuote = estimateWorkflowExecution(submittedRequest, {
+            completedLaneKeys: reusableLaneKeys,
+          });
           const credits = yield* workflowCreditsService.debitExecution({
             amount: priceQuote.totalCost,
             executionId: runId,
@@ -2197,7 +2338,7 @@ export class WorkflowExecutionService extends Context.Tag(
             status: "queued",
           });
 
-          const run = yield* workflowRunStore
+          let run = yield* workflowRunStore
             .createRun({
               ownerUserId: userId,
               projectId,
@@ -2224,62 +2365,164 @@ export class WorkflowExecutionService extends Context.Tag(
               ),
             );
 
+          if (reusableLaneOutputs.length) {
+            yield* workflowArtifactStore
+              .copyReusableLaneOutputs({
+                outputs: reusableLaneOutputs,
+                ownerUserId: userId,
+                projectId,
+                runId,
+              })
+              .pipe(
+                Effect.catchAll((error) =>
+                  failRun({
+                    message: "Failed to seed reusable workflow lane outputs.",
+                    runId,
+                    userId,
+                  }).pipe(
+                    Effect.catchAll((cleanupError) => {
+                      console.error(
+                        "Failed to mark workflow run as errored after lane reuse failure",
+                        cleanupError,
+                      );
+                      return Effect.void;
+                    }),
+                    Effect.zipRight(Effect.fail(error)),
+                  ),
+                ),
+              );
+            const seededArtifacts =
+              yield* workflowArtifactStore.getRunArtifacts({
+                ownerUserId: userId,
+                runId,
+              });
+            run = yield* workflowRunStore
+              .updateRun({
+                ...run,
+                document: buildWorkflowRunProjection({
+                  artifacts: seededArtifacts,
+                  document: run.document,
+                }),
+              })
+              .pipe(Effect.mapError(toPersistenceError));
+          }
+
           const laneCount = getExecutionLaneCount(
             submittedRequest.document,
             targetNodeIds,
           );
+          const plannedLaneCount = getExecutionDependencyPlan(
+            submittedRequest.document,
+            artifactNodeIds,
+          ).jobs.length;
           const shouldSplitLanes = laneCount > 1;
+          const shouldUseLaneScheduler =
+            shouldSplitLanes || reusableLaneOutputs.length > 0;
 
-          yield* Effect.tryPromise({
-            try: async () => {
-              if (shouldSplitLanes) {
-                const readyJobs = getReadyWorkflowLaneJobs({
-                  completedLanes: new Set(),
-                  plan: buildWorkflowLaneDependencyPlan({
-                    document: submittedRequest.document,
-                    generatorIterationById:
-                      executionPlan.generatorIterationById,
-                    targetNodeIds: artifactNodeIds,
-                  }),
+          if (shouldUseLaneScheduler) {
+            const artifacts = yield* workflowArtifactStore.getRunArtifacts({
+              ownerUserId: userId,
+              runId,
+            });
+            const readyJobs = yield* getSchedulableReadyLaneJobs({
+              artifacts,
+              request: submittedRequest,
+              runId,
+              targetNodeIds: artifactNodeIds,
+            });
+
+            console.info("Workflow start lane reuse plan", {
+              projectId,
+              quoteTotal: priceQuote.totalCost,
+              reusableLaneCount: reusableLaneOutputs.length,
+              runId,
+              scheduledLaneCount: readyJobs.length,
+              totalPlannedLaneCount: plannedLaneCount,
+            });
+
+            if (!readyJobs.length) {
+              const settlement = getWorkflowLaneSettlement({
+                artifacts,
+                plan: buildWorkflowLaneDependencyPlan({
+                  document: submittedRequest.document,
+                  generatorIterationById: executionPlan.generatorIterationById,
+                  targetNodeIds: artifactNodeIds,
+                }),
+              });
+              if (settlement.settled && !settlement.failedLanes.size) {
+                const settledRun = {
+                  ...run,
+                  activity: "Workflow run finished.",
+                  finalCostCredits: 0,
+                  runtime: {
+                    ...run.runtime,
+                    activity: "Workflow run finished.",
+                    error: null,
+                    finishedAt: new Date().toISOString(),
+                  },
+                  status: "success" as const,
+                } satisfies WorkflowExecutionStatusResponse;
+                const settledCredits = yield* settleRunCost({
+                  reason: "Workflow execution settled.",
+                  run: settledRun,
+                  targetCost: 0,
+                  userId,
                 });
 
-                await Promise.all(
-                  readyJobs.map((job) =>
-                    enqueueWorkflowExecutionJob(
-                      {
-                        request: {
-                          ...submittedRequest,
-                          executionLaneFilter: {
-                            laneCount,
-                            laneIndex: job.laneIndex,
-                          },
-                          selection: { nodeIds: [job.nodeId] },
-                          target: { type: "selected-or-all" as const },
-                        },
-                        runId,
-                        type: "execute-run",
-                        userId,
-                      },
-                      {
-                        jobId: createWorkflowExecutionLaneJobId({
-                          laneIndex: job.laneIndex,
-                          nodeId: job.nodeId,
-                          runId,
-                        }),
-                      },
-                    ),
-                  ),
-                );
-                return;
+                return yield* workflowRunStore
+                  .updateRun({
+                    ...settledRun,
+                    credits: settledCredits,
+                  })
+                  .pipe(Effect.mapError(toPersistenceError));
               }
+            }
 
-              await enqueueWorkflowExecutionJob({
+            yield* enqueueLaneJobs({
+              jobs: readyJobs,
+              laneCount,
+              request: submittedRequest,
+              runId,
+              userId,
+            }).pipe(
+              Effect.catchAll((error) =>
+                failRun({
+                  message: "Failed to queue workflow run.",
+                  runId,
+                  userId,
+                }).pipe(
+                  Effect.catchAll((cleanupError) => {
+                    console.error(
+                      "Failed to mark workflow run as errored after queue failure",
+                      cleanupError,
+                    );
+                    return Effect.void;
+                  }),
+                  Effect.zipRight(Effect.fail(error)),
+                ),
+              ),
+            );
+
+            return run;
+          }
+
+          console.info("Workflow start lane reuse plan", {
+            projectId,
+            quoteTotal: priceQuote.totalCost,
+            reusableLaneCount: reusableLaneOutputs.length,
+            runId,
+            scheduledLaneCount: 1,
+            totalPlannedLaneCount: plannedLaneCount,
+          });
+
+          yield* Effect.tryPromise({
+            try: () =>
+              enqueueWorkflowExecutionJob({
                 request: submittedRequest,
                 runId,
                 type: "execute-run",
                 userId,
-              });
-            },
+              }),
             catch: (cause) =>
               new WorkflowInfrastructureError({
                 message: getErrorMessage(cause),
@@ -3000,6 +3243,7 @@ export class WorkflowExecutionService extends Context.Tag(
         executeReviewLaneRegeneration,
         executeRun,
         failRun,
+        quoteRun,
         rejectReviewLane,
         settleFailedExecutionLane,
         startRun,

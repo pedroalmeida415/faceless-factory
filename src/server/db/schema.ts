@@ -275,6 +275,9 @@ export const workflowLaneResults = pgTable(
       table.nodeId,
       table.laneIndex,
     ),
+    projectNodeLaneUpdatedIdx: index(
+      "workflow_lane_results_project_node_lane_updated_idx",
+    ).on(table.projectId, table.nodeId, table.laneIndex, table.updatedAt),
   }),
 );
 

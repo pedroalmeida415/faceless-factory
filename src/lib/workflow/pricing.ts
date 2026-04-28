@@ -34,11 +34,25 @@ export type WorkflowExecutionPriceQuote = {
   lineItems: WorkflowExecutionPriceLineItem[];
 };
 
+type WorkflowExecutionEstimateOptions = {
+  completedLaneKeys?: ReadonlySet<string>;
+};
+
 function buildWorkflowExecutionPriceLineItem(
   node: WorkflowDocumentNode,
   iterationInfo: GeneratorIterationInfo,
+  completedLaneKeys: ReadonlySet<string> | undefined,
 ): WorkflowExecutionPriceLineItem | null {
-  const iterations = Math.max(1, iterationInfo.iterations);
+  const plannedIterations = Math.max(1, iterationInfo.iterations);
+  const iterations = completedLaneKeys
+    ? Array.from({ length: plannedIterations }).filter(
+        (_, laneIndex) => !completedLaneKeys.has(`${node.id}:${laneIndex}`),
+      ).length
+    : plannedIterations;
+
+  if (iterations === 0) {
+    return null;
+  }
 
   switch (node.kind) {
     case "imageGenerator": {
@@ -97,6 +111,7 @@ function resolveQuotedTargetIds(request: StartWorkflowExecutionRequest) {
 function buildWorkflowExecutionPriceQuote(
   document: WorkflowDocument,
   targetIds: string[],
+  options?: WorkflowExecutionEstimateOptions,
 ): WorkflowExecutionPriceQuote {
   const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
   const executionPlan = buildWorkflowExecutionPlan(document, targetIds);
@@ -112,6 +127,7 @@ function buildWorkflowExecutionPriceQuote(
                 iterations: 1,
                 mismatchedIterators: false,
               },
+              options?.completedLaneKeys,
             ),
           ]
         : [],
@@ -141,7 +157,8 @@ export function priceVideoGeneration(request: GenerateVideoRequest) {
 
 export function estimateWorkflowExecution(
   request: StartWorkflowExecutionRequest,
+  options?: WorkflowExecutionEstimateOptions,
 ): WorkflowExecutionPriceQuote {
   const targetIds = resolveQuotedTargetIds(request);
-  return buildWorkflowExecutionPriceQuote(request.document, targetIds);
+  return buildWorkflowExecutionPriceQuote(request.document, targetIds, options);
 }

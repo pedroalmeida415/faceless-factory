@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import {
@@ -13,7 +13,15 @@ import {
   getGeneratorOutputIdempotencyKey,
   getGeneratorOutputInputHash,
 } from "~/lib/workflow/execution/artifact-identity";
-import { buildWorkflowLaneDependencyPlan } from "~/lib/workflow/execution/lane-dependencies";
+import {
+  buildWorkflowLaneDependencyPlan,
+  getWorkflowLaneKey,
+  type WorkflowLaneIdentity,
+} from "~/lib/workflow/execution/lane-dependencies";
+import {
+  getGeneratorLaneValueType,
+  type ReusableWorkflowLaneCandidate,
+} from "~/lib/workflow/execution/lane-result-reuse";
 import { buildWorkflowExecutionPlan } from "~/lib/workflow/execution/subgraph";
 import type {
   LaneExecutionResult,
@@ -38,6 +46,7 @@ import {
   workflowArtifactLineage,
   workflowLaneResults,
   workflowReviewLanes,
+  workflowRuns,
 } from "~/server/db/schema";
 
 type LaneResultRow = typeof workflowLaneResults.$inferSelect;
@@ -73,19 +82,6 @@ function toWorkflowAsset(row: AssetRow): WorkflowAsset {
     storagePath: row.storageKey,
     url: `/api/assets/${encodeURIComponent(row.id)}`,
   };
-}
-
-function outputValueType(node: WorkflowDocument["nodes"][number]) {
-  switch (node.kind) {
-    case "imageGenerator":
-      return "image" as const;
-    case "videoGenerator":
-      return "video" as const;
-    case "llmGenerator":
-      return "text" as const;
-    default:
-      return null;
-  }
 }
 
 function isGeneratorWorkflowNode(
@@ -258,7 +254,7 @@ export function buildLaneExecutionResultFromDocument(params: {
       }
     }
 
-    const valueType = outputValueType(node);
+    const valueType = getGeneratorLaneValueType(node);
     if (!valueType || !node.reviewEnabled) {
       continue;
     }
@@ -321,15 +317,24 @@ function rowToOutput(
     return null;
   }
 
+  const resolvedAssets = row.assetIds.flatMap(
+    (assetId) => assetById.get(assetId) ?? [],
+  );
   const value =
     row.valueType === "text"
-      ? ({ type: "text", lanes: [row.textValue ?? ""] } satisfies RuntimeValue)
-      : ({
-          type: row.valueType,
-          lanes: [
-            row.assetIds.flatMap((assetId) => assetById.get(assetId) ?? []),
-          ],
-        } satisfies RuntimeValue);
+      ? row.textValue?.trim()
+        ? ({ type: "text", lanes: [row.textValue] } satisfies RuntimeValue)
+        : null
+      : row.assetIds.length > 0 && resolvedAssets.length === row.assetIds.length
+        ? ({
+            type: row.valueType,
+            lanes: [resolvedAssets],
+          } satisfies RuntimeValue)
+        : null;
+
+  if (!value) {
+    return null;
+  }
 
   return {
     attempt: row.attempt,
@@ -491,6 +496,138 @@ function getNodeLaneOutputEffect(params: NodeLaneOutputQuery) {
   });
 }
 
+function getProjectLaneReuseCandidatesEffect(params: {
+  excludeRunId?: string | null;
+  lanes: readonly WorkflowLaneIdentity[];
+  ownerUserId: string;
+  projectId: string;
+}) {
+  return Effect.tryPromise({
+    try: async () => {
+      const laneKeys = new Set(params.lanes.map(getWorkflowLaneKey));
+      if (!laneKeys.size) {
+        return [];
+      }
+
+      const rows = await db
+        .select({ laneResult: workflowLaneResults })
+        .from(workflowLaneResults)
+        .innerJoin(workflowRuns, eq(workflowRuns.id, workflowLaneResults.runId))
+        .where(
+          and(
+            eq(workflowLaneResults.ownerUserId, params.ownerUserId),
+            eq(workflowLaneResults.projectId, params.projectId),
+            inArray(workflowRuns.status, ["success", "error"]),
+            params.excludeRunId
+              ? ne(workflowLaneResults.runId, params.excludeRunId)
+              : undefined,
+            inArray(
+              workflowLaneResults.nodeId,
+              Array.from(new Set(params.lanes.map((lane) => lane.nodeId))),
+            ),
+          ),
+        )
+        .then((rows) => rows.map((row) => row.laneResult));
+      const candidateRows = rows.filter((row) =>
+        laneKeys.has(getWorkflowLaneKey(row)),
+      );
+      const assetIds = Array.from(
+        new Set(candidateRows.flatMap((row) => row.assetIds)),
+      );
+      const assetRows = assetIds.length
+        ? await db
+            .select()
+            .from(assets)
+            .where(
+              and(
+                eq(assets.ownerUserId, params.ownerUserId),
+                inArray(assets.id, assetIds),
+              ),
+            )
+        : [];
+      const assetById = new Map(
+        assetRows.map((row) => [row.id, toWorkflowAsset(row)]),
+      );
+
+      return candidateRows.flatMap((row) => {
+        const result = rowToLaneResult(row, assetById);
+        return result
+          ? [
+              {
+                ...result,
+                updatedAt: row.updatedAt.toISOString(),
+              } satisfies ReusableWorkflowLaneCandidate,
+            ]
+          : [];
+      });
+    },
+    catch: toArtifactStoreError,
+  });
+}
+
+function copyReusableLaneOutputsEffect(params: {
+  outputs: readonly NodeLaneOutputArtifact[];
+  ownerUserId: string;
+  projectId: string;
+  runId: string;
+}) {
+  return Effect.tryPromise({
+    try: async () => {
+      const now = new Date();
+      await db.transaction(async (tx) => {
+        for (const output of params.outputs) {
+          const rowValue = outputToRowValue(output);
+          await tx
+            .insert(workflowLaneResults)
+            .values({
+              ...rowValue,
+              attempt: 0,
+              createdAt: now,
+              error: null,
+              failedAt: null,
+              id: randomUUID(),
+              idempotencyKey: `reused:${params.runId}:${output.nodeId}:${output.laneIndex}:0:${output.runId}:${output.attempt}`,
+              inputHash: output.inputHash,
+              laneIndex: output.laneIndex,
+              model: output.model,
+              nodeId: output.nodeId,
+              ownerUserId: params.ownerUserId,
+              projectId: params.projectId,
+              promptSnapshot: output.promptSnapshot,
+              runId: params.runId,
+              status: "success",
+              updatedAt: now,
+            })
+            .onConflictDoUpdate({
+              target: [
+                workflowLaneResults.runId,
+                workflowLaneResults.nodeId,
+                workflowLaneResults.laneIndex,
+                workflowLaneResults.attempt,
+              ],
+              set: {
+                assetIds: rowValue.assetIds,
+                error: null,
+                failedAt: null,
+                idempotencyKey: `reused:${params.runId}:${output.nodeId}:${output.laneIndex}:0:${output.runId}:${output.attempt}`,
+                inputHash: output.inputHash,
+                model: output.model,
+                promptSnapshot: output.promptSnapshot,
+                status: "success",
+                textValue: rowValue.textValue,
+                updatedAt: now,
+                valueType: rowValue.valueType,
+              },
+            });
+        }
+      });
+
+      return params.outputs.length;
+    },
+    catch: toArtifactStoreError,
+  });
+}
+
 export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
   WorkflowArtifactStore,
   {
@@ -501,6 +638,18 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
       ownerUserId: string;
       runId: string;
     }) => Effect.Effect<WorkflowRunArtifacts, ArtifactStoreError>;
+    readonly getProjectLaneReuseCandidates: (params: {
+      excludeRunId?: string | null;
+      lanes: readonly WorkflowLaneIdentity[];
+      ownerUserId: string;
+      projectId: string;
+    }) => Effect.Effect<ReusableWorkflowLaneCandidate[], ArtifactStoreError>;
+    readonly copyReusableLaneOutputs: (params: {
+      outputs: readonly NodeLaneOutputArtifact[];
+      ownerUserId: string;
+      projectId: string;
+      runId: string;
+    }) => Effect.Effect<number, ArtifactStoreError>;
     readonly getNodeLaneOutput: (
       params: NodeLaneOutputQuery,
     ) => Effect.Effect<NodeLaneOutputArtifact | null, ArtifactStoreError>;
@@ -574,6 +723,8 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
           catch: toArtifactStoreError,
         }),
       getRunArtifacts: getRunArtifactsEffect,
+      getProjectLaneReuseCandidates: getProjectLaneReuseCandidatesEffect,
+      copyReusableLaneOutputs: copyReusableLaneOutputsEffect,
       getNodeLaneOutput: getNodeLaneOutputEffect,
       setReviewLaneStatus: (params) =>
         Effect.gen(function* () {
