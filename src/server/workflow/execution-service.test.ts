@@ -11,9 +11,7 @@ mock.module("~/server/workflow/artifact-store", () => {
     buildLaneExecutionResultFromDocument: () => ({
       costCredits: 0,
       laneIndex: null,
-      lineage: [],
       outputs: [],
-      reviewLanes: [],
       runId: "run",
       status: "success",
     }),
@@ -121,6 +119,7 @@ function success(laneIndex, runId, updatedAt) {
     ownerUserId: "user",
     projectId: "project",
     promptSnapshot: "ignored prompt",
+    reviewStatus: null,
     runId,
     status: "success",
     updatedAt,
@@ -187,8 +186,6 @@ describe("WorkflowExecutionService startRun lane recovery", () => {
                   ...output,
                   status: "success",
                 })),
-                lineage: [],
-                reviewLanes: [],
               }),
           }),
           Layer.succeed(WorkflowCreditsService, {

@@ -74,6 +74,7 @@ export type NodeLaneOutputArtifact = {
   idempotencyKey: string;
   promptSnapshot: string | null;
   model: string | null;
+  reviewStatus: WorkflowReviewLaneStatus | null;
 };
 
 export type WorkflowLaneErrorArtifact = {
@@ -102,30 +103,16 @@ export type ReviewLaneArtifact = {
   status: WorkflowReviewLaneStatus;
 };
 
-export type WorkflowArtifactLineage = {
-  runId: string;
-  sourceNodeId: string;
-  sourceLaneIndex: number;
-  sourceAttempt: number;
-  dependentNodeId: string;
-  dependentLaneIndex: number;
-  dependentAttempt: number;
-};
-
 export type LaneExecutionResult = {
   runId: string;
   laneIndex: number | null;
   outputs: NodeLaneOutputArtifact[];
-  reviewLanes: ReviewLaneArtifact[];
-  lineage: WorkflowArtifactLineage[];
   status: WorkflowRunArtifactStatus;
   costCredits: number;
 };
 
 export type WorkflowRunArtifacts = {
   laneResults: WorkflowLaneResultArtifact[];
-  reviewLanes: ReviewLaneArtifact[];
-  lineage: WorkflowArtifactLineage[];
 };
 
 function workflowLaneResultKey(result: WorkflowLaneResultArtifact) {
@@ -150,6 +137,30 @@ export function getSuccessfulWorkflowLaneOutputs(
   return getLatestWorkflowLaneResults(artifacts).flatMap((result) =>
     result.status === "success" ? [result] : [],
   );
+}
+
+export function getLatestReviewLaneArtifacts(artifacts: WorkflowRunArtifacts) {
+  const latest = new Map<string, ReviewLaneArtifact>();
+  for (const output of getSuccessfulWorkflowLaneOutputs(artifacts)) {
+    if (!output.reviewStatus) {
+      continue;
+    }
+    const key = `${output.runId}:${output.nodeId}:${output.laneIndex}`;
+    const existing = latest.get(key);
+    if (!existing || existing.attempt < output.attempt) {
+      latest.set(key, {
+        attempt: output.attempt,
+        laneIndex: output.laneIndex,
+        nodeId: output.nodeId,
+        ownerUserId: output.ownerUserId,
+        projectId: output.projectId,
+        runId: output.runId,
+        status: output.reviewStatus,
+        valueType: output.value.type,
+      });
+    }
+  }
+  return Array.from(latest.values());
 }
 
 export function getErroredWorkflowLaneResults(artifacts: WorkflowRunArtifacts) {

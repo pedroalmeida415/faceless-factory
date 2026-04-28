@@ -18,6 +18,7 @@ import { getGeneratorOutputAttempt } from "~/lib/workflow/execution/artifact-ide
 import {
   buildWorkflowApprovedRunProjection,
   buildWorkflowRunProjection,
+  getWorkflowVisibleCompletionOutputs,
 } from "~/lib/workflow/execution/artifact-projection";
 import {
   estimateGeneratorReviewLaneRegenerationCreditCost,
@@ -54,8 +55,8 @@ import type {
 } from "~/lib/workflow/execution/types";
 import {
   getErroredWorkflowLaneResults,
+  getLatestReviewLaneArtifacts,
   getLatestWorkflowLaneResults,
-  getSuccessfulWorkflowLaneOutputs,
   WorkflowLaneDependencyMissing,
 } from "~/lib/workflow/execution/types";
 import {
@@ -319,6 +320,7 @@ export class WorkflowExecutionService extends Context.Tag(
         excludeRunId?: string | null;
         ownerUserId: string;
         projectId: string;
+        requestedTargetNodeIds: readonly string[];
         targetNodeIds: readonly string[];
       }) =>
         Effect.gen(function* () {
@@ -336,6 +338,7 @@ export class WorkflowExecutionService extends Context.Tag(
           const nodeById = new Map(
             params.document.nodes.map((node) => [node.id, node]),
           );
+          const requestedTargetNodeIds = new Set(params.requestedTargetNodeIds);
           const priorResultCandidates =
             yield* workflowArtifactStore.getProjectLaneReuseCandidates({
               excludeRunId: params.excludeRunId ?? null,
@@ -350,7 +353,23 @@ export class WorkflowExecutionService extends Context.Tag(
               const valueType = getGeneratorLaneValueType(
                 nodeById.get(job.nodeId),
               );
-              return valueType ? [{ ...job, valueType }] : [];
+              const node = nodeById.get(job.nodeId);
+              const reviewEnabled =
+                node?.kind === "imageGenerator" ||
+                node?.kind === "videoGenerator" ||
+                node?.kind === "llmGenerator"
+                  ? node.reviewEnabled
+                  : false;
+              return valueType
+                ? [
+                    {
+                      ...job,
+                      isRequestedTarget: requestedTargetNodeIds.has(job.nodeId),
+                      reviewEnabled,
+                      valueType,
+                    },
+                  ]
+                : [];
             }),
           });
         });
@@ -434,6 +453,7 @@ export class WorkflowExecutionService extends Context.Tag(
             document,
             ownerUserId: userId,
             projectId,
+            requestedTargetNodeIds: targetNodeIds,
             targetNodeIds: artifactNodeIds,
           });
 
@@ -647,8 +667,9 @@ export class WorkflowExecutionService extends Context.Tag(
             (plan.generatorIterationById.get(nodeId)?.iterations ?? 1) >
             laneIndex,
         );
+        const visibleOutputs = getWorkflowVisibleCompletionOutputs(artifacts);
         return expectedNodeIds.every((nodeId) =>
-          getSuccessfulWorkflowLaneOutputs(artifacts).some(
+          visibleOutputs.some(
             (output) =>
               output.nodeId === nodeId && output.laneIndex === laneIndex,
           ),
@@ -700,7 +721,7 @@ export class WorkflowExecutionService extends Context.Tag(
             run.document,
             run.targetNodeIds,
           ).generatorIterationById.get(reviewNodeId)?.iterations ?? 0;
-        const artifactLaneCount = artifacts.reviewLanes
+        const artifactLaneCount = getLatestReviewLaneArtifacts(artifacts)
           .filter((lane) => lane.nodeId === reviewNodeId)
           .reduce((count, lane) => Math.max(count, lane.laneIndex + 1), 0);
         const projectedLaneCount =
@@ -725,8 +746,10 @@ export class WorkflowExecutionService extends Context.Tag(
         artifacts: WorkflowRunArtifacts,
         params: { laneIndex: number; reviewNodeId: string },
       ) => {
-        let latest: WorkflowRunArtifacts["reviewLanes"][number] | null = null;
-        for (const lane of artifacts.reviewLanes) {
+        let latest:
+          | ReturnType<typeof getLatestReviewLaneArtifacts>[number]
+          | null = null;
+        for (const lane of getLatestReviewLaneArtifacts(artifacts)) {
           if (
             lane.nodeId !== params.reviewNodeId ||
             lane.laneIndex !== params.laneIndex
@@ -753,11 +776,11 @@ export class WorkflowExecutionService extends Context.Tag(
           .pipe(
             Effect.map((artifacts) => {
               const latestByLane = new Map(
-                artifacts.reviewLanes
+                getLatestReviewLaneArtifacts(artifacts)
                   .filter((lane) => lane.nodeId === reviewNodeId)
                   .map((lane) => [lane.laneIndex, lane] as const),
               );
-              for (const lane of artifacts.reviewLanes.filter(
+              for (const lane of getLatestReviewLaneArtifacts(artifacts).filter(
                 (lane) => lane.nodeId === reviewNodeId,
               )) {
                 const existing = latestByLane.get(lane.laneIndex);
@@ -815,7 +838,7 @@ export class WorkflowExecutionService extends Context.Tag(
             ownerUserId: params.ownerUserId,
             runId: params.run.runId,
           });
-          const lane = artifacts.reviewLanes
+          const lane = getLatestReviewLaneArtifacts(artifacts)
             .filter(
               (candidate) =>
                 candidate.nodeId === params.reviewNodeId &&
@@ -2344,6 +2367,7 @@ export class WorkflowExecutionService extends Context.Tag(
             excludeRunId: runId,
             ownerUserId: userId,
             projectId,
+            requestedTargetNodeIds: targetNodeIds,
             targetNodeIds: artifactNodeIds,
           });
           const reusableLaneKeys = new Set(

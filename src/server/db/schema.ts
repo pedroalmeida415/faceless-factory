@@ -240,6 +240,7 @@ export const workflowLaneResults = pgTable(
     status: text("status").$type<"success" | "error">().notNull(),
     valueType:
       text("value_type").$type<Exclude<LaneTransformValueType, null>>(),
+    reviewStatus: text("review_status").$type<WorkflowReviewLaneStatus>(),
     textValue: text("text_value"),
     assetIds: jsonb("asset_ids").$type<string[]>().default([]).notNull(),
     inputHash: text("input_hash"),
@@ -278,89 +279,6 @@ export const workflowLaneResults = pgTable(
     projectNodeLaneUpdatedIdx: index(
       "workflow_lane_results_project_node_lane_updated_idx",
     ).on(table.projectId, table.nodeId, table.laneIndex, table.updatedAt),
-  }),
-);
-
-export const workflowReviewLanes = pgTable(
-  "workflow_review_lanes",
-  {
-    id: text("id").primaryKey(),
-    runId: text("run_id").notNull(),
-    projectId: text("project_id")
-      .notNull()
-      .references(() => workflowProjects.id, { onDelete: "cascade" }),
-    ownerUserId: text("owner_user_id")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
-    nodeId: text("node_id").notNull(),
-    laneIndex: bigint("lane_index", { mode: "number" }).notNull(),
-    attempt: bigint("attempt", { mode: "number" }).notNull(),
-    valueType: text("value_type")
-      .$type<Exclude<LaneTransformValueType, null>>()
-      .notNull(),
-    status: text("status").$type<WorkflowReviewLaneStatus>().notNull(),
-    createdAt: timestamp("created_at")
-      .$defaultFn(() => /* @__PURE__ */ new Date())
-      .notNull(),
-    updatedAt: timestamp("updated_at")
-      .$defaultFn(() => /* @__PURE__ */ new Date())
-      .notNull(),
-  },
-  (table) => ({
-    laneAttemptUnique: uniqueIndex(
-      "workflow_review_lanes_lane_attempt_unique",
-    ).on(table.runId, table.nodeId, table.laneIndex, table.attempt),
-    runNodeStatusIdx: index("workflow_review_lanes_run_node_status_idx").on(
-      table.runId,
-      table.nodeId,
-      table.status,
-    ),
-    projectRunIdx: index("workflow_review_lanes_project_run_idx").on(
-      table.projectId,
-      table.runId,
-    ),
-  }),
-);
-
-export const workflowArtifactLineage = pgTable(
-  "workflow_artifact_lineage",
-  {
-    id: text("id").primaryKey(),
-    runId: text("run_id").notNull(),
-    sourceNodeId: text("source_node_id").notNull(),
-    sourceLaneIndex: bigint("source_lane_index", { mode: "number" }).notNull(),
-    sourceAttempt: bigint("source_attempt", { mode: "number" }).notNull(),
-    dependentNodeId: text("dependent_node_id").notNull(),
-    dependentLaneIndex: bigint("dependent_lane_index", {
-      mode: "number",
-    }).notNull(),
-    dependentAttempt: bigint("dependent_attempt", { mode: "number" }).notNull(),
-    createdAt: timestamp("created_at")
-      .$defaultFn(() => /* @__PURE__ */ new Date())
-      .notNull(),
-  },
-  (table) => ({
-    dependencyUnique: uniqueIndex("workflow_artifact_lineage_unique").on(
-      table.runId,
-      table.sourceNodeId,
-      table.sourceLaneIndex,
-      table.sourceAttempt,
-      table.dependentNodeId,
-      table.dependentLaneIndex,
-      table.dependentAttempt,
-    ),
-    dependentIdx: index("workflow_artifact_lineage_dependent_idx").on(
-      table.runId,
-      table.dependentNodeId,
-      table.dependentLaneIndex,
-      table.dependentAttempt,
-    ),
-    sourceIdx: index("workflow_artifact_lineage_source_idx").on(
-      table.runId,
-      table.sourceNodeId,
-      table.sourceLaneIndex,
-      table.sourceAttempt,
-    ),
   }),
 );
 
@@ -449,7 +367,6 @@ export const workflowProjectsRelations = relations(
   ({ many, one }) => ({
     assets: many(assets),
     laneResults: many(workflowLaneResults),
-    reviewLanes: many(workflowReviewLanes),
     runs: many(workflowRuns),
     owner: one(user, {
       fields: [workflowProjects.ownerUserId],
@@ -492,25 +409,6 @@ export const workflowLaneResultsRelations = relations(
       references: [workflowProjects.id],
     }),
   }),
-);
-
-export const workflowReviewLanesRelations = relations(
-  workflowReviewLanes,
-  ({ one }) => ({
-    owner: one(user, {
-      fields: [workflowReviewLanes.ownerUserId],
-      references: [user.id],
-    }),
-    project: one(workflowProjects, {
-      fields: [workflowReviewLanes.projectId],
-      references: [workflowProjects.id],
-    }),
-  }),
-);
-
-export const workflowArtifactLineageRelations = relations(
-  workflowArtifactLineage,
-  () => ({}),
 );
 
 export const creditLedgerEntriesRelations = relations(

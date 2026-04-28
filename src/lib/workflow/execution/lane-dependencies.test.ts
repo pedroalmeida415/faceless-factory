@@ -7,7 +7,10 @@ import {
   type WorkflowDocument,
   type WorkflowDocumentNode,
 } from "~/lib/workflow/document";
-import { getWorkflowVisibleCompletionOutputs } from "~/lib/workflow/execution/artifact-projection";
+import {
+  buildWorkflowRunProjection,
+  getWorkflowVisibleCompletionOutputs,
+} from "~/lib/workflow/execution/artifact-projection";
 import {
   areWorkflowLaneJobsSettled,
   buildWorkflowLaneDependencyPlan,
@@ -51,7 +54,11 @@ function lanePlan(params: {
   });
 }
 
-function output(nodeId: string, laneIndex: number): NodeLaneOutputArtifact {
+function output(
+  nodeId: string,
+  laneIndex: number,
+  params?: Partial<NodeLaneOutputArtifact>,
+): NodeLaneOutputArtifact {
   return {
     attempt: 0,
     documentRevision: null,
@@ -63,8 +70,10 @@ function output(nodeId: string, laneIndex: number): NodeLaneOutputArtifact {
     ownerUserId: "user",
     projectId: "project",
     promptSnapshot: null,
+    reviewStatus: null,
     runId: "run",
     value: { lanes: [`${nodeId}:${laneIndex}`], type: "text" },
+    ...params,
   };
 }
 
@@ -259,30 +268,56 @@ describe("workflow lane dependencies", () => {
 
   test("reviewed raw output is not a visible completion until approved", () => {
     const artifacts: WorkflowRunArtifacts = {
-      lineage: [],
-      laneResults: [success(output("reviewed", 0))],
-      reviewLanes: [
-        {
-          attempt: 0,
-          laneIndex: 0,
-          nodeId: "reviewed",
-          ownerUserId: "user",
-          projectId: "project",
-          runId: "run",
-          status: "pending",
-          valueType: "text",
-        },
+      laneResults: [
+        success(output("reviewed", 0, { reviewStatus: "pending" })),
       ],
     };
 
-    const [reviewLane] = artifacts.reviewLanes;
     assert.deepEqual(getWorkflowVisibleCompletionOutputs(artifacts), []);
     assert.deepEqual(
       getWorkflowVisibleCompletionOutputs({
-        ...artifacts,
-        reviewLanes: reviewLane ? [{ ...reviewLane, status: "approved" }] : [],
-      }),
-      getSuccessfulWorkflowLaneOutputs(artifacts),
+        laneResults: [
+          success(output("reviewed", 0, { reviewStatus: "approved" })),
+        ],
+      }).map(getWorkflowLaneKey),
+      ["reviewed:0"],
+    );
+  });
+
+  test("pending reviewed output projects review payload without visible completion", () => {
+    const reviewed = {
+      ...node("llmGenerator", "reviewed"),
+      outputLanes: [""],
+      reviewEnabled: true,
+    };
+    const artifacts: WorkflowRunArtifacts = {
+      laneResults: [
+        success(
+          output("reviewed", 0, {
+            reviewStatus: "pending",
+            value: { lanes: ["candidate text"], type: "text" },
+          }),
+        ),
+      ],
+    };
+
+    const projected = buildWorkflowRunProjection({
+      artifacts,
+      document: {
+        edges: [],
+        nodes: [reviewed],
+        version: WORKFLOW_DOCUMENT_VERSION,
+      },
+    });
+    const [projectedNode] = projected.nodes;
+
+    assert.deepEqual(getWorkflowVisibleCompletionOutputs(artifacts), []);
+    assert.equal(projectedNode?.kind, "llmGenerator");
+    assert.equal(
+      projectedNode?.kind === "llmGenerator"
+        ? projectedNode.review.lanes[0]?.text
+        : null,
+      "candidate text",
     );
   });
 
@@ -327,29 +362,9 @@ describe("workflow lane dependencies", () => {
       targetNodeIds: [image.id, video.id],
     });
     const artifacts: WorkflowRunArtifacts = {
-      lineage: [],
-      laneResults: [success(output(image.id, 0)), success(output(image.id, 1))],
-      reviewLanes: [
-        {
-          attempt: 0,
-          laneIndex: 0,
-          nodeId: image.id,
-          ownerUserId: "user",
-          projectId: "project",
-          runId: "run",
-          status: "approved",
-          valueType: "image",
-        },
-        {
-          attempt: 0,
-          laneIndex: 1,
-          nodeId: image.id,
-          ownerUserId: "user",
-          projectId: "project",
-          runId: "run",
-          status: "pending",
-          valueType: "image",
-        },
+      laneResults: [
+        success(output(image.id, 0, { reviewStatus: "approved" })),
+        success(output(image.id, 1, { reviewStatus: "pending" })),
       ],
     };
 
@@ -365,18 +380,18 @@ describe("workflow lane dependencies", () => {
     assert.equal(
       getReadyWorkflowLaneJobs({
         blockedLanes: materializedBlockedLaneKeys({
-          ...artifacts,
-          reviewLanes: artifacts.reviewLanes.map((lane) => ({
-            ...lane,
-            status: "approved" as const,
-          })),
+          laneResults: artifacts.laneResults.map((result) =>
+            result.status === "success"
+              ? { ...result, reviewStatus: "approved" as const }
+              : result,
+          ),
         }),
         completedLanes: visibleLaneKeys({
-          ...artifacts,
-          reviewLanes: artifacts.reviewLanes.map((lane) => ({
-            ...lane,
-            status: "approved" as const,
-          })),
+          laneResults: artifacts.laneResults.map((result) =>
+            result.status === "success"
+              ? { ...result, reviewStatus: "approved" as const }
+              : result,
+          ),
         }),
         plan,
       }).some((job) => job.nodeId === video.id && job.laneIndex === 0),
@@ -623,8 +638,6 @@ describe("workflow lane dependencies", () => {
           status: "error",
         },
       ],
-      lineage: [],
-      reviewLanes: [],
     };
 
     const settlement = getWorkflowLaneSettlement({ artifacts, plan });
@@ -665,8 +678,6 @@ describe("workflow lane dependencies", () => {
         errorResult("image", 0, 0),
         success({ ...output("image", 0), attempt: 1 }),
       ],
-      lineage: [],
-      reviewLanes: [],
     };
     const settlement = getWorkflowLaneSettlement({
       artifacts,
@@ -682,8 +693,6 @@ describe("workflow lane dependencies", () => {
   test("later error attempt supersedes stale successful completion", () => {
     const artifacts: WorkflowRunArtifacts = {
       laneResults: [success(output("image", 0)), errorResult("image", 0, 1)],
-      lineage: [],
-      reviewLanes: [],
     };
     const settlement = getWorkflowLaneSettlement({
       artifacts,

@@ -14,6 +14,8 @@ export type ReusableWorkflowLaneCandidate = WorkflowLaneResultArtifact & {
 };
 
 export type ExpectedReusableWorkflowLane = WorkflowLaneIdentity & {
+  isRequestedTarget: boolean;
+  reviewEnabled: boolean;
   valueType: RuntimeValue["type"];
 };
 
@@ -59,7 +61,9 @@ function isReusableLaneOutput(
     candidate.nodeId === expected.nodeId &&
     candidate.laneIndex === expected.laneIndex &&
     candidate.value.type === expected.valueType &&
-    hasMaterializedWorkflowLaneValue(candidate.value)
+    hasMaterializedWorkflowLaneValue(candidate.value) &&
+    (!expected.reviewEnabled ||
+      (!expected.isRequestedTarget && candidate.reviewStatus === "approved"))
   );
 }
 

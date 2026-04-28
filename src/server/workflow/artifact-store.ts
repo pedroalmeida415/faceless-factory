@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import {
@@ -14,22 +14,15 @@ import {
   getGeneratorOutputInputHash,
 } from "~/lib/workflow/execution/artifact-identity";
 import {
-  buildWorkflowLaneDependencyPlan,
   getWorkflowLaneKey,
   type WorkflowLaneIdentity,
 } from "~/lib/workflow/execution/lane-dependencies";
-import {
-  getGeneratorLaneValueType,
-  type ReusableWorkflowLaneCandidate,
-} from "~/lib/workflow/execution/lane-result-reuse";
-import { buildWorkflowExecutionPlan } from "~/lib/workflow/execution/subgraph";
+import type { ReusableWorkflowLaneCandidate } from "~/lib/workflow/execution/lane-result-reuse";
 import type {
   LaneExecutionResult,
   NodeLaneOutputArtifact,
   NodeLaneOutputQuery,
   RegenerationAttemptRequest,
-  ReviewLaneArtifact,
-  WorkflowArtifactLineage,
   WorkflowLaneErrorArtifact,
   WorkflowRunArtifactStatus,
   WorkflowRunArtifacts,
@@ -39,15 +32,8 @@ import type {
   WorkflowAsset,
   WorkflowReviewLaneStatus,
 } from "~/lib/workflow/types";
-import { isGeneratorNodeKind } from "~/lib/workflow/types";
 import { db } from "~/server/db";
-import {
-  assets,
-  workflowArtifactLineage,
-  workflowLaneResults,
-  workflowReviewLanes,
-  workflowRuns,
-} from "~/server/db/schema";
+import { assets, workflowLaneResults, workflowRuns } from "~/server/db/schema";
 
 type LaneResultRow = typeof workflowLaneResults.$inferSelect;
 type AssetRow = typeof assets.$inferSelect;
@@ -82,12 +68,6 @@ function toWorkflowAsset(row: AssetRow): WorkflowAsset {
     storagePath: row.storageKey,
     url: `/api/assets/${encodeURIComponent(row.id)}`,
   };
-}
-
-function isGeneratorWorkflowNode(
-  node: WorkflowDocument["nodes"][number] | undefined,
-): node is GeneratorWorkflowNode {
-  return Boolean(node && isGeneratorNodeKind(node.kind));
 }
 
 function toOutputArtifact(params: {
@@ -131,6 +111,7 @@ function toOutputArtifact(params: {
       ownerUserId: params.ownerUserId,
       projectId: params.projectId,
       promptSnapshot,
+      reviewStatus: getNodeReviewStatus(node, laneIndex, attempt),
       runId: params.runId,
       value,
     } satisfies NodeLaneOutputArtifact;
@@ -168,9 +149,22 @@ function toOutputArtifact(params: {
     ownerUserId: params.ownerUserId,
     projectId: params.projectId,
     promptSnapshot,
+    reviewStatus: getNodeReviewStatus(node, laneIndex, attempt),
     runId: params.runId,
     value,
   } satisfies NodeLaneOutputArtifact;
+}
+
+function getNodeReviewStatus(
+  node: GeneratorWorkflowNode,
+  laneIndex: number,
+  attempt: number,
+) {
+  return node.reviewEnabled
+    ? (node.review.lanes.find(
+        (lane) => lane.laneIndex === laneIndex && lane.attempt === attempt,
+      )?.status ?? "pending")
+    : null;
 }
 
 export function buildLaneExecutionResultFromDocument(params: {
@@ -186,23 +180,7 @@ export function buildLaneExecutionResultFromDocument(params: {
 }) {
   const targetNodeIds = new Set(params.targetNodeIds);
   const laneFilter = params.laneIndex;
-  const nodeById = new Map(
-    params.document.nodes.map((node) => [node.id, node]),
-  );
-  const executionPlan = buildWorkflowExecutionPlan(
-    params.document,
-    Array.from(params.targetNodeIds),
-  );
-  const laneDependencyByJob = new Map(
-    buildWorkflowLaneDependencyPlan({
-      document: params.document,
-      generatorIterationById: executionPlan.generatorIterationById,
-      targetNodeIds: params.targetNodeIds,
-    }).jobs.map((job) => [`${job.nodeId}:${job.laneIndex}`, job.dependencies]),
-  );
-  const lineage: WorkflowArtifactLineage[] = [];
   const outputs: NodeLaneOutputArtifact[] = [];
-  const reviewLanes: ReviewLaneArtifact[] = [];
 
   for (const node of params.document.nodes) {
     if (!targetNodeIds.has(node.id)) {
@@ -231,58 +209,14 @@ export function buildLaneExecutionResultFromDocument(params: {
       });
       if (output) {
         outputs.push(output);
-        for (const dependency of laneDependencyByJob.get(
-          `${output.nodeId}:${output.laneIndex}`,
-        ) ?? []) {
-          const sourceNode = nodeById.get(dependency.nodeId);
-          if (!isGeneratorWorkflowNode(sourceNode)) {
-            continue;
-          }
-          lineage.push({
-            dependentAttempt: output.attempt,
-            dependentLaneIndex: output.laneIndex,
-            dependentNodeId: output.nodeId,
-            runId: output.runId,
-            sourceAttempt: getGeneratorOutputAttempt(
-              sourceNode,
-              dependency.laneIndex,
-            ),
-            sourceLaneIndex: dependency.laneIndex,
-            sourceNodeId: dependency.nodeId,
-          });
-        }
       }
     }
-
-    const valueType = getGeneratorLaneValueType(node);
-    if (!valueType || !node.reviewEnabled) {
-      continue;
-    }
-    reviewLanes.push(
-      ...node.review.lanes
-        .filter((lane) => laneFilter === null || lane.laneIndex === laneFilter)
-        .map(
-          (lane) =>
-            ({
-              attempt: lane.attempt,
-              laneIndex: lane.laneIndex,
-              nodeId: node.id,
-              ownerUserId: params.ownerUserId,
-              projectId: params.projectId,
-              runId: params.runId,
-              status: lane.status,
-              valueType,
-            }) satisfies ReviewLaneArtifact,
-        ),
-    );
   }
 
   return {
     costCredits: params.costCredits,
     laneIndex: params.laneIndex,
-    lineage,
     outputs,
-    reviewLanes,
     runId: params.runId,
     status: params.status,
   } satisfies LaneExecutionResult;
@@ -347,6 +281,7 @@ function rowToOutput(
     ownerUserId: row.ownerUserId,
     projectId: row.projectId,
     promptSnapshot: row.promptSnapshot,
+    reviewStatus: row.reviewStatus,
     runId: row.runId,
     value,
   } satisfies NodeLaneOutputArtifact;
@@ -377,30 +312,15 @@ function rowToLaneResult(
 function getRunArtifactsEffect(params: { ownerUserId: string; runId: string }) {
   return Effect.tryPromise({
     try: async () => {
-      const [resultRows, reviewRows, lineageRows] = await Promise.all([
-        db
-          .select()
-          .from(workflowLaneResults)
-          .where(
-            and(
-              eq(workflowLaneResults.runId, params.runId),
-              eq(workflowLaneResults.ownerUserId, params.ownerUserId),
-            ),
+      const resultRows = await db
+        .select()
+        .from(workflowLaneResults)
+        .where(
+          and(
+            eq(workflowLaneResults.runId, params.runId),
+            eq(workflowLaneResults.ownerUserId, params.ownerUserId),
           ),
-        db
-          .select()
-          .from(workflowReviewLanes)
-          .where(
-            and(
-              eq(workflowReviewLanes.runId, params.runId),
-              eq(workflowReviewLanes.ownerUserId, params.ownerUserId),
-            ),
-          ),
-        db
-          .select()
-          .from(workflowArtifactLineage)
-          .where(eq(workflowArtifactLineage.runId, params.runId)),
-      ]);
+        );
       const assetIds = Array.from(
         new Set(resultRows.flatMap((row) => row.assetIds)),
       );
@@ -423,31 +343,6 @@ function getRunArtifactsEffect(params: { ownerUserId: string; runId: string }) {
           const result = rowToLaneResult(row, assetById);
           return result ? [result] : [];
         }),
-        lineage: lineageRows.map(
-          (row) =>
-            ({
-              dependentAttempt: row.dependentAttempt,
-              dependentLaneIndex: row.dependentLaneIndex,
-              dependentNodeId: row.dependentNodeId,
-              runId: row.runId,
-              sourceAttempt: row.sourceAttempt,
-              sourceLaneIndex: row.sourceLaneIndex,
-              sourceNodeId: row.sourceNodeId,
-            }) satisfies WorkflowArtifactLineage,
-        ),
-        reviewLanes: reviewRows.map(
-          (row) =>
-            ({
-              attempt: row.attempt,
-              laneIndex: row.laneIndex,
-              nodeId: row.nodeId,
-              ownerUserId: row.ownerUserId,
-              projectId: row.projectId,
-              runId: row.runId,
-              status: row.status,
-              valueType: row.valueType,
-            }) satisfies ReviewLaneArtifact,
-        ),
       } satisfies WorkflowRunArtifacts;
     },
     catch: toArtifactStoreError,
@@ -594,6 +489,7 @@ function copyReusableLaneOutputsEffect(params: {
               ownerUserId: params.ownerUserId,
               projectId: params.projectId,
               promptSnapshot: output.promptSnapshot,
+              reviewStatus: output.reviewStatus,
               runId: params.runId,
               status: "success",
               updatedAt: now,
@@ -613,6 +509,7 @@ function copyReusableLaneOutputsEffect(params: {
                 inputHash: output.inputHash,
                 model: output.model,
                 promptSnapshot: output.promptSnapshot,
+                reviewStatus: output.reviewStatus,
                 status: "success",
                 textValue: rowValue.textValue,
                 updatedAt: now,
@@ -675,46 +572,33 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
       createNextAttempt: (params) =>
         Effect.tryPromise({
           try: async () => {
-            const [outputRows, reviewRows] = await Promise.all([
-              db
-                .select({ attempt: workflowLaneResults.attempt })
-                .from(workflowLaneResults)
+            const outputRows = await db
+              .select({ attempt: workflowLaneResults.attempt })
+              .from(workflowLaneResults)
+              .where(
+                and(
+                  eq(workflowLaneResults.runId, params.runId),
+                  eq(workflowLaneResults.ownerUserId, params.ownerUserId),
+                  eq(workflowLaneResults.nodeId, params.nodeId),
+                  eq(workflowLaneResults.laneIndex, params.laneIndex),
+                ),
+              );
+            const latestAttempt = Math.max(
+              -1,
+              ...outputRows.map((row) => row.attempt),
+            );
+            if (latestAttempt >= 0) {
+              await db
+                .update(workflowLaneResults)
+                .set({ reviewStatus: "regenerating", updatedAt: new Date() })
                 .where(
                   and(
                     eq(workflowLaneResults.runId, params.runId),
                     eq(workflowLaneResults.ownerUserId, params.ownerUserId),
                     eq(workflowLaneResults.nodeId, params.nodeId),
                     eq(workflowLaneResults.laneIndex, params.laneIndex),
-                  ),
-                ),
-              db
-                .select({ attempt: workflowReviewLanes.attempt })
-                .from(workflowReviewLanes)
-                .where(
-                  and(
-                    eq(workflowReviewLanes.runId, params.runId),
-                    eq(workflowReviewLanes.ownerUserId, params.ownerUserId),
-                    eq(workflowReviewLanes.nodeId, params.nodeId),
-                    eq(workflowReviewLanes.laneIndex, params.laneIndex),
-                  ),
-                ),
-            ]);
-            const latestAttempt = Math.max(
-              -1,
-              ...outputRows.map((row) => row.attempt),
-              ...reviewRows.map((row) => row.attempt),
-            );
-            if (latestAttempt >= 0) {
-              await db
-                .update(workflowReviewLanes)
-                .set({ status: "regenerating", updatedAt: new Date() })
-                .where(
-                  and(
-                    eq(workflowReviewLanes.runId, params.runId),
-                    eq(workflowReviewLanes.ownerUserId, params.ownerUserId),
-                    eq(workflowReviewLanes.nodeId, params.nodeId),
-                    eq(workflowReviewLanes.laneIndex, params.laneIndex),
-                    eq(workflowReviewLanes.attempt, latestAttempt),
+                    eq(workflowLaneResults.attempt, latestAttempt),
+                    isNotNull(workflowLaneResults.reviewStatus),
                   ),
                 );
             }
@@ -731,14 +615,15 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
           const rows = yield* Effect.tryPromise({
             try: () =>
               db
-                .select({ attempt: workflowReviewLanes.attempt })
-                .from(workflowReviewLanes)
+                .select({ attempt: workflowLaneResults.attempt })
+                .from(workflowLaneResults)
                 .where(
                   and(
-                    eq(workflowReviewLanes.runId, params.runId),
-                    eq(workflowReviewLanes.ownerUserId, params.ownerUserId),
-                    eq(workflowReviewLanes.nodeId, params.nodeId),
-                    eq(workflowReviewLanes.laneIndex, params.laneIndex),
+                    eq(workflowLaneResults.runId, params.runId),
+                    eq(workflowLaneResults.ownerUserId, params.ownerUserId),
+                    eq(workflowLaneResults.nodeId, params.nodeId),
+                    eq(workflowLaneResults.laneIndex, params.laneIndex),
+                    isNotNull(workflowLaneResults.reviewStatus),
                   ),
                 ),
             catch: toArtifactStoreError,
@@ -755,15 +640,16 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
           yield* Effect.tryPromise({
             try: () =>
               db
-                .update(workflowReviewLanes)
-                .set({ status: params.status, updatedAt: new Date() })
+                .update(workflowLaneResults)
+                .set({ reviewStatus: params.status, updatedAt: new Date() })
                 .where(
                   and(
-                    eq(workflowReviewLanes.runId, params.runId),
-                    eq(workflowReviewLanes.ownerUserId, params.ownerUserId),
-                    eq(workflowReviewLanes.nodeId, params.nodeId),
-                    eq(workflowReviewLanes.laneIndex, params.laneIndex),
-                    eq(workflowReviewLanes.attempt, attempt),
+                    eq(workflowLaneResults.runId, params.runId),
+                    eq(workflowLaneResults.ownerUserId, params.ownerUserId),
+                    eq(workflowLaneResults.nodeId, params.nodeId),
+                    eq(workflowLaneResults.laneIndex, params.laneIndex),
+                    eq(workflowLaneResults.attempt, attempt),
+                    isNotNull(workflowLaneResults.reviewStatus),
                   ),
                 ),
             catch: toArtifactStoreError,
@@ -780,6 +666,7 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
                 attempt: params.attempt,
                 error: params.error,
                 failedAt,
+                reviewStatus: null,
                 id: randomUUID(),
                 laneIndex: params.laneIndex,
                 nodeId: params.nodeId,
@@ -804,6 +691,7 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
                   inputHash: null,
                   model: null,
                   promptSnapshot: null,
+                  reviewStatus: null,
                   status: "error",
                   textValue: null,
                   updatedAt: failedAt,
@@ -836,6 +724,7 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
                   ownerUserId: output.ownerUserId,
                   projectId: output.projectId,
                   promptSnapshot: output.promptSnapshot,
+                  reviewStatus: output.reviewStatus,
                   runId: output.runId,
                   status: "success",
                   updatedAt: now,
@@ -855,6 +744,7 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
                     inputHash: output.inputHash,
                     model: output.model,
                     promptSnapshot: output.promptSnapshot,
+                    reviewStatus: output.reviewStatus,
                     status: "success",
                     textValue: rowValue.textValue,
                     updatedAt: now,
@@ -880,83 +770,6 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
                     ),
                   );
               }
-            }
-
-            for (const lane of result.reviewLanes) {
-              await db
-                .insert(workflowReviewLanes)
-                .values({
-                  attempt: lane.attempt,
-                  createdAt: now,
-                  id: randomUUID(),
-                  laneIndex: lane.laneIndex,
-                  nodeId: lane.nodeId,
-                  ownerUserId: lane.ownerUserId,
-                  projectId: lane.projectId,
-                  runId: lane.runId,
-                  status: lane.status,
-                  updatedAt: now,
-                  valueType: lane.valueType,
-                })
-                .onConflictDoUpdate({
-                  target: [
-                    workflowReviewLanes.runId,
-                    workflowReviewLanes.nodeId,
-                    workflowReviewLanes.laneIndex,
-                    workflowReviewLanes.attempt,
-                  ],
-                  set: {
-                    status: lane.status,
-                    updatedAt: now,
-                    valueType: lane.valueType,
-                  },
-                });
-            }
-
-            for (const output of result.outputs) {
-              await db
-                .delete(workflowArtifactLineage)
-                .where(
-                  and(
-                    eq(workflowArtifactLineage.runId, output.runId),
-                    eq(workflowArtifactLineage.dependentNodeId, output.nodeId),
-                    eq(
-                      workflowArtifactLineage.dependentLaneIndex,
-                      output.laneIndex,
-                    ),
-                    eq(
-                      workflowArtifactLineage.dependentAttempt,
-                      output.attempt,
-                    ),
-                  ),
-                );
-            }
-
-            for (const lineage of result.lineage) {
-              await db
-                .insert(workflowArtifactLineage)
-                .values({
-                  createdAt: now,
-                  dependentAttempt: lineage.dependentAttempt,
-                  dependentLaneIndex: lineage.dependentLaneIndex,
-                  dependentNodeId: lineage.dependentNodeId,
-                  id: randomUUID(),
-                  runId: lineage.runId,
-                  sourceAttempt: lineage.sourceAttempt,
-                  sourceLaneIndex: lineage.sourceLaneIndex,
-                  sourceNodeId: lineage.sourceNodeId,
-                })
-                .onConflictDoNothing({
-                  target: [
-                    workflowArtifactLineage.runId,
-                    workflowArtifactLineage.sourceNodeId,
-                    workflowArtifactLineage.sourceLaneIndex,
-                    workflowArtifactLineage.sourceAttempt,
-                    workflowArtifactLineage.dependentNodeId,
-                    workflowArtifactLineage.dependentLaneIndex,
-                    workflowArtifactLineage.dependentAttempt,
-                  ],
-                });
             }
           },
           catch: toArtifactStoreError,

@@ -29,6 +29,7 @@ function textOutput(params?: Partial<NodeLaneOutputArtifact>) {
     ownerUserId: "user",
     projectId: "project",
     promptSnapshot: "old prompt",
+    reviewStatus: null,
     runId: "old-run",
     value: { lanes: ["chosen output"], type: "text" as const },
     ...params,
@@ -74,9 +75,27 @@ describe("workflow lane result reuse", () => {
       selectReusableWorkflowLaneOutputs({
         candidates,
         expectedLanes: [
-          { laneIndex: 0, nodeId: "llm", valueType: "text" },
-          { laneIndex: 1, nodeId: "llm", valueType: "text" },
-          { laneIndex: 2, nodeId: "llm", valueType: "image" },
+          {
+            laneIndex: 0,
+            isRequestedTarget: true,
+            nodeId: "llm",
+            reviewEnabled: false,
+            valueType: "text",
+          },
+          {
+            laneIndex: 1,
+            isRequestedTarget: true,
+            nodeId: "llm",
+            reviewEnabled: false,
+            valueType: "text",
+          },
+          {
+            laneIndex: 2,
+            isRequestedTarget: true,
+            nodeId: "llm",
+            reviewEnabled: false,
+            valueType: "image",
+          },
         ],
       }),
       [],
@@ -98,9 +117,89 @@ describe("workflow lane result reuse", () => {
     assert.deepEqual(
       selectReusableWorkflowLaneOutputs({
         candidates: [output],
-        expectedLanes: [{ laneIndex: 0, nodeId: "llm", valueType: "text" }],
+        expectedLanes: [
+          {
+            laneIndex: 0,
+            isRequestedTarget: true,
+            nodeId: "llm",
+            reviewEnabled: false,
+            valueType: "text",
+          },
+        ],
       }),
       [output],
+    );
+  });
+
+  test("reuses approved review-enabled dependency lanes", () => {
+    const output = {
+      ...textOutput({ reviewStatus: "approved" }),
+      status: "success" as const,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    assert.deepEqual(
+      selectReusableWorkflowLaneOutputs({
+        candidates: [output],
+        expectedLanes: [
+          {
+            laneIndex: 0,
+            isRequestedTarget: false,
+            nodeId: "llm",
+            reviewEnabled: true,
+            valueType: "text",
+          },
+        ],
+      }),
+      [output],
+    );
+  });
+
+  test("does not reuse direct review-enabled target lanes", () => {
+    const output = {
+      ...textOutput({ reviewStatus: "approved" }),
+      status: "success" as const,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    assert.deepEqual(
+      selectReusableWorkflowLaneOutputs({
+        candidates: [output],
+        expectedLanes: [
+          {
+            laneIndex: 0,
+            isRequestedTarget: true,
+            nodeId: "llm",
+            reviewEnabled: true,
+            valueType: "text",
+          },
+        ],
+      }),
+      [],
+    );
+  });
+
+  test("does not reuse unapproved review-enabled dependency lanes", () => {
+    const output = {
+      ...textOutput({ reviewStatus: "pending" }),
+      status: "success" as const,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    assert.deepEqual(
+      selectReusableWorkflowLaneOutputs({
+        candidates: [output],
+        expectedLanes: [
+          {
+            laneIndex: 0,
+            isRequestedTarget: false,
+            nodeId: "llm",
+            reviewEnabled: true,
+            valueType: "text",
+          },
+        ],
+      }),
+      [],
     );
   });
 

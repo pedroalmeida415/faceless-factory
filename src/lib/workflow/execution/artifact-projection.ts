@@ -10,11 +10,12 @@ import {
 } from "~/lib/workflow/execution/output-lanes";
 import type {
   NodeLaneOutputArtifact,
-  ReviewLaneArtifact,
-  WorkflowArtifactLineage,
   WorkflowRunArtifacts,
 } from "~/lib/workflow/execution/types";
-import { getSuccessfulWorkflowLaneOutputs } from "~/lib/workflow/execution/types";
+import {
+  getLatestReviewLaneArtifacts,
+  getSuccessfulWorkflowLaneOutputs,
+} from "~/lib/workflow/execution/types";
 import {
   ImageGeneratorService,
   LlmGeneratorService,
@@ -24,10 +25,6 @@ import type { WorkflowReviewState } from "~/lib/workflow/types";
 
 function latestLaneOutputKey(output: NodeLaneOutputArtifact) {
   return `${output.runId}:${output.nodeId}:${output.laneIndex}`;
-}
-
-function outputAttemptKey(output: NodeLaneOutputArtifact) {
-  return `${output.runId}:${output.nodeId}:${output.laneIndex}:${output.attempt}`;
 }
 
 function reviewLaneKey(lane: {
@@ -50,91 +47,11 @@ function getLatestOutputs(outputs: readonly NodeLaneOutputArtifact[]) {
   return latest;
 }
 
-function getLatestReviewLanes(reviewLanes: readonly ReviewLaneArtifact[]) {
-  const latest = new Map<string, ReviewLaneArtifact>();
-  for (const lane of reviewLanes) {
-    const key = reviewLaneKey(lane);
-    const existing = latest.get(key);
-    if (!existing || existing.attempt < lane.attempt) {
-      latest.set(key, lane);
-    }
-  }
-  return latest;
-}
-
-function lineageDependentKey(lineage: WorkflowArtifactLineage) {
-  return `${lineage.runId}:${lineage.dependentNodeId}:${lineage.dependentLaneIndex}:${lineage.dependentAttempt}`;
-}
-
-function groupLineageByDependent(lineage: readonly WorkflowArtifactLineage[]) {
-  const grouped = new Map<string, WorkflowArtifactLineage[]>();
-  for (const entry of lineage) {
-    const key = lineageDependentKey(entry);
-    grouped.set(key, [...(grouped.get(key) ?? []), entry]);
-  }
-  return grouped;
-}
-
 function getVisibleLatestOutputs(artifacts: WorkflowRunArtifacts) {
-  const outputs = getSuccessfulWorkflowLaneOutputs(artifacts);
-  const latestOutputs = getLatestOutputs(outputs);
-  const outputByAttempt = new Map(
-    outputs.map((output) => [outputAttemptKey(output), output]),
-  );
-  const latestReviewByLane = getLatestReviewLanes(artifacts.reviewLanes);
-  const lineageByDependent = groupLineageByDependent(artifacts.lineage);
-  const visibleByAttempt = new Map<string, boolean>();
-
-  const isVisible = (
-    output: NodeLaneOutputArtifact,
-    visiting = new Set<string>(),
-  ): boolean => {
-    const key = outputAttemptKey(output);
-    const cached = visibleByAttempt.get(key);
-    if (cached !== undefined) {
-      return cached;
-    }
-    if (visiting.has(key)) {
-      return false;
-    }
-
-    visiting.add(key);
-    const reviewLane = latestReviewByLane.get(reviewLaneKey(output));
-    const isOutputVisible =
-      (!reviewLane ||
-        (reviewLane.status === "approved" &&
-          reviewLane.attempt === output.attempt)) &&
-      (lineageByDependent.get(key) ?? []).every((lineage) => {
-        const sourceLatest = latestOutputs.get(
-          `${lineage.runId}:${lineage.sourceNodeId}:${lineage.sourceLaneIndex}`,
-        );
-        if (!sourceLatest || sourceLatest.attempt !== lineage.sourceAttempt) {
-          return false;
-        }
-
-        const reviewLane = latestReviewByLane.get(
-          `${lineage.runId}:${lineage.sourceNodeId}:${lineage.sourceLaneIndex}`,
-        );
-        if (
-          reviewLane &&
-          (reviewLane.status !== "approved" ||
-            reviewLane.attempt !== lineage.sourceAttempt)
-        ) {
-          return false;
-        }
-
-        const sourceOutput = outputByAttempt.get(
-          `${lineage.runId}:${lineage.sourceNodeId}:${lineage.sourceLaneIndex}:${lineage.sourceAttempt}`,
-        );
-        return sourceOutput ? isVisible(sourceOutput, visiting) : false;
-      });
-    visiting.delete(key);
-    visibleByAttempt.set(key, isOutputVisible);
-    return isOutputVisible;
-  };
-
-  return Array.from(latestOutputs.values()).filter((output) =>
-    isVisible(output),
+  return Array.from(
+    getLatestOutputs(getSuccessfulWorkflowLaneOutputs(artifacts)).values(),
+  ).filter(
+    (output) => !output.reviewStatus || output.reviewStatus === "approved",
   );
 }
 
@@ -165,9 +82,7 @@ export function buildWorkflowApprovedRunProjection(params: {
   artifacts: WorkflowRunArtifacts;
   document: WorkflowDocument | WorkflowGraphDocument;
 }) {
-  const latestReviewLanes = Array.from(
-    getLatestReviewLanes(params.artifacts.reviewLanes).values(),
-  );
+  const latestReviewLanes = getLatestReviewLaneArtifacts(params.artifacts);
   const approvedReviewIdentity = new Set(
     latestReviewLanes
       .filter((lane) => lane.status === "approved")
@@ -185,8 +100,6 @@ export function buildWorkflowApprovedRunProjection(params: {
             `${result.nodeId}:${result.laneIndex}:${result.attempt}`,
           ),
       ),
-      lineage: params.artifacts.lineage,
-      reviewLanes: latestReviewLanes,
     },
     document: params.document,
   });
@@ -202,8 +115,11 @@ function buildWorkflowArtifactProjection(params: {
   const outputByNodeId = groupByNodeId(
     getVisibleLatestOutputs(params.artifacts),
   );
+  const latestOutputByLane = getLatestOutputs(
+    getSuccessfulWorkflowLaneOutputs(params.artifacts),
+  );
   const reviewByNodeId = groupByNodeId(
-    Array.from(getLatestReviewLanes(params.artifacts.reviewLanes).values()),
+    getLatestReviewLaneArtifacts(params.artifacts),
   );
 
   return {
@@ -229,11 +145,12 @@ function buildWorkflowArtifactProjection(params: {
           ? ({
               lanes: reviewLanes
                 .map((lane) => {
-                  const output = outputs.find(
-                    (candidate) =>
-                      candidate.laneIndex === lane.laneIndex &&
-                      candidate.attempt === lane.attempt,
-                  );
+                  const output =
+                    outputs.find(
+                      (candidate) =>
+                        candidate.laneIndex === lane.laneIndex &&
+                        candidate.attempt === lane.attempt,
+                    ) ?? latestOutputByLane.get(reviewLaneKey(lane));
                   return {
                     assets:
                       output?.value.type === "image" ||
@@ -286,11 +203,12 @@ function buildWorkflowArtifactProjection(params: {
           ? ({
               lanes: reviewLanes
                 .map((lane) => {
-                  const output = outputs.find(
-                    (candidate) =>
-                      candidate.laneIndex === lane.laneIndex &&
-                      candidate.attempt === lane.attempt,
-                  );
+                  const output =
+                    outputs.find(
+                      (candidate) =>
+                        candidate.laneIndex === lane.laneIndex &&
+                        candidate.attempt === lane.attempt,
+                    ) ?? latestOutputByLane.get(reviewLaneKey(lane));
                   return {
                     assets: [],
                     attempt: lane.attempt,

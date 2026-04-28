@@ -145,6 +145,7 @@ describe("workflow execution lane scope", () => {
               ownerUserId: "user",
               projectId: "project",
               promptSnapshot: null,
+              reviewStatus: null,
               runId: query.runId,
               value: { lanes: ["cached text"], type: "text" },
             } satisfies NodeLaneOutputArtifact;
