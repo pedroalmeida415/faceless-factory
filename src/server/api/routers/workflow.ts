@@ -91,6 +91,20 @@ const workflowExecutionRequestSchema = z
   })
   .strict();
 
+const workflowExecutionQuoteRequestSchema = z
+  .object({
+    projectId: z.string().min(1),
+    target: workflowExecutionTargetSchema,
+    documentRevision: z.number().nullable().optional(),
+    selection: z
+      .object({
+        nodeIds: z.array(z.string().min(1)),
+      })
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
 const workflowExecutionEventsSchema = z.object({
   lastEventId: z.string().nullish(),
   runId: z.string(),
@@ -212,15 +226,14 @@ export const workflowRouter = createTRPCRouter({
     }),
 
   quoteExecution: protectedProcedure
-    .input(workflowExecutionRequestSchema)
+    .input(workflowExecutionQuoteRequestSchema)
     .query(async ({ ctx, input }) => {
-      const request = input as StartWorkflowExecutionRequest;
       const userId = ctx.session.user.id;
 
       return ServerRuntime.runPromise(
         Effect.gen(function* () {
           const workflowExecutionService = yield* WorkflowExecutionService;
-          return yield* workflowExecutionService.quoteRun(userId, request);
+          return yield* workflowExecutionService.quoteRun(userId, input);
         }),
       ).catch((error) => {
         throw toTRPCError(error);

@@ -98,7 +98,10 @@ export class WorkflowExecutionService extends Context.Tag(
     >;
     readonly quoteRun: (
       userId: string,
-      request: StartWorkflowExecutionRequest,
+      request: Pick<
+        StartWorkflowExecutionRequest,
+        "documentRevision" | "projectId" | "selection" | "target"
+      >,
     ) => Effect.Effect<
       WorkflowExecutionPriceQuote,
       | WorkflowAuthorizationError
@@ -315,7 +318,10 @@ export class WorkflowExecutionService extends Context.Tag(
 
       const quoteRun = (
         userId: string,
-        request: StartWorkflowExecutionRequest,
+        request: Pick<
+          StartWorkflowExecutionRequest,
+          "documentRevision" | "projectId" | "selection" | "target"
+        >,
       ) =>
         Effect.gen(function* () {
           const projectId = request.projectId?.trim();

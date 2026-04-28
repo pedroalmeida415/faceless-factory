@@ -13,7 +13,6 @@ export function useWorkflowExecutionQuote(nodeId: string) {
   const projectId = useWorkflowStudioStore((state) => state.projectId);
   const serverQuote = api.workflow.quoteExecution.useQuery(
     {
-      document,
       documentRevision,
       projectId: projectId ?? "",
       target: { type: "node", nodeId },
