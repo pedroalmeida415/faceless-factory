@@ -568,6 +568,7 @@ type WorkflowStudioState = {
   documentRevision: number | null;
   editor: WorkflowEditorState;
   localDocumentVersion: number;
+  savedLocalDocumentVersion: number;
   projectId: string | null;
   runtime: WorkflowRuntimeState;
   activeRunId: string | null;
@@ -588,7 +589,10 @@ type WorkflowStudioState = {
     executionState: WorkflowExecutionStatusResponse,
   ) => void;
   clearActiveRunId: () => void;
-  setProjectPersistence: (documentRevision: number) => void;
+  setProjectPersistence: (
+    documentRevision: number,
+    savedLocalDocumentVersion: number,
+  ) => void;
   setActivity: (activity: string) => void;
   setActiveRunId: (runId: string) => void;
   setExecutionStreaming: (isStreaming: boolean) => void;
@@ -682,6 +686,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     documentRevision: null,
     editor: initialSnapshot.editor,
     localDocumentVersion: 0,
+    savedLocalDocumentVersion: 0,
     projectId: null,
     runtime: initialSnapshot.runtime,
     activeRunId: null,
@@ -718,6 +723,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           state.isStreamingExecutionStatus = false;
           state.lockedNodeIds = [];
           state.localDocumentVersion = 0;
+          state.savedLocalDocumentVersion = 0;
           state.lastExecutionFinishedAt = null;
           state.lastKnownCredits = null;
           state.lastServerRuntime = null;
@@ -730,6 +736,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           state.isStreamingExecutionStatus = false;
           state.lockedNodeIds = [];
           state.localDocumentVersion = 0;
+          state.savedLocalDocumentVersion = 0;
           state.lastExecutionFinishedAt = null;
           state.lastKnownCredits = null;
           state.lastServerRuntime = null;
@@ -789,9 +796,13 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       });
     },
 
-    setProjectPersistence: (documentRevision) => {
+    setProjectPersistence: (documentRevision, savedLocalDocumentVersion) => {
       set((state) => {
         state.documentRevision = documentRevision;
+        state.savedLocalDocumentVersion = Math.max(
+          state.savedLocalDocumentVersion,
+          savedLocalDocumentVersion,
+        );
       });
     },
 
@@ -1487,16 +1498,20 @@ export function useWorkflowStudioPersistence(project: WorkflowProject) {
         return {
           document: toWorkflowGraphDocument(state.document),
           documentRevision: state.documentRevision,
+          localDocumentVersion: state.localDocumentVersion,
           projectId: state.projectId,
         };
       },
       onError: (error) => {
         useWorkflowStudioStore.getState().setActivity(getErrorMessage(error));
       },
-      onSaved: (result) => {
+      onSaved: (result, snapshot) => {
         useWorkflowStudioStore
           .getState()
-          .setProjectPersistence(result.documentRevision);
+          .setProjectPersistence(
+            result.documentRevision,
+            snapshot.localDocumentVersion,
+          );
       },
     });
 

@@ -11,11 +11,17 @@ import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
 const WORKFLOW_SAVE_DEBOUNCE_MS = 1000;
 
 type WorkflowPersistenceSnapshot = WorkflowProjectSaveRequest;
+type VersionedWorkflowPersistenceSnapshot = WorkflowPersistenceSnapshot & {
+  localDocumentVersion: number;
+};
 
 type WorkflowPersistenceConfig = {
-  getSnapshot: () => WorkflowPersistenceSnapshot | null;
+  getSnapshot: () => VersionedWorkflowPersistenceSnapshot | null;
   onError: (error: unknown) => void;
-  onSaved: (result: WorkflowProjectSaveResponse) => void;
+  onSaved: (
+    result: WorkflowProjectSaveResponse,
+    snapshot: VersionedWorkflowPersistenceSnapshot,
+  ) => void;
 };
 
 let debounceTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -67,7 +73,11 @@ async function runDrainLoop(
     }
 
     const pendingSave = Effect.runPromise(
-      WorkflowClientService.saveProject(snapshot),
+      WorkflowClientService.saveProject({
+        document: snapshot.document,
+        documentRevision: snapshot.documentRevision,
+        projectId: snapshot.projectId,
+      }),
     );
     inFlightSave = pendingSave;
 
@@ -78,7 +88,7 @@ async function runDrainLoop(
       }
 
       lastResult = result;
-      config?.onSaved(result);
+      config?.onSaved(result, snapshot);
       savedChangeId = targetChangeId;
       flushRequested = flushRequested && savedChangeId < pendingChangeId;
     } catch (error) {
