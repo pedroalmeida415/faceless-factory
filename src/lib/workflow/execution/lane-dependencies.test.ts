@@ -154,6 +154,68 @@ describe("workflow lane dependencies", () => {
     );
   });
 
+  test("first-last-frame waits on transformed upstream generator lanes outside the job target set", () => {
+    const image = node("imageGenerator", "image");
+    const reorder = {
+      ...node("laneReorder", "shift"),
+      shift: 1,
+      valueType: "image" as const,
+    };
+    const video = {
+      ...node("videoGenerator", "video"),
+      mode: "first-last-frame" as const,
+    };
+    const document: WorkflowDocument = {
+      edges: [
+        {
+          id: "image-video-first",
+          source: image.id,
+          sourceHandle: "images",
+          target: video.id,
+          targetHandle: "first-frame",
+        },
+        {
+          id: "image-shift",
+          source: image.id,
+          sourceHandle: "images",
+          target: reorder.id,
+          targetHandle: "input",
+        },
+        {
+          id: "shift-video-last",
+          source: reorder.id,
+          sourceHandle: "output",
+          target: video.id,
+          targetHandle: "last-frame",
+        },
+      ],
+      nodes: [image, reorder, video],
+      version: WORKFLOW_DOCUMENT_VERSION,
+    };
+
+    const plan = lanePlan({
+      document,
+      iterations: { image: 3, video: 3 },
+      targetNodeIds: [video.id],
+    });
+
+    assert.deepEqual(
+      plan.jobs.find((job) => job.nodeId === video.id && job.laneIndex === 1)
+        ?.dependencies,
+      [
+        { laneIndex: 1, nodeId: image.id },
+        { laneIndex: 2, nodeId: image.id },
+      ],
+    );
+    assert.equal(
+      getReadyWorkflowLaneJobs({
+        completedLanes: new Set([`${image.id}:1`]),
+        plan,
+      }).some((job) => job.nodeId === video.id && job.laneIndex === 1),
+      false,
+    );
+  });
+
   test("readiness waits until every visible dependency is complete", () => {
     const plan = {
       jobs: [

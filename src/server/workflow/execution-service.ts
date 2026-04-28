@@ -282,6 +282,38 @@ export class WorkflowExecutionService extends Context.Tag(
         });
       };
 
+      const getExecutionArtifactNodeIds = (
+        document: StartWorkflowExecutionRequest["document"],
+        targetNodeIds: readonly string[],
+      ) => {
+        const seedPlan = buildWorkflowExecutionPlan(document, [
+          ...targetNodeIds,
+        ]);
+        const artifactNodeIds = new Set([
+          ...seedPlan.executableNodeIds,
+          ...seedPlan.reviewBarrierNodeIds,
+        ]);
+        let changed = true;
+
+        while (changed) {
+          changed = false;
+          const dependencyPlan = getExecutionDependencyPlan(
+            document,
+            Array.from(artifactNodeIds),
+          );
+          for (const dependency of dependencyPlan.jobs.flatMap(
+            (job) => job.dependencies,
+          )) {
+            if (!artifactNodeIds.has(dependency.nodeId)) {
+              artifactNodeIds.add(dependency.nodeId);
+              changed = true;
+            }
+          }
+        }
+
+        return Array.from(artifactNodeIds);
+      };
+
       const getReusablePriorLaneOutputs = (params: {
         document: StartWorkflowExecutionRequest["document"];
         excludeRunId?: string | null;
@@ -294,20 +326,27 @@ export class WorkflowExecutionService extends Context.Tag(
             params.document,
             params.targetNodeIds,
           );
+          const plannedLanes = Array.from(
+            new Map(
+              dependencyPlan.jobs
+                .flatMap((job) => [job, ...job.dependencies])
+                .map((lane) => [getWorkflowLaneKey(lane), lane]),
+            ).values(),
+          );
           const nodeById = new Map(
             params.document.nodes.map((node) => [node.id, node]),
           );
           const priorResultCandidates =
             yield* workflowArtifactStore.getProjectLaneReuseCandidates({
               excludeRunId: params.excludeRunId ?? null,
-              lanes: dependencyPlan.jobs,
+              lanes: plannedLanes,
               ownerUserId: params.ownerUserId,
               projectId: params.projectId,
             });
 
           return selectReusableWorkflowLaneOutputs({
             candidates: priorResultCandidates,
-            expectedLanes: dependencyPlan.jobs.flatMap((job) => {
+            expectedLanes: plannedLanes.flatMap((job) => {
               const valueType = getGeneratorLaneValueType(
                 nodeById.get(job.nodeId),
               );
@@ -383,20 +422,19 @@ export class WorkflowExecutionService extends Context.Tag(
             projectDocument,
             targetNodeIds,
           );
-          const executionPlan = buildWorkflowExecutionPlan(
+          const artifactNodeIds = getExecutionArtifactNodeIds(
             document,
             targetNodeIds,
+          );
+          const executionPlan = buildWorkflowExecutionPlan(
+            document,
+            artifactNodeIds,
           );
           const reusableLaneOutputs = yield* getReusablePriorLaneOutputs({
             document,
             ownerUserId: userId,
             projectId,
-            targetNodeIds: Array.from(
-              new Set([
-                ...executionPlan.executableNodeIds,
-                ...executionPlan.reviewBarrierNodeIds,
-              ]),
-            ),
+            targetNodeIds: artifactNodeIds,
           });
 
           return estimateWorkflowExecution(
@@ -405,6 +443,8 @@ export class WorkflowExecutionService extends Context.Tag(
               document,
               documentRevision: project.documentRevision,
               projectId,
+              selection: { nodeIds: executionPlan.executableNodeIds },
+              target: { type: "selected-or-all" as const },
             },
             {
               completedLaneKeys: new Set(
@@ -2291,16 +2331,13 @@ export class WorkflowExecutionService extends Context.Tag(
             ),
             projectId,
           } satisfies StartWorkflowExecutionRequest;
-          const executionPlan = buildWorkflowExecutionPlan(
+          const artifactNodeIds = getExecutionArtifactNodeIds(
             submittedRequest.document,
             targetNodeIds,
           );
-          const executionNodeIds = executionPlan.executableNodeIds;
-          const artifactNodeIds = Array.from(
-            new Set([
-              ...executionNodeIds,
-              ...executionPlan.reviewBarrierNodeIds,
-            ]),
+          const executionPlan = buildWorkflowExecutionPlan(
+            submittedRequest.document,
+            artifactNodeIds,
           );
           const reusableLaneOutputs = yield* getReusablePriorLaneOutputs({
             document: submittedRequest.document,
@@ -2312,7 +2349,12 @@ export class WorkflowExecutionService extends Context.Tag(
           const reusableLaneKeys = new Set(
             reusableLaneOutputs.map(getWorkflowLaneKey),
           );
-          const priceQuote = estimateWorkflowExecution(submittedRequest, {
+          const executionRequest = {
+            ...submittedRequest,
+            selection: { nodeIds: executionPlan.executableNodeIds },
+            target: { type: "selected-or-all" as const },
+          } satisfies StartWorkflowExecutionRequest;
+          const priceQuote = estimateWorkflowExecution(executionRequest, {
             completedLaneKeys: reusableLaneKeys,
           });
           const credits = yield* workflowCreditsService.debitExecution({
@@ -2415,7 +2457,7 @@ export class WorkflowExecutionService extends Context.Tag(
 
           const laneCount = getExecutionLaneCount(
             submittedRequest.document,
-            targetNodeIds,
+            artifactNodeIds,
           );
           const plannedLaneCount = getExecutionDependencyPlan(
             submittedRequest.document,
@@ -2487,7 +2529,7 @@ export class WorkflowExecutionService extends Context.Tag(
             yield* enqueueLaneJobs({
               jobs: readyJobs,
               laneCount,
-              request: submittedRequest,
+              request: executionRequest,
               runId,
               userId,
             }).pipe(
@@ -2524,7 +2566,7 @@ export class WorkflowExecutionService extends Context.Tag(
           yield* Effect.tryPromise({
             try: () =>
               enqueueWorkflowExecutionJob({
-                request: submittedRequest,
+                request: executionRequest,
                 runId,
                 type: "execute-run",
                 userId,

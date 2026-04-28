@@ -142,9 +142,7 @@ function resolveSourceLaneDependencies(params: {
   }
 
   if (isGeneratorNode(node)) {
-    return params.targetNodeIds.has(node.id)
-      ? [{ nodeId: node.id, laneIndex: params.laneIndex }]
-      : [];
+    return [{ nodeId: node.id, laneIndex: params.laneIndex }];
   }
 
   const visiting = new Set(params.visiting).add(visitKey);
