@@ -3,9 +3,6 @@ import type {
   ListWorkflowNode,
   LlmGeneratorWorkflowNode,
   OutputReorderWorkflowNode,
-  OutputSelectWorkflowNode,
-  OutputSplitWorkflowNode,
-  OutputZipAlignWorkflowNode,
   PromptWorkflowNode,
   VideoGeneratorWorkflowNode,
   WorkflowDocumentNode,
@@ -172,30 +169,6 @@ export const OutputReorderNodeService = {
       ...node,
       valueType,
     };
-  },
-};
-
-export const OutputSelectNodeService = {
-  setIndices(node: OutputSelectWorkflowNode, indices: number[]) {
-    return { ...node, indices } satisfies OutputSelectWorkflowNode;
-  },
-};
-
-export const OutputSplitNodeService = {
-  setSplitCount(node: OutputSplitWorkflowNode, splitCount: number) {
-    return {
-      ...node,
-      splitCount: Math.max(1, Math.trunc(splitCount)),
-    } satisfies OutputSplitWorkflowNode;
-  },
-};
-
-export const OutputZipAlignNodeService = {
-  setMode(
-    node: OutputZipAlignWorkflowNode,
-    mode: OutputZipAlignWorkflowNode["mode"],
-  ) {
-    return { ...node, mode } satisfies OutputZipAlignWorkflowNode;
   },
 };
 

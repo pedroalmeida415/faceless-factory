@@ -21,10 +21,7 @@ import {
   buildWorkflowOutputProjection,
   getWorkflowVisibleCompletionOutputs,
 } from "~/lib/workflow/execution/artifact-projection";
-import {
-  executeWorkflow,
-  regenerateGeneratorReviewOutput,
-} from "~/lib/workflow/execution/core";
+import { executeWorkflow } from "~/lib/workflow/execution/core";
 import {
   buildWorkflowOutputDependencyPlan,
   getCompletedWorkflowOutputKeys,
@@ -136,32 +133,6 @@ export class WorkflowExecutionService extends Context.Tag(
       | WorkflowAuthorizationError
       | WorkflowCreditsError
       | WorkflowExecutionPortError
-      | WorkflowInfrastructureError
-      | WorkflowExecutionNotFoundError
-      | WorkflowValidationError
-    >;
-    readonly failExecution: (params: {
-      message: string;
-      executionId: string;
-      userId: string;
-    }) => Effect.Effect<
-      WorkflowExecutionStatusResponse,
-      | WorkflowAuthorizationError
-      | WorkflowCreditsError
-      | WorkflowInfrastructureError
-      | WorkflowExecutionNotFoundError
-      | WorkflowValidationError
-    >;
-    readonly settleFailedExecutionOutput: (params: {
-      outputIndex: number;
-      message: string;
-      nodeId: string;
-      executionId: string;
-      userId: string;
-    }) => Effect.Effect<
-      WorkflowExecutionStatusResponse,
-      | WorkflowAuthorizationError
-      | WorkflowCreditsError
       | WorkflowInfrastructureError
       | WorkflowExecutionNotFoundError
       | WorkflowValidationError
@@ -716,27 +687,6 @@ export class WorkflowExecutionService extends Context.Tag(
         );
       };
 
-      const getLatestOutputReviewArtifact = (
-        artifacts: WorkflowOutputArtifacts,
-        params: { outputIndex: number; reviewNodeId: string },
-      ) => {
-        let latest:
-          | ReturnType<typeof getLatestOutputReviewArtifacts>[number]
-          | null = null;
-        for (const output of getLatestOutputReviewArtifacts(artifacts)) {
-          if (
-            output.nodeId !== params.reviewNodeId ||
-            output.outputIndex !== params.outputIndex
-          ) {
-            continue;
-          }
-          if (!latest || latest.attempt < output.attempt) {
-            latest = output;
-          }
-        }
-        return latest;
-      };
-
       const hasApprovedReviewOutputs = (
         run: WorkflowExecutionStatusResponse,
         reviewNodeId: string,
@@ -1133,32 +1083,6 @@ export class WorkflowExecutionService extends Context.Tag(
           ),
         };
       };
-
-      const hydrateRunDocumentFromProject = (
-        run: WorkflowExecutionStatusResponse,
-        userId: string,
-      ) =>
-        Effect.gen(function* () {
-          const projectId = run.requestContext?.projectId?.trim();
-          if (!projectId) {
-            return run.document;
-          }
-
-          const project = yield* workflowStore.getProject({
-            ownerUserId: userId,
-            projectId,
-          });
-
-          const artifacts = yield* workflowArtifactStore.getProjectArtifacts({
-            ownerUserId: userId,
-            projectId,
-          });
-
-          return buildWorkflowOutputProjection({
-            artifacts,
-            document: project.document,
-          });
-        });
 
       const getExecutionCredits = (params: {
         executionId: string;
@@ -1817,233 +1741,6 @@ export class WorkflowExecutionService extends Context.Tag(
           });
 
           return regeneratingExecution;
-        });
-
-      const _executeReviewOutputRegeneration = (params: {
-        attempt: number;
-        outputIndex: number;
-        reviewNodeId: string;
-        executionId: string;
-        userId: string;
-      }) =>
-        Effect.gen(function* () {
-          const regeneratingExecution =
-            yield* workflowExecutionStore.getExecution({
-              executionId: params.executionId,
-              userId: params.userId,
-            });
-          const regenerationArtifacts =
-            yield* workflowArtifactStore.getOutputArtifacts({
-              ownerUserId: params.userId,
-              executionId: params.executionId,
-            });
-          const latestRegenerationOutput = getLatestOutputReviewArtifact(
-            regenerationArtifacts,
-            {
-              outputIndex: params.outputIndex,
-              reviewNodeId: params.reviewNodeId,
-            },
-          );
-          if (
-            !latestRegenerationOutput ||
-            latestRegenerationOutput.attempt >= params.attempt ||
-            latestRegenerationOutput.attempt !== params.attempt - 1 ||
-            latestRegenerationOutput.status !== "regenerating"
-          ) {
-            return regeneratingExecution;
-          }
-
-          const regenerationDocument = yield* hydrateRunDocumentFromProject(
-            regeneratingExecution,
-            params.userId,
-          );
-          const projectId =
-            regeneratingExecution.requestContext?.projectId?.trim();
-          if (!projectId) {
-            return yield* Effect.fail(
-              new WorkflowInfrastructureError({
-                message: "Workflow project is missing from execution context.",
-              }),
-            );
-          }
-          const chargedOutputCosts = new Map<string, number>();
-          const result = yield* regenerateGeneratorReviewOutput({
-            attempt: params.attempt,
-            document: regenerationDocument,
-            outputIndex: params.outputIndex,
-            ports: {
-              generateImage: (imageRequest) =>
-                vertexAi.generateImagesWithNanoBananaPro({
-                  ownerUserId: params.userId,
-                  projectId,
-                  request: imageRequest,
-                }),
-              generateLlm: (llmRequest) =>
-                vertexAi.generateTextWithGemini3Flash({
-                  ownerUserId: params.userId,
-                  projectId,
-                  request: llmRequest,
-                }),
-              generateVideo: (videoRequest) =>
-                vertexAi.generateVideosWithVeo31({
-                  ownerUserId: params.userId,
-                  projectId,
-                  request: videoRequest,
-                }),
-              getNodeOutput: () => Effect.succeed(null),
-              onOutputCost: (cost) =>
-                chargeOutputCost({
-                  ...cost,
-                  executionId: params.executionId,
-                  projectId:
-                    regeneratingExecution.requestContext?.projectId ?? null,
-                  userId: params.userId,
-                }).pipe(
-                  Effect.map(({ amount, outputKey }) => {
-                    chargedOutputCosts.set(outputKey, amount);
-                    return amount;
-                  }),
-                ),
-            },
-            generatorNodeId: params.reviewNodeId,
-            executionId: params.executionId,
-          }).pipe(
-            Effect.catchAll((error) =>
-              Effect.gen(function* () {
-                yield* workflowArtifactStore
-                  .setReviewOutputStatus({
-                    attempt: params.attempt - 1,
-                    outputIndex: params.outputIndex,
-                    nodeId: params.reviewNodeId,
-                    ownerUserId: params.userId,
-                    projectId:
-                      regeneratingExecution.requestContext?.projectId ?? null,
-                    executionId: params.executionId,
-                    status: "pending",
-                  })
-                  .pipe(Effect.catchAll(() => Effect.void));
-                yield* workflowExecutionStore.updateExecutionWith({
-                  executionId: params.executionId,
-                  userId: params.userId,
-                  update: (currentExecution) =>
-                    Effect.gen(function* () {
-                      const credits = yield* getExecutionCredits({
-                        executionId: params.executionId,
-                        userId: params.userId,
-                      }).pipe(
-                        Effect.catchAll(() =>
-                          Effect.succeed(currentExecution.credits),
-                        ),
-                      );
-
-                      return {
-                        result: null,
-                        run: {
-                          ...currentExecution,
-                          credits,
-                          document: updateWorkflowDocumentNode(
-                            currentExecution.document,
-                            params.reviewNodeId,
-                            (node) =>
-                              node.kind === "imageGenerator" ||
-                              node.kind === "videoGenerator" ||
-                              node.kind === "llmGenerator"
-                                ? {
-                                    ...node,
-                                    review: {
-                                      ...node.review,
-                                      outputs: node.review.outputs.map(
-                                        (output) =>
-                                          output.outputIndex ===
-                                          params.outputIndex
-                                            ? { ...output, status: "pending" }
-                                            : output,
-                                      ),
-                                      updatedAt: new Date().toISOString(),
-                                    },
-                                  }
-                                : node,
-                          ),
-                          runtime: {
-                            ...currentExecution.runtime,
-                            activity: getErrorMessage(error),
-                          },
-                        },
-                      };
-                    }),
-                });
-
-                return yield* Effect.fail(error);
-              }),
-            ),
-          );
-
-          return yield* workflowExecutionStore
-            .updateExecutionWith({
-              executionId: params.executionId,
-              userId: params.userId,
-              update: (currentExecution) =>
-                Effect.gen(function* () {
-                  const currentArtifacts =
-                    yield* workflowArtifactStore.getOutputArtifacts({
-                      ownerUserId: params.userId,
-                      executionId: params.executionId,
-                    });
-                  const latestOutput = getLatestOutputReviewArtifact(
-                    currentArtifacts,
-                    {
-                      outputIndex: params.outputIndex,
-                      reviewNodeId: params.reviewNodeId,
-                    },
-                  );
-                  if (latestOutput?.attempt !== params.attempt - 1) {
-                    return { result: null, run: currentExecution };
-                  }
-                  if (latestOutput.status !== "regenerating") {
-                    return { result: null, run: currentExecution };
-                  }
-
-                  const nextAccruedCostCredits =
-                    currentExecution.accruedCostCredits + result.costCredits;
-                  const credits = yield* getExecutionCredits({
-                    executionId: params.executionId,
-                    userId: params.userId,
-                  });
-                  const nextRunBase = {
-                    ...currentExecution,
-                    accruedCostCredits: nextAccruedCostCredits,
-                    credits,
-                    document: mergeOutputScopedDocument({
-                      currentDocument: currentExecution.document,
-                      outputIndex: params.outputIndex,
-                      stateDocument: result.document,
-                    }),
-                    runtime: {
-                      ...currentExecution.runtime,
-                      activity: `Output ${params.outputIndex + 1} regenerated. Review it again.`,
-                    },
-                    status:
-                      currentExecution.status === "running"
-                        ? ("running" as const)
-                        : ("waiting_for_review" as const),
-                  } satisfies WorkflowExecutionStatusResponse;
-                  const documentRevision = yield* persistOutputArtifacts(
-                    nextRunBase,
-                    params.userId,
-                    params.outputIndex,
-                    chargedOutputCosts,
-                  );
-
-                  return {
-                    result: null,
-                    run: withProjectDocumentRevision(
-                      nextRunBase,
-                      documentRevision,
-                    ),
-                  };
-                }),
-            })
-            .pipe(Effect.map(({ run }) => run));
         });
 
       const failExecution = (params: {
@@ -3188,10 +2885,8 @@ export class WorkflowExecutionService extends Context.Tag(
       return WorkflowExecutionService.of({
         approveReviewOutput,
         executeTaskRun,
-        failExecution,
         quoteExecution,
         rejectReviewOutput,
-        settleFailedExecutionOutput,
         settleFailedTaskRun,
         startExecution,
       });

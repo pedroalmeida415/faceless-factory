@@ -151,41 +151,6 @@ function toWorkflowNodeData(
         shift: node.shift,
         valueType: node.valueType,
       };
-    case "outputSelect":
-      return {
-        kind: node.kind,
-        label: node.label,
-        status,
-        error,
-        indices: node.indices,
-        valueType: node.valueType,
-      };
-    case "outputSplit":
-      return {
-        kind: node.kind,
-        label: node.label,
-        status,
-        error,
-        splitCount: node.splitCount,
-        valueType: node.valueType,
-      };
-    case "outputMerge":
-      return {
-        kind: node.kind,
-        label: node.label,
-        status,
-        error,
-        valueType: node.valueType,
-      };
-    case "outputZipAlign":
-      return {
-        kind: node.kind,
-        label: node.label,
-        status,
-        error,
-        mode: node.mode,
-        valueType: node.valueType,
-      };
     case "imageGenerator":
       return {
         kind: node.kind,
@@ -360,34 +325,6 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       left.mode === right.mode &&
       left.order === right.order &&
       left.shift === right.shift &&
-      left.valueType === right.valueType
-    );
-  }
-
-  if (left.kind === "outputSelect") {
-    return (
-      right.kind === "outputSelect" &&
-      left.indices === right.indices &&
-      left.valueType === right.valueType
-    );
-  }
-
-  if (left.kind === "outputSplit") {
-    return (
-      right.kind === "outputSplit" &&
-      left.splitCount === right.splitCount &&
-      left.valueType === right.valueType
-    );
-  }
-
-  if (left.kind === "outputMerge") {
-    return right.kind === "outputMerge" && left.valueType === right.valueType;
-  }
-
-  if (left.kind === "outputZipAlign") {
-    return (
-      right.kind === "outputZipAlign" &&
-      left.mode === right.mode &&
       left.valueType === right.valueType
     );
   }

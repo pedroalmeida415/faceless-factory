@@ -24,9 +24,6 @@ export type StudioContextValue = {
   setOutputReorderMode: (nodeId: string, mode: "shift" | "manual") => void;
   setOutputReorderOrder: (nodeId: string, order: number[]) => void;
   setOutputReorderShift: (nodeId: string, shift: number) => void;
-  setOutputSelectIndices: (nodeId: string, indices: number[]) => void;
-  setOutputSplitCount: (nodeId: string, splitCount: number) => void;
-  setOutputZipAlignMode: (nodeId: string, mode: "zip" | "broadcast") => void;
   setImageGeneratorModel: (
     nodeId: string,
     model: ImageGeneratorModelId,

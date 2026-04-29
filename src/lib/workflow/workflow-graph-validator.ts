@@ -7,19 +7,11 @@ import {
   getGeneratorInputHandles,
   getIncomingEdgesForHandle,
   getOutputReorderInputValue,
-  getOutputTransformInputValue,
   isValidWorkflowEdge,
   resolvePromptNodeTextBatch,
 } from "~/lib/workflow/graph";
-import {
-  OUTPUT_REORDER_INPUT_HANDLE_ID,
-  OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-} from "~/lib/workflow/node-definitions";
-import {
-  getOutputPermutationValidationMessage,
-  getOutputSelectionValidationMessage,
-  getOutputSplitValidationMessage,
-} from "~/lib/workflow/runtime-values";
+import { OUTPUT_REORDER_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
+import { getOutputPermutationValidationMessage } from "~/lib/workflow/runtime-values";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
 
 function failValidation(message: string): never {
@@ -123,58 +115,6 @@ function validateExecutionPlanNodes(
         }
         break;
       }
-      case "outputSelect":
-      case "outputSplit": {
-        if (
-          getIncomingEdgesForHandle(
-            incomingByTarget,
-            node.id,
-            OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-          ).length !== 1
-        ) {
-          failValidation(`${node.label} needs exactly one input.`);
-        }
-
-        const inputValue = getOutputTransformInputValue(document, node.id);
-        if (inputValue && inputValue.type !== node.valueType) {
-          failValidation(
-            `${node.label} input type does not match its output type.`,
-          );
-        }
-
-        if (node.kind === "outputSelect" && inputValue) {
-          const message = getOutputSelectionValidationMessage(
-            node.indices,
-            inputValue.items.length,
-          );
-          if (message) {
-            failValidation(message);
-          }
-        }
-
-        if (node.kind === "outputSplit" && inputValue) {
-          const message = getOutputSplitValidationMessage(
-            node.splitCount,
-            inputValue.items.length,
-          );
-          if (message) {
-            failValidation(message);
-          }
-        }
-        break;
-      }
-      case "outputMerge":
-      case "outputZipAlign":
-        if (
-          !getIncomingEdgesForHandle(
-            incomingByTarget,
-            node.id,
-            OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-          ).length
-        ) {
-          failValidation(`${node.label} needs at least one input.`);
-        }
-        break;
       case "imageGenerator":
       case "videoGenerator":
       case "llmGenerator": {

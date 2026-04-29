@@ -25,7 +25,6 @@ import {
 import {
   formatNodeTitle,
   OUTPUT_REORDER_OUTPUT_HANDLE_ID,
-  OUTPUT_TRANSFORM_OUTPUT_HANDLE_ID,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
 import {
@@ -88,14 +87,7 @@ function syncEngineState(
   );
   const untypedOutputTransformNodeIds = new Set(
     normalizedNodes.flatMap((node) =>
-      (node.kind === "outputReorder" ||
-        node.kind === "outputSelect" ||
-        node.kind === "outputSplit" ||
-        node.kind === "outputMerge" ||
-        node.kind === "outputZipAlign") &&
-      !node.valueType
-        ? [node.id]
-        : [],
+      node.kind === "outputReorder" && !node.valueType ? [node.id] : [],
     ),
   );
   const normalizedOutputEdges = untypedOutputTransformNodeIds.size
@@ -103,9 +95,7 @@ function syncEngineState(
         (edge) =>
           !(
             untypedOutputTransformNodeIds.has(edge.source) &&
-            (edge.sourceHandle === OUTPUT_REORDER_OUTPUT_HANDLE_ID ||
-              edge.sourceHandle === OUTPUT_TRANSFORM_OUTPUT_HANDLE_ID ||
-              edge.sourceHandle?.startsWith("output-"))
+            edge.sourceHandle === OUTPUT_REORDER_OUTPUT_HANDLE_ID
           ),
       )
     : normalizedEdges;

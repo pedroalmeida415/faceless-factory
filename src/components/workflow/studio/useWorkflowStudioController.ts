@@ -39,15 +39,6 @@ export function useWorkflowStudioController() {
   const setOutputReorderShift = useWorkflowStudioStore(
     (state) => state.setOutputReorderShift,
   );
-  const setOutputSelectIndices = useWorkflowStudioStore(
-    (state) => state.setOutputSelectIndices,
-  );
-  const setOutputSplitCount = useWorkflowStudioStore(
-    (state) => state.setOutputSplitCount,
-  );
-  const setOutputZipAlignMode = useWorkflowStudioStore(
-    (state) => state.setOutputZipAlignMode,
-  );
   const setVideoGeneratorModel = useWorkflowStudioStore(
     (state) => state.setVideoGeneratorModel,
   );
@@ -112,9 +103,6 @@ export function useWorkflowStudioController() {
       setOutputReorderMode,
       setOutputReorderOrder,
       setOutputReorderShift,
-      setOutputSelectIndices,
-      setOutputSplitCount,
-      setOutputZipAlignMode,
       setImageGeneratorModel,
       setVideoGeneratorModel,
       setImageGeneratorMode,
@@ -133,9 +121,6 @@ export function useWorkflowStudioController() {
       setOutputReorderMode,
       setOutputReorderOrder,
       setOutputReorderShift,
-      setOutputSelectIndices,
-      setOutputSplitCount,
-      setOutputZipAlignMode,
       runNode,
       setGeneratorReviewEnabled,
       setImageGeneratorConfigValue,

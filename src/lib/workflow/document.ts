@@ -19,11 +19,7 @@ import type {
   ImageGeneratorSettings,
   ListNodeFields,
   LlmGeneratorSettings,
-  OutputMergeNodeFields,
   OutputReorderNodeFields,
-  OutputSelectNodeFields,
-  OutputSplitNodeFields,
-  OutputZipAlignNodeFields,
   PromptDisplayMode,
   PromptNodeFields,
   PromptVariable,
@@ -71,26 +67,6 @@ export type OutputReorderWorkflowNode = WorkflowDocumentNodeBase &
     kind: "outputReorder";
   };
 
-export type OutputSelectWorkflowNode = WorkflowDocumentNodeBase &
-  OutputSelectNodeFields & {
-    kind: "outputSelect";
-  };
-
-export type OutputSplitWorkflowNode = WorkflowDocumentNodeBase &
-  OutputSplitNodeFields & {
-    kind: "outputSplit";
-  };
-
-export type OutputMergeWorkflowNode = WorkflowDocumentNodeBase &
-  OutputMergeNodeFields & {
-    kind: "outputMerge";
-  };
-
-export type OutputZipAlignWorkflowNode = WorkflowDocumentNodeBase &
-  OutputZipAlignNodeFields & {
-    kind: "outputZipAlign";
-  };
-
 export type ImageGeneratorWorkflowNode = WorkflowDocumentNodeBase &
   ImageGeneratorSettings &
   GeneratorReviewFields &
@@ -135,10 +111,6 @@ export type WorkflowDocumentNode =
   | ListWorkflowNode
   | AssetWorkflowNode
   | OutputReorderWorkflowNode
-  | OutputSelectWorkflowNode
-  | OutputSplitWorkflowNode
-  | OutputMergeWorkflowNode
-  | OutputZipAlignWorkflowNode
   | ImageGeneratorWorkflowNode
   | VideoGeneratorWorkflowNode
   | LlmGeneratorWorkflowNode;
@@ -287,41 +259,6 @@ function makeWorkflowNode(
         shift: 1,
         valueType: null,
       };
-    case "outputSelect":
-      return {
-        id,
-        kind,
-        label,
-        position,
-        indices: [0],
-        valueType: null,
-      };
-    case "outputSplit":
-      return {
-        id,
-        kind,
-        label,
-        position,
-        splitCount: 2,
-        valueType: null,
-      };
-    case "outputMerge":
-      return {
-        id,
-        kind,
-        label,
-        position,
-        valueType: null,
-      };
-    case "outputZipAlign":
-      return {
-        id,
-        kind,
-        label,
-        position,
-        mode: "zip",
-        valueType: null,
-      };
     case "imageGenerator":
       return {
         id,
@@ -373,10 +310,6 @@ function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
     value === "prompt" ||
     value === "asset" ||
     value === "outputReorder" ||
-    value === "outputSelect" ||
-    value === "outputSplit" ||
-    value === "outputMerge" ||
-    value === "outputZipAlign" ||
     value === "imageGenerator" ||
     value === "videoGenerator" ||
     value === "llmGenerator"
@@ -526,16 +459,6 @@ function asOutputReorderValueType(
     : null;
 }
 
-function asOutputZipAlignMode(
-  value: unknown,
-): OutputZipAlignNodeFields["mode"] {
-  return value === "broadcast" ? "broadcast" : "zip";
-}
-
-function asPositiveInteger(value: unknown, fallback: number) {
-  return isNumber(value) && value > 0 ? Math.trunc(value) : fallback;
-}
-
 function asOutputPermutation(value: unknown) {
   return Array.isArray(value)
     ? value.flatMap((entry) =>
@@ -675,61 +598,6 @@ function normalizeWorkflowNode(
         mode: asOutputReorderMode(value.mode),
         order: asOutputPermutation(value.order),
         shift: isNumber(value.shift) ? Math.trunc(value.shift) : baseNode.shift,
-        valueType: asOutputReorderValueType(value.valueType),
-      };
-    }
-    case "outputSelect": {
-      const baseNode = makeWorkflowNode(
-        id,
-        value.kind,
-        position,
-      ) as OutputSelectWorkflowNode;
-
-      return {
-        ...baseNode,
-        label: asString(value.label, baseNode.label),
-        indices: asOutputPermutation(value.indices),
-        valueType: asOutputReorderValueType(value.valueType),
-      };
-    }
-    case "outputSplit": {
-      const baseNode = makeWorkflowNode(
-        id,
-        value.kind,
-        position,
-      ) as OutputSplitWorkflowNode;
-
-      return {
-        ...baseNode,
-        label: asString(value.label, baseNode.label),
-        splitCount: asPositiveInteger(value.splitCount, baseNode.splitCount),
-        valueType: asOutputReorderValueType(value.valueType),
-      };
-    }
-    case "outputMerge": {
-      const baseNode = makeWorkflowNode(
-        id,
-        value.kind,
-        position,
-      ) as OutputMergeWorkflowNode;
-
-      return {
-        ...baseNode,
-        label: asString(value.label, baseNode.label),
-        valueType: asOutputReorderValueType(value.valueType),
-      };
-    }
-    case "outputZipAlign": {
-      const baseNode = makeWorkflowNode(
-        id,
-        value.kind,
-        position,
-      ) as OutputZipAlignWorkflowNode;
-
-      return {
-        ...baseNode,
-        label: asString(value.label, baseNode.label),
-        mode: asOutputZipAlignMode(value.mode),
         valueType: asOutputReorderValueType(value.valueType),
       };
     }
@@ -938,11 +806,7 @@ export function specializeWorkflowNodeForValueType(
     };
   }
 
-  return node.kind === "outputReorder" ||
-    node.kind === "outputSelect" ||
-    node.kind === "outputSplit" ||
-    node.kind === "outputMerge" ||
-    node.kind === "outputZipAlign"
+  return node.kind === "outputReorder"
     ? {
         ...node,
         valueType,

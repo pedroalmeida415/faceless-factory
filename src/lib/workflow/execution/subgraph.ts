@@ -11,15 +11,10 @@ import {
 } from "~/lib/workflow/graph";
 import {
   OUTPUT_REORDER_INPUT_HANDLE_ID,
-  OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
   PROMPT_VARIABLE_PATTERN,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
 import { getReviewOutputCount } from "~/lib/workflow/review-state";
-import {
-  getOutputSelectionValidationMessage,
-  getOutputSplitValidationMessage,
-} from "~/lib/workflow/runtime-values";
 
 export type GeneratorIterationInfo = {
   hasIterator: boolean;
@@ -69,10 +64,6 @@ function getNodeOutputValueType(
     case "asset":
       return node.assetKind;
     case "outputReorder":
-    case "outputSelect":
-    case "outputSplit":
-    case "outputMerge":
-    case "outputZipAlign":
       return node.valueType;
     case "imageGenerator":
       return "image";
@@ -121,34 +112,6 @@ function mergePlannedValues(
     type,
     outputCount: info.iterations,
     mismatched: info.mismatchedIterators,
-  };
-}
-
-function zipAlignPlannedValues(
-  type: WorkflowValueType,
-  values: readonly PlannedValue[],
-  mode: "zip" | "broadcast",
-): PlannedValue | null {
-  const filteredValues = values.filter((value) => value.type === type);
-  if (!filteredValues.length) {
-    return null;
-  }
-
-  if (mode === "broadcast") {
-    return mergePlannedValues(type, filteredValues);
-  }
-
-  const outputCounts = filteredValues.map((value) => value.outputCount);
-  const [outputCount] = outputCounts;
-  const mismatched =
-    outputCount === undefined ||
-    filteredValues.some((value) => value.mismatched) ||
-    outputCounts.some((count) => count !== outputCount);
-
-  return {
-    type,
-    outputCount: mismatched ? Math.max(...outputCounts) : outputCount,
-    mismatched,
   };
 }
 
@@ -254,7 +217,7 @@ function resolveNodePlan(
   context: PlanningContext,
   nodeId: string,
   path: ReadonlySet<string>,
-  sourceHandleId?: string | null,
+  _sourceHandleId?: string | null,
 ): PlannedValue | null {
   if (path.has(nodeId)) {
     return null;
@@ -311,96 +274,6 @@ function resolveNodePlan(
         incomingEdge.sourceHandle,
       );
       return value?.type === node.valueType ? value : null;
-    }
-    case "outputSelect": {
-      const incomingEdge = getIncomingEdgesForHandle(
-        context.incomingByTarget,
-        node.id,
-        OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-      )[0];
-      const value = incomingEdge
-        ? resolveNodePlan(
-            context,
-            incomingEdge.source,
-            nextPath,
-            incomingEdge.sourceHandle,
-          )
-        : null;
-      return value?.type === node.valueType
-        ? {
-            ...value,
-            outputCount: node.indices.length,
-            mismatched:
-              value.mismatched ||
-              Boolean(
-                getOutputSelectionValidationMessage(
-                  node.indices,
-                  value.outputCount,
-                ),
-              ),
-          }
-        : null;
-    }
-    case "outputSplit": {
-      const incomingEdge = getIncomingEdgesForHandle(
-        context.incomingByTarget,
-        node.id,
-        OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-      )[0];
-      const value = incomingEdge
-        ? resolveNodePlan(
-            context,
-            incomingEdge.source,
-            nextPath,
-            incomingEdge.sourceHandle,
-          )
-        : null;
-      const outputIndex = Number(
-        (sourceHandleId ?? "output-0").replace("output-", ""),
-      );
-      return value?.type === node.valueType && Number.isInteger(outputIndex)
-        ? {
-            ...value,
-            outputCount: 1,
-            mismatched:
-              value.mismatched ||
-              Boolean(
-                getOutputSplitValidationMessage(
-                  node.splitCount,
-                  value.outputCount,
-                ),
-              ) ||
-              outputIndex >= value.outputCount,
-          }
-        : null;
-    }
-    case "outputMerge":
-    case "outputZipAlign": {
-      const values = getIncomingEdgesForHandle(
-        context.incomingByTarget,
-        node.id,
-        OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-      )
-        .map((edge) =>
-          resolveNodePlan(context, edge.source, nextPath, edge.sourceHandle),
-        )
-        .filter(
-          (value): value is PlannedValue =>
-            value !== null && value.type === node.valueType,
-        );
-      if (!values.length || !node.valueType) {
-        return null;
-      }
-      return node.kind === "outputMerge"
-        ? {
-            outputCount: values.reduce(
-              (sum, value) => sum + value.outputCount,
-              0,
-            ),
-            mismatched: values.some((value) => value.mismatched),
-            type: node.valueType,
-          }
-        : zipAlignPlannedValues(node.valueType, values, node.mode);
     }
     case "prompt":
       return resolvePromptPlan(context, node, nextPath);

@@ -30,6 +30,7 @@ import {
   getSuccessfulWorkflowOutputs,
   isWorkflowExecutionLockingStatus,
 } from "~/lib/workflow/execution/types";
+import { getWorkflowNodeRuntimeValue } from "~/lib/workflow/graph";
 import { PROMPT_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
 import type { WorkflowAsset } from "~/lib/workflow/types";
 
@@ -210,6 +211,64 @@ describe("workflow output dependencies", () => {
         { outputIndex: 0, nodeId: image.id },
         { outputIndex: 1, nodeId: image.id },
       ],
+    );
+  });
+
+  test("manual output reorder maps dependencies and runtime outputs", () => {
+    const image = {
+      ...node("imageGenerator", "image"),
+      outputs: [
+        [workflowAsset("image-0")],
+        [workflowAsset("image-1")],
+        [workflowAsset("image-2")],
+      ],
+    };
+    const reorder = {
+      ...node("outputReorder", "manual"),
+      mode: "manual" as const,
+      order: [2, 0, 1],
+      valueType: "image" as const,
+    };
+    const video = node("videoGenerator", "video");
+    const document: WorkflowDocument = {
+      edges: [
+        {
+          id: "image-reorder",
+          source: image.id,
+          sourceHandle: "images",
+          target: reorder.id,
+          targetHandle: "input",
+        },
+        {
+          id: "reorder-video",
+          source: reorder.id,
+          sourceHandle: "output",
+          target: video.id,
+          targetHandle: imageInput(0),
+        },
+      ],
+      nodes: [image, reorder, video],
+      version: WORKFLOW_DOCUMENT_VERSION,
+    };
+
+    const plan = outputPlan({
+      document,
+      iterations: { image: 3, video: 3 },
+      targetNodeIds: [image.id, video.id],
+    });
+
+    assert.deepEqual(
+      plan.jobs.find((job) => job.nodeId === video.id && job.outputIndex === 0)
+        ?.dependencies,
+      [{ outputIndex: 2, nodeId: image.id }],
+    );
+    const reorderValue = getWorkflowNodeRuntimeValue(document, reorder.id);
+    assert.equal(reorderValue?.type, "image");
+    assert.deepEqual(
+      reorderValue?.type === "image"
+        ? reorderValue.items.map((assets) => assets[0]?.id)
+        : [],
+      ["image-2", "image-0", "image-1"],
     );
   });
 

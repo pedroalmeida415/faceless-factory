@@ -10,8 +10,10 @@ import {
   Background,
   type Connection,
   ConnectionLineType,
+  type IsValidConnection,
   type OnConnectEnd,
   type OnConnectStart,
+  type OnInit,
   ReactFlow,
   type ReactFlowInstance,
   useReactFlow,
@@ -45,6 +47,10 @@ import {
 } from "~/lib/workflow/node-definitions";
 import type { WorkflowProject } from "~/lib/workflow/project";
 import { PromptNodeService } from "~/lib/workflow/services/node-services";
+import type {
+  WorkflowCanvasEdge,
+  WorkflowCanvasNode,
+} from "~/lib/workflow/studio-state";
 import type { WorkflowNodeKind } from "~/lib/workflow/types";
 import { AssetLibrary } from "./studio/AssetLibrary";
 import { getWorkflowAssetDropData } from "./studio/asset-dnd";
@@ -83,10 +89,6 @@ const WORKFLOW_NODE_KINDS: WorkflowNodeKind[] = [
   "prompt",
   "asset",
   "outputReorder",
-  "outputSelect",
-  "outputSplit",
-  "outputMerge",
-  "outputZipAlign",
   "llmGenerator",
   "imageGenerator",
   "videoGenerator",
@@ -345,7 +347,9 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
   onRequestConnectionAutocomplete,
 }: {
   canvasRef: { current: HTMLDivElement | null };
-  flowRef: { current: ReactFlowInstance | null };
+  flowRef: {
+    current: ReactFlowInstance<WorkflowCanvasNode, WorkflowCanvasEdge> | null;
+  };
   queueNodeCenter: (center: WorkflowPosition, nodeId: string) => void;
   onRequestConnectionAutocomplete: (
     state: ConnectionAutocompleteState | null,
@@ -403,12 +407,24 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
     });
   }, [addAssetNodeAt, canvasRef.current, flowRef, queueNodeCenter]);
 
-  const handleFlowInit = useCallback(
-    (instance: ReactFlowInstance) => {
-      flowRef.current = instance;
-      requestAnimationFrame(() => instance.fitView({ padding: 0.18 }));
-    },
-    [flowRef],
+  const handleFlowInit: OnInit<WorkflowCanvasNode, WorkflowCanvasEdge> =
+    useCallback(
+      (instance) => {
+        flowRef.current = instance;
+        requestAnimationFrame(() => instance.fitView({ padding: 0.18 }));
+      },
+      [flowRef],
+    );
+
+  const isValidConnection: IsValidConnection<WorkflowCanvasEdge> = useCallback(
+    (connection) =>
+      canConnect({
+        source: connection.source,
+        sourceHandle: connection.sourceHandle ?? null,
+        target: connection.target,
+        targetHandle: connection.targetHandle ?? null,
+      }),
+    [canConnect],
   );
 
   const handleConnect = useCallback(
@@ -508,7 +524,7 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
             deleteKeyCode={null}
             edges={edges}
             fitView
-            isValidConnection={canConnect}
+            isValidConnection={isValidConnection}
             nodes={nodes}
             nodeTypes={nodeTypes}
             onConnect={handleConnect}
@@ -542,7 +558,10 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
   useWorkflowStudioPersistence(project);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
-  const flowRef = useRef<ReactFlowInstance | null>(null);
+  const flowRef = useRef<ReactFlowInstance<
+    WorkflowCanvasNode,
+    WorkflowCanvasEdge
+  > | null>(null);
   const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
   const addNode = useWorkflowStudioStore((state) => state.addNode);
   const addConnectedNode = useWorkflowStudioStore(

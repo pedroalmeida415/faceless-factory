@@ -2,13 +2,10 @@
 
 import {
   RiFolderImageLine,
-  RiGitMergeLine,
   RiImageAiLine,
   RiImageLine,
   RiRobot2Line,
-  RiScissorsCutLine,
   RiShuffleLine,
-  RiStackLine,
   RiVideoAiLine,
 } from "@remixicon/react";
 import { Card, CardContent } from "~/components/ui/card";
@@ -76,10 +73,6 @@ const NODE_ACTION_GROUPS: Array<{
     label: "Transforms",
     actions: [
       { kind: "outputReorder", label: "Output Reorder", icon: RiShuffleLine },
-      { kind: "outputSelect", label: "Output Select", icon: RiScissorsCutLine },
-      { kind: "outputSplit", label: "Output Split", icon: RiStackLine },
-      { kind: "outputMerge", label: "Output Merge", icon: RiGitMergeLine },
-      { kind: "outputZipAlign", label: "Output Zip", icon: RiShuffleLine },
     ],
   },
   {

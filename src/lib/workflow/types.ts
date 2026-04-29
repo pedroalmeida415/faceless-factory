@@ -47,10 +47,6 @@ export type WorkflowNodeKind =
   | "prompt"
   | "asset"
   | "outputReorder"
-  | "outputSelect"
-  | "outputSplit"
-  | "outputMerge"
-  | "outputZipAlign"
   | "imageGenerator"
   | "videoGenerator"
   | "llmGenerator";
@@ -66,7 +62,6 @@ export type GeneratorConfigValue = string | number | boolean | null;
 export type GeneratorConfig = Record<string, GeneratorConfigValue>;
 export type PromptDisplayMode = (typeof PROMPT_DISPLAY_MODES)[number];
 export type OutputReorderMode = "shift" | "manual";
-export type OutputZipAlignMode = "zip" | "broadcast";
 export type OutputTransformValueType = "text" | "image" | "video" | null;
 
 export type PromptVariable = {
@@ -118,25 +113,6 @@ export type OutputReorderNodeFields = {
   mode: OutputReorderMode;
   order: number[];
   shift: number;
-  valueType: OutputTransformValueType;
-};
-
-export type OutputSelectNodeFields = {
-  indices: number[];
-  valueType: OutputTransformValueType;
-};
-
-export type OutputSplitNodeFields = {
-  splitCount: number;
-  valueType: OutputTransformValueType;
-};
-
-export type OutputMergeNodeFields = {
-  valueType: OutputTransformValueType;
-};
-
-export type OutputZipAlignNodeFields = {
-  mode: OutputZipAlignMode;
   valueType: OutputTransformValueType;
 };
 
@@ -220,26 +196,6 @@ export type OutputReorderNodeData = BaseNodeData &
     kind: "outputReorder";
   };
 
-export type OutputSelectNodeData = BaseNodeData &
-  OutputSelectNodeFields & {
-    kind: "outputSelect";
-  };
-
-export type OutputSplitNodeData = BaseNodeData &
-  OutputSplitNodeFields & {
-    kind: "outputSplit";
-  };
-
-export type OutputMergeNodeData = BaseNodeData &
-  OutputMergeNodeFields & {
-    kind: "outputMerge";
-  };
-
-export type OutputZipAlignNodeData = BaseNodeData &
-  OutputZipAlignNodeFields & {
-    kind: "outputZipAlign";
-  };
-
 export type ImageGeneratorNodeData = BaseNodeData &
   WorkflowGeneratorResult &
   GeneratorReviewFields &
@@ -266,10 +222,6 @@ export type WorkflowNodeData =
   | ListNodeData
   | AssetNodeData
   | OutputReorderNodeData
-  | OutputSelectNodeData
-  | OutputSplitNodeData
-  | OutputMergeNodeData
-  | OutputZipAlignNodeData
   | ImageGeneratorNodeData
   | VideoGeneratorNodeData
   | LlmGeneratorNodeData;

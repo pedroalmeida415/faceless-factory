@@ -75,7 +75,6 @@ import {
 } from "~/lib/workflow/llm-models";
 import {
   OUTPUT_REORDER_INPUT_HANDLE_ID,
-  OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
   PROMPT_INPUT_HANDLE_ID,
 } from "~/lib/workflow/node-definitions";
 import {
@@ -84,14 +83,10 @@ import {
   syncGeneratorReviewForOutput,
 } from "~/lib/workflow/review-state";
 import {
-  mergeRuntimeValues,
   type RuntimeValue,
   reorderRuntimeValue,
   resolveOutputPermutation,
-  selectRuntimeValue,
-  splitRuntimeValueOutput,
   type TextRuntimeValue,
-  zipAlignRuntimeValues,
 } from "~/lib/workflow/runtime-values";
 import {
   ImageGeneratorService,
@@ -310,30 +305,6 @@ function getBroadcastOutputIndex(
     : requestedOutputIndex;
 }
 
-function getOutputMergeSourceRequest(params: {
-  document: WorkflowDocument;
-  incomingEdges: ReturnType<typeof getIncomingEdgesForHandle>;
-  requestedOutputIndex: number;
-}) {
-  let offset = 0;
-  for (const edge of params.incomingEdges) {
-    const outputCount = getWorkflowPlannedOutputCount(
-      params.document,
-      edge.source,
-      edge.sourceHandle,
-    );
-    if (params.requestedOutputIndex < offset + outputCount) {
-      return {
-        edge,
-        outputIndex: params.requestedOutputIndex - offset,
-      };
-    }
-    offset += outputCount;
-  }
-
-  return null;
-}
-
 function coerceGeneratorExecutionBatchPlan(
   input: Parameters<typeof buildGeneratorExecutionBatchPlan>[0],
 ) {
@@ -472,25 +443,6 @@ function evaluateOutputReorderInput(
             outputIndex,
           ))
       : outputIndex,
-  );
-}
-
-function evaluateOutputTransformInputs(
-  currentId: string,
-  path: ReadonlySet<string>,
-  incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
-  evaluateNode: EvaluateNode,
-  requestedOutputIndex?: RequestedOutputIndex,
-) {
-  return Effect.forEach(
-    getIncomingEdgesForHandle(
-      incomingByTarget,
-      currentId,
-      OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-    ),
-    (edge) =>
-      evaluateNode(edge.source, path, edge.sourceHandle, requestedOutputIndex),
-    { concurrency: "unbounded" },
   );
 }
 
@@ -1092,7 +1044,7 @@ export function executeWorkflow(params: {
     nextPath: ReadonlySet<string>,
     incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
     evaluateNode: EvaluateNode,
-    sourceHandleId?: string | null,
+    _sourceHandleId?: string | null,
     requestedOutputIndex?: RequestedOutputIndex,
   ): Effect.Effect<RuntimeValue, ExecutionError> => {
     const activeOutputIndex = requestedOutputIndex ?? executionOutputIndex;
@@ -1251,156 +1203,6 @@ export function executeWorkflow(params: {
                 inputValue,
                 outputOrder,
               ) satisfies RuntimeValue);
-        });
-      case "outputSelect":
-        return Effect.gen(function* () {
-          const inputOutputIndex =
-            typeof activeOutputIndex === "number"
-              ? node.indices[activeOutputIndex]
-              : activeOutputIndex;
-          const [inputValue] = yield* evaluateOutputTransformInputs(
-            currentId,
-            nextPath,
-            incomingByTarget,
-            evaluateNode,
-            inputOutputIndex,
-          );
-          if (!inputValue || inputValue.type !== node.valueType) {
-            return yield* Effect.fail(
-              new WorkflowValidationError({ message: "Connect output input." }),
-            );
-          }
-
-          const selectedValue =
-            typeof activeOutputIndex === "number"
-              ? inputValue
-              : yield* Effect.try({
-                  try: () => selectRuntimeValue(inputValue, node.indices),
-                  catch: (cause) =>
-                    new WorkflowValidationError({
-                      message:
-                        cause instanceof Error
-                          ? cause.message
-                          : "Invalid output selection.",
-                      cause,
-                    }),
-                });
-          yield* setNodeRuntime(currentId, "success", null);
-          return typeof activeOutputIndex === "number"
-            ? (inputValue satisfies RuntimeValue)
-            : (selectedValue satisfies RuntimeValue);
-        });
-      case "outputSplit":
-        return Effect.gen(function* () {
-          const outputIndex = Number(
-            (sourceHandleId ?? "output-0").replace("output-", ""),
-          );
-          const [inputValue] = yield* evaluateOutputTransformInputs(
-            currentId,
-            nextPath,
-            incomingByTarget,
-            evaluateNode,
-            Number.isInteger(outputIndex) ? outputIndex : activeOutputIndex,
-          );
-          if (!inputValue || inputValue.type !== node.valueType) {
-            return yield* Effect.fail(
-              new WorkflowValidationError({ message: "Connect output input." }),
-            );
-          }
-
-          const splitValue =
-            typeof activeOutputIndex === "number"
-              ? inputValue
-              : Number.isInteger(outputIndex)
-                ? splitRuntimeValueOutput(inputValue, outputIndex)
-                : null;
-          if (!splitValue) {
-            return yield* Effect.fail(
-              new WorkflowValidationError({
-                message: "Output split output is empty.",
-              }),
-            );
-          }
-
-          yield* setNodeRuntime(currentId, "success", null);
-          return typeof activeOutputIndex === "number"
-            ? (inputValue satisfies RuntimeValue)
-            : (splitValue satisfies RuntimeValue);
-        });
-      case "outputMerge":
-      case "outputZipAlign":
-        return Effect.gen(function* () {
-          const incomingEdges = getIncomingEdgesForHandle(
-            incomingByTarget,
-            currentId,
-            OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-          );
-          const mergeRequest =
-            typeof activeOutputIndex === "number" && node.kind === "outputMerge"
-              ? getOutputMergeSourceRequest({
-                  document: params.request.document,
-                  incomingEdges,
-                  requestedOutputIndex: activeOutputIndex,
-                })
-              : null;
-          const outputValues = mergeRequest
-            ? Effect.forEach([mergeRequest], (request) =>
-                evaluateNode(
-                  request.edge.source,
-                  nextPath,
-                  request.edge.sourceHandle,
-                  request.outputIndex,
-                ),
-              )
-            : Effect.forEach(
-                incomingEdges,
-                (edge) =>
-                  evaluateNode(
-                    edge.source,
-                    nextPath,
-                    edge.sourceHandle,
-                    typeof activeOutputIndex === "number" &&
-                      node.kind === "outputZipAlign" &&
-                      node.mode === "broadcast"
-                      ? getBroadcastOutputIndex(
-                          params.request.document,
-                          edge.source,
-                          edge.sourceHandle,
-                          activeOutputIndex,
-                        )
-                      : activeOutputIndex,
-                  ),
-                { concurrency: "unbounded" },
-              );
-          const values = (yield* outputValues).filter(
-            (value) => value.type === node.valueType,
-          );
-          const nextValue = yield* Effect.try({
-            try: () =>
-              node.kind === "outputMerge"
-                ? mergeRuntimeValues(values)
-                : zipAlignRuntimeValues(values, {
-                    broadcast: node.mode === "broadcast",
-                  }),
-            catch: (cause) =>
-              new WorkflowValidationError({
-                message:
-                  cause instanceof Error
-                    ? cause.message
-                    : "Invalid output transform.",
-                cause,
-              }),
-          });
-          if (!nextValue) {
-            return yield* Effect.fail(
-              new WorkflowValidationError({
-                message: "Connect output inputs.",
-              }),
-            );
-          }
-
-          yield* setNodeRuntime(currentId, "success", null);
-          return nextValue satisfies RuntimeValue;
         });
       case "imageGenerator":
         return Effect.gen(function* () {

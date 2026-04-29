@@ -15,11 +15,8 @@ import {
 import { getLlmGeneratorHandleDefinitions } from "~/lib/workflow/llm-models";
 import {
   getNodeOutputHandleId,
-  getOutputSplitOutputHandleId,
   OUTPUT_REORDER_INPUT_HANDLE_ID,
   OUTPUT_REORDER_OUTPUT_HANDLE_ID,
-  OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-  OUTPUT_TRANSFORM_OUTPUT_HANDLE_ID,
   PROMPT_VARIABLE_HANDLE_COLOR,
   PROMPT_VARIABLE_PATTERN,
   type WorkflowValueType,
@@ -30,14 +27,10 @@ import {
 } from "~/lib/workflow/review-state";
 import {
   type MediaRuntimeValue,
-  mergeRuntimeValues,
   type RuntimeValue,
   reorderRuntimeValue,
   resolveOutputPermutation,
-  selectRuntimeValue,
-  splitRuntimeValueOutput,
   type TextRuntimeValue,
-  zipAlignRuntimeValues,
 } from "~/lib/workflow/runtime-values";
 import { isGeneratorNodeKind, type WorkflowAsset } from "~/lib/workflow/types";
 
@@ -407,56 +400,6 @@ export function getOutputReorderInputValue(
   );
 }
 
-export function getOutputTransformInputValue(
-  document: WorkflowDocument,
-  nodeId: string,
-  path: ReadonlySet<string> = new Set(),
-  nodeMap = toNodeMap(document),
-  incomingByTarget = buildIncomingByTarget(document.edges),
-): RuntimeValue | null {
-  const incomingEdges = getIncomingEdgesForHandle(
-    incomingByTarget,
-    nodeId,
-    OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-  );
-  const edge = incomingEdges[0];
-  if (!edge || incomingEdges.length !== 1) {
-    return null;
-  }
-
-  return getWorkflowNodeRuntimeValue(
-    document,
-    edge.source,
-    new Set(path),
-    nodeMap,
-    incomingByTarget,
-    edge.sourceHandle,
-  );
-}
-
-function getOutputTransformInputValues(
-  document: WorkflowDocument,
-  nodeId: string,
-  handleId: string,
-  path: ReadonlySet<string>,
-  nodeMap: NodeMap,
-  incomingByTarget: IncomingByTarget,
-) {
-  return getIncomingEdgesForHandle(incomingByTarget, nodeId, handleId).flatMap(
-    (edge) => {
-      const value = getWorkflowNodeRuntimeValue(
-        document,
-        edge.source,
-        new Set(path),
-        nodeMap,
-        incomingByTarget,
-        edge.sourceHandle,
-      );
-      return value ? [value] : [];
-    },
-  );
-}
-
 function resolveOutputReorderRuntimeValue(
   document: WorkflowDocument,
   node: Extract<WorkflowDocumentNode, { kind: "outputReorder" }>,
@@ -484,90 +427,6 @@ function resolveOutputReorderRuntimeValue(
       shift: node.shift,
     }),
   );
-}
-
-function resolveOutputSelectRuntimeValue(
-  document: WorkflowDocument,
-  node: Extract<WorkflowDocumentNode, { kind: "outputSelect" }>,
-  path: ReadonlySet<string>,
-  nodeMap: NodeMap,
-  incomingByTarget: IncomingByTarget,
-): RuntimeValue | null {
-  const inputValue = getOutputTransformInputValue(
-    document,
-    node.id,
-    path,
-    nodeMap,
-    incomingByTarget,
-  );
-  return inputValue && inputValue.type === node.valueType
-    ? selectRuntimeValue(inputValue, node.indices)
-    : null;
-}
-
-function resolveOutputSplitRuntimeValue(
-  document: WorkflowDocument,
-  node: Extract<WorkflowDocumentNode, { kind: "outputSplit" }>,
-  path: ReadonlySet<string>,
-  nodeMap: NodeMap,
-  incomingByTarget: IncomingByTarget,
-  sourceHandleId: string | null | undefined,
-): RuntimeValue | null {
-  const inputValue = getOutputTransformInputValue(
-    document,
-    node.id,
-    path,
-    nodeMap,
-    incomingByTarget,
-  );
-  if (!inputValue || inputValue.type !== node.valueType) {
-    return null;
-  }
-
-  const index = Number(
-    (sourceHandleId ?? getOutputSplitOutputHandleId(0)).replace("output-", ""),
-  );
-  return Number.isInteger(index)
-    ? splitRuntimeValueOutput(inputValue, index)
-    : null;
-}
-
-function resolveOutputMergeRuntimeValue(
-  document: WorkflowDocument,
-  node: Extract<WorkflowDocumentNode, { kind: "outputMerge" }>,
-  path: ReadonlySet<string>,
-  nodeMap: NodeMap,
-  incomingByTarget: IncomingByTarget,
-): RuntimeValue | null {
-  const values = getOutputTransformInputValues(
-    document,
-    node.id,
-    OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-    path,
-    nodeMap,
-    incomingByTarget,
-  ).filter((value) => value.type === node.valueType);
-  return mergeRuntimeValues(values);
-}
-
-function resolveOutputZipAlignRuntimeValue(
-  document: WorkflowDocument,
-  node: Extract<WorkflowDocumentNode, { kind: "outputZipAlign" }>,
-  path: ReadonlySet<string>,
-  nodeMap: NodeMap,
-  incomingByTarget: IncomingByTarget,
-): RuntimeValue | null {
-  const values = getOutputTransformInputValues(
-    document,
-    node.id,
-    OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-    path,
-    nodeMap,
-    incomingByTarget,
-  ).filter((value) => value.type === node.valueType);
-  return zipAlignRuntimeValues(values, {
-    broadcast: node.mode === "broadcast",
-  });
 }
 
 function getGeneratorRepeatableHandlePrefixes(
@@ -622,24 +481,14 @@ export function normalizeOutputReorderValueTypes(
   let didChange = false;
 
   const normalizedNodes = nodes.map((node) => {
-    if (
-      node.kind !== "outputReorder" &&
-      node.kind !== "outputSelect" &&
-      node.kind !== "outputSplit" &&
-      node.kind !== "outputMerge" &&
-      node.kind !== "outputZipAlign"
-    ) {
+    if (node.kind !== "outputReorder") {
       return node;
     }
 
-    const inputHandleId =
-      node.kind === "outputReorder"
-        ? OUTPUT_REORDER_INPUT_HANDLE_ID
-        : OUTPUT_TRANSFORM_INPUT_HANDLE_ID;
     const inputEdges = getIncomingEdgesForHandle(
       incomingByTarget,
       node.id,
-      inputHandleId,
+      OUTPUT_REORDER_INPUT_HANDLE_ID,
     );
     const inputEdge = inputEdges[0] ?? null;
     const inputValueType = inputEdge
@@ -688,15 +537,6 @@ export function findFirstWorkflowHandleIdByValueType(
 
   if (node.kind === "outputReorder") {
     return OUTPUT_REORDER_INPUT_HANDLE_ID;
-  }
-
-  if (
-    node.kind === "outputSelect" ||
-    node.kind === "outputSplit" ||
-    node.kind === "outputMerge" ||
-    node.kind === "outputZipAlign"
-  ) {
-    return OUTPUT_TRANSFORM_INPUT_HANDLE_ID;
   }
 
   if (node.kind === "prompt") {
@@ -775,20 +615,6 @@ function getNodeOutputValueType(
       return normalizedHandleId === OUTPUT_REORDER_OUTPUT_HANDLE_ID
         ? node.valueType
         : null;
-    case "outputSelect":
-    case "outputMerge":
-    case "outputZipAlign":
-      return normalizedHandleId === OUTPUT_TRANSFORM_OUTPUT_HANDLE_ID
-        ? node.valueType
-        : null;
-    case "outputSplit": {
-      const outputIndex = Number(normalizedHandleId.replace("output-", ""));
-      return Number.isInteger(outputIndex) &&
-        outputIndex >= 0 &&
-        outputIndex < node.splitCount
-        ? node.valueType
-        : null;
-    }
     case "imageGenerator":
       return normalizedHandleId === "images" ? "image" : null;
     case "videoGenerator":
@@ -819,17 +645,6 @@ function getNodeInputValueType(
     return handleId === OUTPUT_REORDER_INPUT_HANDLE_ID ? node.valueType : null;
   }
 
-  if (
-    node.kind === "outputSelect" ||
-    node.kind === "outputSplit" ||
-    node.kind === "outputMerge" ||
-    node.kind === "outputZipAlign"
-  ) {
-    return handleId === OUTPUT_TRANSFORM_INPUT_HANDLE_ID
-      ? node.valueType
-      : null;
-  }
-
   if (node.kind === "list" || !isGeneratorNodeKind(node.kind)) {
     return null;
   }
@@ -847,7 +662,7 @@ export function getWorkflowNodeRuntimeValue(
   path: ReadonlySet<string> = new Set(),
   nodeMap = toNodeMap(document),
   incomingByTarget = buildIncomingByTarget(document.edges),
-  sourceHandleId?: string | null,
+  _sourceHandleId?: string | null,
 ): RuntimeValue | null {
   if (path.has(nodeId)) {
     return null;
@@ -884,39 +699,6 @@ export function getWorkflowNodeRuntimeValue(
         : null;
     case "outputReorder":
       return resolveOutputReorderRuntimeValue(
-        document,
-        node,
-        nextPath,
-        nodeMap,
-        incomingByTarget,
-      );
-    case "outputSelect":
-      return resolveOutputSelectRuntimeValue(
-        document,
-        node,
-        nextPath,
-        nodeMap,
-        incomingByTarget,
-      );
-    case "outputSplit":
-      return resolveOutputSplitRuntimeValue(
-        document,
-        node,
-        nextPath,
-        nodeMap,
-        incomingByTarget,
-        sourceHandleId,
-      );
-    case "outputMerge":
-      return resolveOutputMergeRuntimeValue(
-        document,
-        node,
-        nextPath,
-        nodeMap,
-        incomingByTarget,
-      );
-    case "outputZipAlign":
-      return resolveOutputZipAlignRuntimeValue(
         document,
         node,
         nextPath,
@@ -1200,30 +982,20 @@ function conflictsWithSingleInputHandle(
     "source" | "sourceHandle" | "target" | "targetHandle"
   >,
 ) {
-  if (
-    connection.targetHandle !== OUTPUT_REORDER_INPUT_HANDLE_ID &&
-    connection.targetHandle !== OUTPUT_TRANSFORM_INPUT_HANDLE_ID
-  ) {
+  if (connection.targetHandle !== OUTPUT_REORDER_INPUT_HANDLE_ID) {
     return false;
   }
 
   const targetNode = document.nodes.find(
     (node) => node.id === connection.target,
   );
-  return (
-    (targetNode?.kind === "outputReorder" &&
+  return Boolean(
+    targetNode?.kind === "outputReorder" &&
       document.edges.some(
         (edge) =>
           edge.target === connection.target &&
           edge.targetHandle === OUTPUT_REORDER_INPUT_HANDLE_ID,
-      )) ||
-    ((targetNode?.kind === "outputSelect" ||
-      targetNode?.kind === "outputSplit") &&
-      document.edges.some(
-        (edge) =>
-          edge.target === connection.target &&
-          edge.targetHandle === OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-      ))
+      ),
   );
 }
 
@@ -1256,37 +1028,9 @@ function hasCompatibleConnection(
     document.edges,
   );
 
-  if (sourceNode.kind === "outputSplit") {
-    const outputIndex = Number(
-      (connection.sourceHandle ?? "").replace("output-", ""),
-    );
-    const inputValue = getOutputTransformInputValue(document, sourceNode.id);
-
-    if (
-      inputValue?.type === sourceNode.valueType &&
-      Number.isInteger(outputIndex) &&
-      outputIndex >= inputValue.items.length
-    ) {
-      return false;
-    }
-  }
-
   if (
     targetNode.kind === "outputReorder" &&
     connection.targetHandle === OUTPUT_REORDER_INPUT_HANDLE_ID
-  ) {
-    return Boolean(
-      sourceValueType &&
-        (!targetNode.valueType || targetNode.valueType === sourceValueType),
-    );
-  }
-
-  if (
-    (targetNode.kind === "outputSelect" ||
-      targetNode.kind === "outputSplit" ||
-      targetNode.kind === "outputMerge" ||
-      targetNode.kind === "outputZipAlign") &&
-    connection.targetHandle === OUTPUT_TRANSFORM_INPUT_HANDLE_ID
   ) {
     return Boolean(
       sourceValueType &&

@@ -1,6 +1,11 @@
 "use client";
 
-import { type NodeProps, useUpdateNodeInternals } from "@xyflow/react";
+import {
+  type Node,
+  type NodeProps,
+  type NodeTypes,
+  useUpdateNodeInternals,
+} from "@xyflow/react";
 import { Effect } from "effect";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "~/components/ui/badge";
@@ -28,16 +33,10 @@ import {
   getVideoGeneratorModelOptions,
   getVideoGeneratorModeOptions,
 } from "~/lib/workflow/generator-models";
-import {
-  getOutputReorderInputValue,
-  getOutputTransformInputValue,
-} from "~/lib/workflow/graph";
-import { getOutputSplitOutputHandleId } from "~/lib/workflow/node-definitions";
+import { getOutputReorderInputValue } from "~/lib/workflow/graph";
 import {
   createIdentityOutputPermutation,
   getOutputPermutationValidationMessage,
-  getOutputSelectionValidationMessage,
-  getOutputSplitValidationMessage,
 } from "~/lib/workflow/runtime-values";
 import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
 import type {
@@ -46,11 +45,7 @@ import type {
   ImageGeneratorNodeData,
   ListNodeData,
   LlmGeneratorNodeData,
-  OutputMergeNodeData,
   OutputReorderNodeData,
-  OutputSelectNodeData,
-  OutputSplitNodeData,
-  OutputZipAlignNodeData,
   PromptNodeData,
   VideoGeneratorNodeData,
   WorkflowNodeData,
@@ -68,6 +63,8 @@ import {
 } from "./shared";
 import { useWorkflowStudioStore } from "./store";
 import { useWorkflowExecutionQuote } from "./useWorkflowExecutionQuote";
+
+type WorkflowNodeProps<T extends WorkflowNodeData> = NodeProps<Node<T>>;
 
 function capitalize(value: string) {
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
@@ -417,8 +414,8 @@ export function ListItemsEditor({
 }
 
 function isSameNodeRender<T extends WorkflowNodeData>(
-  previousProps: NodeProps<T>,
-  nextProps: NodeProps<T>,
+  previousProps: WorkflowNodeProps<T>,
+  nextProps: WorkflowNodeProps<T>,
 ) {
   return (
     previousProps.id === nextProps.id &&
@@ -489,7 +486,7 @@ const PromptNode = memo(function PromptNode({
   id,
   data,
   selected,
-}: NodeProps<PromptNodeData>) {
+}: WorkflowNodeProps<PromptNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
   const { addPromptVariable, setPrompt, setPromptDisplayMode } =
     useStudioContext();
@@ -527,7 +524,7 @@ const ListNode = memo(function ListNode({
   id,
   data,
   selected,
-}: NodeProps<ListNodeData>) {
+}: WorkflowNodeProps<ListNodeData>) {
   const { setListItems } = useStudioContext();
   const items = data.items.length ? data.items : [""];
   const filledItemCount = items.filter((item) => item.trim()).length;
@@ -565,7 +562,7 @@ const AssetNode = memo(function AssetNode({
   id,
   data,
   selected,
-}: NodeProps<AssetNodeData>) {
+}: WorkflowNodeProps<AssetNodeData>) {
   const { uploadFilesToNode, clearNodeAssets } = useStudioContext();
   const assetKindLabel = data.assetKind ? capitalize(data.assetKind) : "Asset";
   const outputColor =
@@ -630,7 +627,7 @@ const OutputReorderNode = memo(function OutputReorderNode({
   id,
   data,
   selected,
-}: NodeProps<OutputReorderNodeData>) {
+}: WorkflowNodeProps<OutputReorderNodeData>) {
   const { setOutputReorderMode, setOutputReorderOrder, setOutputReorderShift } =
     useStudioContext();
   const document = useWorkflowStudioStore((state) => state.document);
@@ -768,197 +765,6 @@ const OutputReorderNode = memo(function OutputReorderNode({
           ) : null}
         </NodeFieldCard>
       )}
-    </NodeShell>
-  );
-}, isSameNodeRender);
-
-const OutputSelectNode = memo(function OutputSelectNode({
-  id,
-  data,
-  selected,
-}: NodeProps<OutputSelectNodeData>) {
-  const { setOutputSelectIndices } = useStudioContext();
-  const document = useWorkflowStudioStore((state) => state.document);
-  const inputValue = getOutputTransformInputValue(document, id);
-  const outputCount =
-    inputValue?.type === data.valueType ? inputValue.items.length : null;
-  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Output";
-  const color = getOutputValueTypeColor(data.valueType);
-  const orderText = data.indices.map((index) => index + 1).join(", ");
-  const [draft, setDraft] = useState(orderText);
-  const message =
-    data.valueType && outputCount !== null
-      ? getOutputSelectionValidationMessage(data.indices, outputCount)
-      : null;
-
-  useEffect(() => setDraft(orderText), [orderText]);
-
-  return (
-    <NodeShell
-      data={data}
-      id={id}
-      inputs={[{ id: "input", label: valueTypeLabel, color }]}
-      output={
-        data.valueType ? { id: "output", label: valueTypeLabel, color } : null
-      }
-      selected={selected}
-    >
-      <NodeNotice tone="accent">
-        {data.valueType
-          ? `Select ${orderText || "no"} outputs`
-          : "Connect outputs"}
-      </NodeNotice>
-      <NodeFieldCard label="Selected outputs">
-        <Input
-          nativeInput
-          className="nodrag nopan nowheel"
-          onBlur={() => setOutputSelectIndices(id, parseOutputOrder(draft))}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder="Example: 1, 3"
-          value={draft}
-        />
-        {outputCount !== null ? (
-          <p className="text-muted-foreground text-xs">
-            {outputCount} upstream outputs
-          </p>
-        ) : null}
-        {message ? <p className="text-destructive text-xs">{message}</p> : null}
-      </NodeFieldCard>
-    </NodeShell>
-  );
-}, isSameNodeRender);
-
-const OutputSplitNode = memo(function OutputSplitNode({
-  id,
-  data,
-  selected,
-}: NodeProps<OutputSplitNodeData>) {
-  const { setOutputSplitCount } = useStudioContext();
-  const document = useWorkflowStudioStore((state) => state.document);
-  const inputValue = getOutputTransformInputValue(document, id);
-  const upstreamOutputCount =
-    inputValue?.type === data.valueType ? inputValue.items.length : null;
-  const outputCount = data.valueType
-    ? Math.min(data.splitCount, upstreamOutputCount ?? data.splitCount)
-    : 0;
-  const message =
-    upstreamOutputCount === null
-      ? null
-      : getOutputSplitValidationMessage(data.splitCount, upstreamOutputCount);
-  const color = getOutputValueTypeColor(data.valueType);
-  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Output";
-
-  return (
-    <NodeShell
-      data={data}
-      id={id}
-      inputs={[{ id: "input", label: valueTypeLabel, color }]}
-      outputs={
-        data.valueType
-          ? Array.from({ length: outputCount }, (_, index) => ({
-              id: getOutputSplitOutputHandleId(index),
-              label: `Output ${index + 1}`,
-              color,
-            }))
-          : []
-      }
-      selected={selected}
-    >
-      <NodeNotice tone="accent">
-        {data.valueType ? `${outputCount} outputs` : "Connect outputs"}
-      </NodeNotice>
-      <NodeFieldCard label="Output count">
-        <Input
-          nativeInput
-          max={outputCount ?? undefined}
-          min={1}
-          onChange={(event) =>
-            setOutputSplitCount(id, Number(event.target.value))
-          }
-          type="number"
-          value={data.splitCount}
-        />
-        {outputCount !== null ? (
-          <p className="text-muted-foreground text-xs">
-            {outputCount} upstream outputs
-          </p>
-        ) : null}
-        {message ? <p className="text-destructive text-xs">{message}</p> : null}
-      </NodeFieldCard>
-    </NodeShell>
-  );
-}, isSameNodeRender);
-
-const OutputMergeNode = memo(function OutputMergeNode({
-  id,
-  data,
-  selected,
-}: NodeProps<OutputMergeNodeData>) {
-  const color = getOutputValueTypeColor(data.valueType);
-  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Output";
-
-  return (
-    <NodeShell
-      data={data}
-      id={id}
-      inputs={[{ id: "input", label: valueTypeLabel, color }]}
-      output={
-        data.valueType ? { id: "output", label: valueTypeLabel, color } : null
-      }
-      selected={selected}
-    >
-      <NodeNotice tone="accent">
-        {data.valueType
-          ? "Concatenate compatible output streams"
-          : "Connect outputs"}
-      </NodeNotice>
-    </NodeShell>
-  );
-}, isSameNodeRender);
-
-const OutputZipAlignNode = memo(function OutputZipAlignNode({
-  id,
-  data,
-  selected,
-}: NodeProps<OutputZipAlignNodeData>) {
-  const { setOutputZipAlignMode } = useStudioContext();
-  const color = getOutputValueTypeColor(data.valueType);
-  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Output";
-
-  return (
-    <NodeShell
-      data={data}
-      id={id}
-      inputs={[{ id: "input", label: valueTypeLabel, color }]}
-      output={
-        data.valueType ? { id: "output", label: valueTypeLabel, color } : null
-      }
-      selected={selected}
-    >
-      <NodeNotice tone="accent">
-        {data.valueType
-          ? "Zip with existing broadcast rules"
-          : "Connect outputs"}
-      </NodeNotice>
-      <NodeFieldCard label="Alignment">
-        <Select
-          onValueChange={(value) =>
-            setOutputZipAlignMode(
-              id,
-              value === "broadcast" ? "broadcast" : "zip",
-            )
-          }
-          value={data.mode}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="zip">Zip / broadcast</SelectItem>
-            <SelectItem value="broadcast">Broadcast explicit</SelectItem>
-          </SelectContent>
-        </Select>
-      </NodeFieldCard>
     </NodeShell>
   );
 }, isSameNodeRender);
@@ -1205,7 +1011,7 @@ const ImageGeneratorNode = memo(function ImageGeneratorNode({
   id,
   data,
   selected,
-}: NodeProps<ImageGeneratorNodeData>) {
+}: WorkflowNodeProps<ImageGeneratorNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
   const { getGeneratorInputs, getGeneratorIterationInfo, runNode } =
     useStudioContext();
@@ -1288,7 +1094,7 @@ const VideoGeneratorNode = memo(function VideoGeneratorNode({
   id,
   data,
   selected,
-}: NodeProps<VideoGeneratorNodeData>) {
+}: WorkflowNodeProps<VideoGeneratorNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
   const { getGeneratorInputs, getGeneratorIterationInfo, runNode } =
     useStudioContext();
@@ -1366,7 +1172,7 @@ const LlmGeneratorNode = memo(function LlmGeneratorNode({
   id,
   data,
   selected,
-}: NodeProps<LlmGeneratorNodeData>) {
+}: WorkflowNodeProps<LlmGeneratorNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
   const { getGeneratorInputs, runNode } = useStudioContext();
   const inputs = getGeneratorInputs(id);
@@ -1412,11 +1218,7 @@ export const nodeTypes = {
   prompt: PromptNode,
   asset: AssetNode,
   outputReorder: OutputReorderNode,
-  outputSelect: OutputSelectNode,
-  outputSplit: OutputSplitNode,
-  outputMerge: OutputMergeNode,
-  outputZipAlign: OutputZipAlignNode,
   imageGenerator: ImageGeneratorNode,
   videoGenerator: VideoGeneratorNode,
   llmGenerator: LlmGeneratorNode,
-};
+} as NodeTypes;

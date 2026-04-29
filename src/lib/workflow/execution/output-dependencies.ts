@@ -16,10 +16,7 @@ import {
   getIncomingEdgesForHandle,
   getPromptNodeReferencedVariableKeys,
 } from "~/lib/workflow/graph";
-import {
-  OUTPUT_REORDER_INPUT_HANDLE_ID,
-  OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-} from "~/lib/workflow/node-definitions";
+import { OUTPUT_REORDER_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
 import { resolveOutputPermutation } from "~/lib/workflow/runtime-values";
 
 export type WorkflowOutputIdentity = {
@@ -96,29 +93,6 @@ function getSourceOutputCount(params: {
   );
 }
 
-function getOutputMergeSource(params: {
-  document: WorkflowDocument;
-  generatorIterationById: ReadonlyMap<string, { iterations: number }>;
-  incomingEdges: readonly WorkflowDocumentEdge[];
-  outputIndex: number;
-}) {
-  let offset = 0;
-  for (const edge of params.incomingEdges) {
-    const outputCount = getSourceOutputCount({
-      document: params.document,
-      generatorIterationById: params.generatorIterationById,
-      sourceHandleId: edge.sourceHandle,
-      sourceNodeId: edge.source,
-    });
-    if (params.outputIndex < offset + outputCount) {
-      return { edge, outputIndex: params.outputIndex - offset };
-    }
-    offset += outputCount;
-  }
-
-  return null;
-}
-
 function resolveSourceOutputDependencies(params: {
   document: WorkflowDocument;
   generatorIterationById: ReadonlyMap<string, { iterations: number }>;
@@ -187,61 +161,6 @@ function resolveSourceOutputDependencies(params: {
           }),
       );
     }
-    case "outputSelect": {
-      const edge = getFirstInputEdge(
-        params.incomingByTarget,
-        node.id,
-        OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-      );
-      return edge
-        ? resolveEdge(edge, node.indices[params.outputIndex] ?? 0)
-        : [];
-    }
-    case "outputSplit": {
-      const edge = getFirstInputEdge(
-        params.incomingByTarget,
-        node.id,
-        OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-      );
-      const outputIndex = Number(
-        (params.sourceHandleId ?? "output-0").replace("output-", ""),
-      );
-      return edge && Number.isInteger(outputIndex)
-        ? resolveEdge(edge, outputIndex)
-        : [];
-    }
-    case "outputMerge": {
-      const source = getOutputMergeSource({
-        document: params.document,
-        generatorIterationById: params.generatorIterationById,
-        incomingEdges: getIncomingEdgesForHandle(
-          params.incomingByTarget,
-          node.id,
-          OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-        ),
-        outputIndex: params.outputIndex,
-      });
-      return source ? resolveEdge(source.edge, source.outputIndex) : [];
-    }
-    case "outputZipAlign":
-      return getIncomingEdgesForHandle(
-        params.incomingByTarget,
-        node.id,
-        OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
-      ).flatMap((edge) =>
-        resolveEdge(
-          edge,
-          node.mode === "broadcast"
-            ? getBroadcastSourceOutput({
-                document: params.document,
-                generatorIterationById: params.generatorIterationById,
-                outputIndex: params.outputIndex,
-                sourceHandleId: edge.sourceHandle,
-                sourceNodeId: edge.source,
-              })
-            : params.outputIndex,
-        ),
-      );
     case "prompt":
       return getPromptNodeReferencedVariableKeys(node).flatMap((key) =>
         getIncomingEdgesForHandle(

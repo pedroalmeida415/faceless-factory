@@ -1059,5 +1059,3 @@ export function PromptEditor({
     </div>
   );
 }
-
-export type { PromptEditorVariable };

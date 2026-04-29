@@ -197,10 +197,6 @@ function getDrawerHeading(node: WorkflowDocumentNode) {
         title: "Asset",
       } as const;
     case "outputReorder":
-    case "outputSelect":
-    case "outputSplit":
-    case "outputMerge":
-    case "outputZipAlign":
       return {
         description:
           "Transform outputs on this branch without mutating upstream output.",
@@ -557,10 +553,6 @@ function NodeConfigPanel({ node }: { node: WorkflowDocumentNode }) {
     case "asset":
       return <AssetConfigPanel node={node} />;
     case "outputReorder":
-    case "outputSelect":
-    case "outputSplit":
-    case "outputMerge":
-    case "outputZipAlign":
       return <OutputReorderConfigPanel node={node} />;
     case "imageGenerator":
       return <ImageGeneratorConfigPanel node={node} />;
@@ -596,10 +588,6 @@ function isSameNodeConfig(
         left.assets === right.assets
       );
     case "outputReorder":
-    case "outputSelect":
-    case "outputSplit":
-    case "outputMerge":
-    case "outputZipAlign":
       return (
         right.kind === left.kind &&
         JSON.stringify(left) === JSON.stringify(right)

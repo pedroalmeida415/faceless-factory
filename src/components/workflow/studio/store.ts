@@ -37,9 +37,6 @@ import {
   ListNodeService,
   LlmGeneratorService,
   OutputReorderNodeService,
-  OutputSelectNodeService,
-  OutputSplitNodeService,
-  OutputZipAlignNodeService,
   PromptNodeService,
   VideoGeneratorService,
   WorkflowNodeAssetService,
@@ -613,9 +610,6 @@ type WorkflowStudioState = {
     nodeId: string,
     valueType: WorkflowValueType | null,
   ) => void;
-  setOutputSelectIndices: (nodeId: string, indices: number[]) => void;
-  setOutputSplitCount: (nodeId: string, splitCount: number) => void;
-  setOutputZipAlignMode: (nodeId: string, mode: "zip" | "broadcast") => void;
   setPrompt: (nodeId: string, prompt: string) => void;
   setPromptDisplayMode: (
     nodeId: string,
@@ -910,30 +904,6 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       get().updateDocumentNode(nodeId, (node) =>
         node.kind === "outputReorder"
           ? OutputReorderNodeService.setValueType(node, valueType)
-          : node,
-      );
-    },
-
-    setOutputSelectIndices: (nodeId, indices) => {
-      get().updateDocumentNode(nodeId, (node) =>
-        node.kind === "outputSelect"
-          ? OutputSelectNodeService.setIndices(node, indices)
-          : node,
-      );
-    },
-
-    setOutputSplitCount: (nodeId, splitCount) => {
-      get().updateDocumentNode(nodeId, (node) =>
-        node.kind === "outputSplit"
-          ? OutputSplitNodeService.setSplitCount(node, splitCount)
-          : node,
-      );
-    },
-
-    setOutputZipAlignMode: (nodeId, mode) => {
-      get().updateDocumentNode(nodeId, (node) =>
-        node.kind === "outputZipAlign"
-          ? OutputZipAlignNodeService.setMode(node, mode)
           : node,
       );
     },

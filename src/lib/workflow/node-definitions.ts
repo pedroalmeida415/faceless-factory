@@ -3,10 +3,6 @@ import type { PromptDisplayMode, WorkflowNodeKind } from "~/lib/workflow/types";
 export const PROMPT_INPUT_HANDLE_ID = "prompt";
 export const OUTPUT_REORDER_INPUT_HANDLE_ID = "input";
 export const OUTPUT_REORDER_OUTPUT_HANDLE_ID = "output";
-export const OUTPUT_TRANSFORM_INPUT_HANDLE_ID = "input";
-export const OUTPUT_TRANSFORM_OUTPUT_HANDLE_ID = "output";
-export const getOutputSplitOutputHandleId = (index: number) =>
-  `output-${index}`;
 export const PROMPT_VARIABLE_PATTERN =
   /\{\{([a-zA-Z][a-zA-Z0-9]*)(?::[^}]*)?\}\}/g;
 export const PROMPT_VARIABLE_HANDLE_COLOR = "#f59e0b";
@@ -31,14 +27,6 @@ export function formatNodeTitle(kind: WorkflowNodeKind) {
       return "Asset";
     case "outputReorder":
       return "Output Reorder";
-    case "outputSelect":
-      return "Output Select";
-    case "outputSplit":
-      return "Output Split";
-    case "outputMerge":
-      return "Output Merge";
-    case "outputZipAlign":
-      return "Output Zip";
     case "imageGenerator":
       return "Image Gen";
     case "videoGenerator":
@@ -58,12 +46,6 @@ export function getNodeOutputHandleId(kind: WorkflowNodeKind) {
       return "asset";
     case "outputReorder":
       return OUTPUT_REORDER_OUTPUT_HANDLE_ID;
-    case "outputSelect":
-    case "outputMerge":
-    case "outputZipAlign":
-      return OUTPUT_TRANSFORM_OUTPUT_HANDLE_ID;
-    case "outputSplit":
-      return getOutputSplitOutputHandleId(0);
     case "imageGenerator":
       return "images";
     case "videoGenerator":
