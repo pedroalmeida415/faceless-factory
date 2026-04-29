@@ -1,8 +1,8 @@
 "use client";
 
+import { type NodeProps, useUpdateNodeInternals } from "@xyflow/react";
 import { Effect } from "effect";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { type NodeProps, useUpdateNodeInternals } from "reactflow";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardContent } from "~/components/ui/card";
 import { Input } from "~/components/ui/input";

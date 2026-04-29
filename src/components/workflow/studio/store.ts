@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useRef } from "react";
 import {
   applyNodeChanges as applyReactFlowNodeChanges,
   type Connection,
   type EdgeChange,
   type NodeChange,
-} from "reactflow";
+} from "@xyflow/react";
+import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 

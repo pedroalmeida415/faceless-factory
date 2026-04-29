@@ -1,4 +1,4 @@
-import type { Connection, HandleType } from "reactflow";
+import type { Connection, HandleType } from "@xyflow/react";
 
 import type {
   PromptWorkflowNode,

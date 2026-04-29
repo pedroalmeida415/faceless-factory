@@ -6,7 +6,6 @@ import {
   RiArrowGoForwardLine,
   RiFullscreenFill,
 } from "@remixicon/react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   Background,
   type Connection,
@@ -16,7 +15,8 @@ import {
   ReactFlow,
   type ReactFlowInstance,
   useReactFlow,
-} from "reactflow";
+} from "@xyflow/react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   Autocomplete,
   AutocompleteEmpty,

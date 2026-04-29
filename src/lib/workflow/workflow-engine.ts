@@ -4,7 +4,7 @@ import {
   type Connection,
   type EdgeChange,
   type NodeChange,
-} from "reactflow";
+} from "@xyflow/react";
 
 import {
   createEmptyWorkflowDocument,

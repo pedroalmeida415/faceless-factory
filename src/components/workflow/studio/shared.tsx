@@ -1,8 +1,8 @@
 "use client";
 
+import { Handle, Position } from "@xyflow/react";
 import Image from "next/image";
 import { Fragment, type PropsWithChildren, type ReactNode, useId } from "react";
-import { Handle, Position } from "reactflow";
 
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
