@@ -118,7 +118,6 @@ You must demonstrate mastery over the internal mechanics of Directed Acyclic Gra
 ### Graph Invariants & Edge Validation
 * **Port Type Safety:** Enforce strict type checking at the "port" level. An `Image` output port must not connect to a `Text` input port. Use Zod schemas to validate data passing across edges.
 * **Atomic State:** Use Zustand to track the "Transient UI State" (node positions, selections) and the database (Postgres) for the "Source of Truth" (graph structure, node parameters).
-* **Data Provenance:** Every piece of generated media must carry metadata linking it back to the specific Graph Version and Node ID that produced it.
 
 ### Node-Based UX Quirks
 * **Z-Index & Rendering:** Optimize React-Flow rendering using `memo` on custom nodes to prevent global re-renders on edge drag.
