@@ -8,27 +8,27 @@ import {
   type WorkflowDocumentNode,
 } from "~/lib/workflow/document";
 import {
-  buildWorkflowApprovedRunProjection,
-  buildWorkflowRunProjection,
+  buildWorkflowApprovedOutputProjection,
+  buildWorkflowOutputProjection,
   getWorkflowVisibleCompletionOutputs,
 } from "~/lib/workflow/execution/artifact-projection";
 import {
-  areWorkflowLaneJobsSettled,
-  buildWorkflowLaneDependencyPlan,
-  getFailedWorkflowLaneClosure,
-  getReadyWorkflowLaneJobs,
-  getWorkflowLaneKey,
-  getWorkflowLaneSettlement,
-} from "~/lib/workflow/execution/lane-dependencies";
+  areWorkflowOutputJobsSettled,
+  buildWorkflowOutputDependencyPlan,
+  getFailedWorkflowOutputClosure,
+  getReadyWorkflowOutputJobs,
+  getWorkflowOutputKey,
+  getWorkflowOutputSettlement,
+} from "~/lib/workflow/execution/output-dependencies";
 import { buildWorkflowExecutionPlan } from "~/lib/workflow/execution/subgraph";
 import type {
-  NodeLaneOutputArtifact,
-  WorkflowRunArtifacts,
+  NodeOutputArtifact,
+  WorkflowOutputArtifacts,
 } from "~/lib/workflow/execution/types";
 import {
-  getErroredWorkflowLaneResults,
-  getSuccessfulWorkflowLaneOutputs,
-  isWorkflowRunLockingStatus,
+  getErroredWorkflowOutputResults,
+  getSuccessfulWorkflowOutputs,
+  isWorkflowExecutionLockingStatus,
 } from "~/lib/workflow/execution/types";
 import { PROMPT_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
 import type { WorkflowAsset } from "~/lib/workflow/types";
@@ -40,12 +40,12 @@ function node<K extends WorkflowDocumentNode["kind"]>(kind: K, id: string) {
   return { ...created, id } as Extract<WorkflowDocumentNode, { kind: K }>;
 }
 
-function lanePlan(params: {
+function outputPlan(params: {
   document: WorkflowDocument;
   iterations: Record<string, number>;
   targetNodeIds: string[];
 }) {
-  return buildWorkflowLaneDependencyPlan({
+  return buildWorkflowOutputDependencyPlan({
     document: params.document,
     generatorIterationById: new Map(
       Object.entries(params.iterations).map(([nodeId, iterations]) => [
@@ -57,7 +57,7 @@ function lanePlan(params: {
   });
 }
 
-function executionLanePlan(params: {
+function executionOutputPlan(params: {
   document: WorkflowDocument;
   targetNodeIds: string[];
 }) {
@@ -65,7 +65,7 @@ function executionLanePlan(params: {
     params.document,
     params.targetNodeIds,
   );
-  return buildWorkflowLaneDependencyPlan({
+  return buildWorkflowOutputDependencyPlan({
     document: params.document,
     generatorIterationById: executionPlan.generatorIterationById,
     targetNodeIds: params.targetNodeIds,
@@ -74,35 +74,35 @@ function executionLanePlan(params: {
 
 function output(
   nodeId: string,
-  laneIndex: number,
-  params?: Partial<NodeLaneOutputArtifact>,
-): NodeLaneOutputArtifact {
+  outputIndex: number,
+  params?: Partial<NodeOutputArtifact>,
+): NodeOutputArtifact {
   return {
     attempt: 0,
     documentRevision: null,
-    idempotencyKey: `${nodeId}:${laneIndex}`,
-    inputHash: `${nodeId}:${laneIndex}`,
-    laneIndex,
+    idempotencyKey: `${nodeId}:${outputIndex}`,
+    inputHash: `${nodeId}:${outputIndex}`,
+    outputIndex,
     model: null,
     nodeId,
     ownerUserId: "user",
     projectId: "project",
     promptSnapshot: null,
     reviewStatus: null,
-    runId: "run",
-    value: { lanes: [`${nodeId}:${laneIndex}`], type: "text" },
+    executionId: "run",
+    value: { items: [`${nodeId}:${outputIndex}`], type: "text" },
     ...params,
   };
 }
 
 function imageOutput(
   nodeId: string,
-  laneIndex: number,
-  params?: Partial<NodeLaneOutputArtifact>,
-): NodeLaneOutputArtifact {
-  const asset = workflowAsset(`${nodeId}-${laneIndex}`);
-  return output(nodeId, laneIndex, {
-    value: { lanes: [[asset]], type: "image" },
+  outputIndex: number,
+  params?: Partial<NodeOutputArtifact>,
+): NodeOutputArtifact {
+  const asset = workflowAsset(`${nodeId}-${outputIndex}`);
+  return output(nodeId, outputIndex, {
+    value: { items: [[asset]], type: "image" },
     ...params,
   });
 }
@@ -123,44 +123,48 @@ function workflowAsset(id: string): WorkflowAsset {
   };
 }
 
-function success(output: NodeLaneOutputArtifact) {
+function success(output: NodeOutputArtifact) {
   return { ...output, status: "success" as const };
 }
 
-function errorResult(nodeId: string, laneIndex: number, attempt: number) {
+function waitingForReview(output: NodeOutputArtifact) {
+  return { ...output, status: "waiting_for_review" as const };
+}
+
+function errorResult(nodeId: string, outputIndex: number, attempt: number) {
   return {
     attempt,
-    error: "lane failed",
+    error: "output failed",
     failedAt: "2026-01-01T00:00:00.000Z",
-    laneIndex,
+    outputIndex,
     nodeId,
     ownerUserId: "user",
     projectId: "project",
-    runId: "run",
+    executionId: "run",
     status: "error" as const,
   };
 }
 
-function visibleLaneKeys(artifacts: WorkflowRunArtifacts) {
+function visibleOutputKeys(artifacts: WorkflowOutputArtifacts) {
   return new Set(
-    getWorkflowVisibleCompletionOutputs(artifacts).map(getWorkflowLaneKey),
+    getWorkflowVisibleCompletionOutputs(artifacts).map(getWorkflowOutputKey),
   );
 }
 
-function materializedBlockedLaneKeys(artifacts: WorkflowRunArtifacts) {
-  const completed = visibleLaneKeys(artifacts);
+function materializedBlockedOutputKeys(artifacts: WorkflowOutputArtifacts) {
+  const completed = visibleOutputKeys(artifacts);
   return new Set(
-    artifacts.laneResults
-      .map(getWorkflowLaneKey)
+    artifacts.outputResults
+      .map(getWorkflowOutputKey)
       .filter((key) => !completed.has(key)),
   );
 }
 
-describe("workflow lane dependencies", () => {
-  test("rolling pair maps video lane 0 to current and shifted image lanes", () => {
+describe("workflow output dependencies", () => {
+  test("rolling pair maps video output 0 to current and shifted image outputs", () => {
     const image = node("imageGenerator", "image");
     const reorder = {
-      ...node("laneReorder", "shift"),
+      ...node("outputReorder", "shift"),
       shift: 1,
       valueType: "image" as const,
     };
@@ -193,26 +197,26 @@ describe("workflow lane dependencies", () => {
       version: WORKFLOW_DOCUMENT_VERSION,
     };
 
-    const plan = lanePlan({
+    const plan = outputPlan({
       document,
       iterations: { image: 2, video: 2 },
       targetNodeIds: [image.id, video.id],
     });
 
     assert.deepEqual(
-      plan.jobs.find((job) => job.nodeId === video.id && job.laneIndex === 0)
+      plan.jobs.find((job) => job.nodeId === video.id && job.outputIndex === 0)
         ?.dependencies,
       [
-        { laneIndex: 0, nodeId: image.id },
-        { laneIndex: 1, nodeId: image.id },
+        { outputIndex: 0, nodeId: image.id },
+        { outputIndex: 1, nodeId: image.id },
       ],
     );
   });
 
-  test("first-last-frame waits on transformed upstream generator lanes outside the job target set", () => {
+  test("first-last-frame waits on transformed upstream generator outputs outside the job target set", () => {
     const image = node("imageGenerator", "image");
     const reorder = {
-      ...node("laneReorder", "shift"),
+      ...node("outputReorder", "shift"),
       shift: 1,
       valueType: "image" as const,
     };
@@ -248,25 +252,25 @@ describe("workflow lane dependencies", () => {
       version: WORKFLOW_DOCUMENT_VERSION,
     };
 
-    const plan = lanePlan({
+    const plan = outputPlan({
       document,
       iterations: { image: 3, video: 3 },
       targetNodeIds: [video.id],
     });
 
     assert.deepEqual(
-      plan.jobs.find((job) => job.nodeId === video.id && job.laneIndex === 1)
+      plan.jobs.find((job) => job.nodeId === video.id && job.outputIndex === 1)
         ?.dependencies,
       [
-        { laneIndex: 1, nodeId: image.id },
-        { laneIndex: 2, nodeId: image.id },
+        { outputIndex: 1, nodeId: image.id },
+        { outputIndex: 2, nodeId: image.id },
       ],
     );
     assert.equal(
-      getReadyWorkflowLaneJobs({
-        completedLanes: new Set([`${image.id}:1`]),
+      getReadyWorkflowOutputJobs({
+        completedOutputs: new Set([`${image.id}:1`]),
         plan,
-      }).some((job) => job.nodeId === video.id && job.laneIndex === 1),
+      }).some((job) => job.nodeId === video.id && job.outputIndex === 1),
       false,
     );
   });
@@ -274,38 +278,38 @@ describe("workflow lane dependencies", () => {
   test("readiness waits until every visible dependency is complete", () => {
     const plan = {
       jobs: [
-        { dependencies: [], laneIndex: 0, nodeId: "image" },
+        { dependencies: [], outputIndex: 0, nodeId: "image" },
         {
           dependencies: [
-            { laneIndex: 0, nodeId: "image" },
-            { laneIndex: 1, nodeId: "image" },
+            { outputIndex: 0, nodeId: "image" },
+            { outputIndex: 1, nodeId: "image" },
           ],
-          laneIndex: 0,
+          outputIndex: 0,
           nodeId: "video",
         },
       ],
     };
 
     assert.equal(
-      getReadyWorkflowLaneJobs({
-        completedLanes: new Set(["image:0"]),
+      getReadyWorkflowOutputJobs({
+        completedOutputs: new Set(["image:0"]),
         plan,
       }).some((job) => job.nodeId === "video"),
       false,
     );
 
     assert.deepEqual(
-      getReadyWorkflowLaneJobs({
-        completedLanes: new Set(["image:0", "image:1"]),
+      getReadyWorkflowOutputJobs({
+        completedOutputs: new Set(["image:0", "image:1"]),
         plan,
       }),
       [
         {
           dependencies: [
-            { laneIndex: 0, nodeId: "image" },
-            { laneIndex: 1, nodeId: "image" },
+            { outputIndex: 0, nodeId: "image" },
+            { outputIndex: 1, nodeId: "image" },
           ],
-          laneIndex: 0,
+          outputIndex: 0,
           nodeId: "video",
         },
       ],
@@ -313,19 +317,19 @@ describe("workflow lane dependencies", () => {
   });
 
   test("reviewed raw output is not a visible completion until approved", () => {
-    const artifacts: WorkflowRunArtifacts = {
-      laneResults: [
-        success(output("reviewed", 0, { reviewStatus: "pending" })),
+    const artifacts: WorkflowOutputArtifacts = {
+      outputResults: [
+        waitingForReview(output("reviewed", 0, { reviewStatus: "pending" })),
       ],
     };
 
     assert.deepEqual(getWorkflowVisibleCompletionOutputs(artifacts), []);
     assert.deepEqual(
       getWorkflowVisibleCompletionOutputs({
-        laneResults: [
+        outputResults: [
           success(output("reviewed", 0, { reviewStatus: "approved" })),
         ],
-      }).map(getWorkflowLaneKey),
+      }).map(getWorkflowOutputKey),
       ["reviewed:0"],
     );
   });
@@ -333,21 +337,21 @@ describe("workflow lane dependencies", () => {
   test("pending reviewed output projects review payload without visible completion", () => {
     const reviewed = {
       ...node("llmGenerator", "reviewed"),
-      outputLanes: [""],
+      outputs: [""],
       reviewEnabled: true,
     };
-    const artifacts: WorkflowRunArtifacts = {
-      laneResults: [
-        success(
+    const artifacts: WorkflowOutputArtifacts = {
+      outputResults: [
+        waitingForReview(
           output("reviewed", 0, {
             reviewStatus: "pending",
-            value: { lanes: ["candidate text"], type: "text" },
+            value: { items: ["candidate text"], type: "text" },
           }),
         ),
       ],
     };
 
-    const projected = buildWorkflowRunProjection({
+    const projected = buildWorkflowOutputProjection({
       artifacts,
       document: {
         edges: [],
@@ -361,16 +365,16 @@ describe("workflow lane dependencies", () => {
     assert.equal(projectedNode?.kind, "llmGenerator");
     assert.equal(
       projectedNode?.kind === "llmGenerator"
-        ? projectedNode.review.lanes[0]?.text
+        ? projectedNode.review.outputs[0]?.text
         : null,
       "candidate text",
     );
   });
 
-  test("review approval does not unblock rolling pair until every visible source lane is approved", () => {
+  test("review approval does not unblock rolling pair until every visible source output is approved", () => {
     const image = node("imageGenerator", "image");
     const reorder = {
-      ...node("laneReorder", "shift"),
+      ...node("outputReorder", "shift"),
       shift: 1,
       valueType: "image" as const,
     };
@@ -402,61 +406,58 @@ describe("workflow lane dependencies", () => {
       nodes: [image, reorder, video],
       version: WORKFLOW_DOCUMENT_VERSION,
     };
-    const plan = lanePlan({
+    const plan = outputPlan({
       document,
       iterations: { image: 2, video: 1 },
       targetNodeIds: [image.id, video.id],
     });
-    const artifacts: WorkflowRunArtifacts = {
-      laneResults: [
+    const artifacts: WorkflowOutputArtifacts = {
+      outputResults: [
         success(output(image.id, 0, { reviewStatus: "approved" })),
         success(output(image.id, 1, { reviewStatus: "pending" })),
       ],
     };
 
     assert.equal(
-      getReadyWorkflowLaneJobs({
-        blockedLanes: materializedBlockedLaneKeys(artifacts),
-        completedLanes: visibleLaneKeys(artifacts),
+      getReadyWorkflowOutputJobs({
+        blockedOutputs: materializedBlockedOutputKeys(artifacts),
+        completedOutputs: visibleOutputKeys(artifacts),
         plan,
-      }).some((job) => job.nodeId === video.id && job.laneIndex === 0),
+      }).some((job) => job.nodeId === video.id && job.outputIndex === 0),
       false,
     );
 
     assert.equal(
-      getReadyWorkflowLaneJobs({
-        blockedLanes: materializedBlockedLaneKeys({
-          laneResults: artifacts.laneResults.map((result) =>
+      getReadyWorkflowOutputJobs({
+        blockedOutputs: materializedBlockedOutputKeys({
+          outputResults: artifacts.outputResults.map((result) =>
             result.status === "success"
               ? { ...result, reviewStatus: "approved" as const }
               : result,
           ),
         }),
-        completedLanes: visibleLaneKeys({
-          laneResults: artifacts.laneResults.map((result) =>
+        completedOutputs: visibleOutputKeys({
+          outputResults: artifacts.outputResults.map((result) =>
             result.status === "success"
               ? { ...result, reviewStatus: "approved" as const }
               : result,
           ),
         }),
         plan,
-      }).some((job) => job.nodeId === video.id && job.laneIndex === 0),
+      }).some((job) => job.nodeId === video.id && job.outputIndex === 0),
       true,
     );
   });
 
-  test("approved review projection keeps pending lane cardinality for downstream transforms", () => {
+  test("approved review projection keeps pending output cardinality for downstream transforms", () => {
     const reviewed = {
       ...node("imageGenerator", "reviewed"),
-      outputLanes: [
-        [workflowAsset("reviewed-0")],
-        [workflowAsset("reviewed-1")],
-      ],
+      outputs: [[workflowAsset("reviewed-0")], [workflowAsset("reviewed-1")]],
       reviewEnabled: true,
     };
     const image = node("imageGenerator", "image");
     const reorder = {
-      ...node("laneReorder", "shift"),
+      ...node("outputReorder", "shift"),
       shift: 1,
       valueType: "image" as const,
     };
@@ -498,8 +499,8 @@ describe("workflow lane dependencies", () => {
       nodes: [reviewed, image, reorder, video],
       version: WORKFLOW_DOCUMENT_VERSION,
     };
-    const artifacts: WorkflowRunArtifacts = {
-      laneResults: [
+    const artifacts: WorkflowOutputArtifacts = {
+      outputResults: [
         success(imageOutput(reviewed.id, 0, { reviewStatus: "approved" })),
         success(imageOutput(reviewed.id, 1, { reviewStatus: "approved" })),
         success(imageOutput(reviewed.id, 2, { reviewStatus: "regenerating" })),
@@ -507,37 +508,37 @@ describe("workflow lane dependencies", () => {
         success(imageOutput(image.id, 1)),
       ],
     };
-    const projected = buildWorkflowApprovedRunProjection({
+    const projected = buildWorkflowApprovedOutputProjection({
       artifacts,
       document,
     });
-    const plan = executionLanePlan({
+    const plan = executionOutputPlan({
       document: projected,
       targetNodeIds: [reviewed.id, image.id, video.id],
     });
 
     assert.deepEqual(
-      plan.jobs.find((job) => job.nodeId === video.id && job.laneIndex === 1)
+      plan.jobs.find((job) => job.nodeId === video.id && job.outputIndex === 1)
         ?.dependencies,
       [
-        { laneIndex: 1, nodeId: image.id },
-        { laneIndex: 2, nodeId: image.id },
+        { outputIndex: 1, nodeId: image.id },
+        { outputIndex: 2, nodeId: image.id },
       ],
     );
     assert.equal(
-      getReadyWorkflowLaneJobs({
-        blockedLanes: materializedBlockedLaneKeys(artifacts),
-        completedLanes: visibleLaneKeys(artifacts),
+      getReadyWorkflowOutputJobs({
+        blockedOutputs: materializedBlockedOutputKeys(artifacts),
+        completedOutputs: visibleOutputKeys(artifacts),
         plan,
-      }).some((job) => job.nodeId === video.id && job.laneIndex === 1),
+      }).some((job) => job.nodeId === video.id && job.outputIndex === 1),
       false,
     );
   });
 
-  test("rolling pair can run a satisfied lane while another source lane is still blocked", () => {
+  test("rolling pair can run a satisfied output while another source output is still blocked", () => {
     const image = node("imageGenerator", "image");
     const reorder = {
-      ...node("laneReorder", "shift"),
+      ...node("outputReorder", "shift"),
       shift: 1,
       valueType: "image" as const,
     };
@@ -569,26 +570,27 @@ describe("workflow lane dependencies", () => {
       nodes: [image, reorder, video],
       version: WORKFLOW_DOCUMENT_VERSION,
     };
-    const plan = lanePlan({
+    const plan = outputPlan({
       document,
       iterations: { image: 3, video: 3 },
       targetNodeIds: [image.id, video.id],
     });
-    for (const [completedLanes, readyLaneIndex] of [
+    for (const [completedOutputs, readyOutputIndex] of [
       [[0, 1], 0],
       [[1, 2], 1],
       [[0, 2], 2],
     ] as const) {
-      const readyJobs = getReadyWorkflowLaneJobs({
-        completedLanes: new Set(
-          completedLanes.map((laneIndex) => `${image.id}:${laneIndex}`),
+      const readyJobs = getReadyWorkflowOutputJobs({
+        completedOutputs: new Set(
+          completedOutputs.map((outputIndex) => `${image.id}:${outputIndex}`),
         ),
         plan,
       });
 
       assert.equal(
         readyJobs.some(
-          (job) => job.nodeId === video.id && job.laneIndex === readyLaneIndex,
+          (job) =>
+            job.nodeId === video.id && job.outputIndex === readyOutputIndex,
         ),
         true,
       );
@@ -639,204 +641,207 @@ describe("workflow lane dependencies", () => {
       version: WORKFLOW_DOCUMENT_VERSION,
     };
 
-    const dependencies = lanePlan({
+    const dependencies = outputPlan({
       document,
       iterations: { image: 1, unused: 1, used: 1 },
       targetNodeIds: [used.id, unused.id, image.id],
     }).jobs.find((job) => job.nodeId === image.id)?.dependencies;
 
-    assert.deepEqual(dependencies, [{ laneIndex: 0, nodeId: used.id }]);
+    assert.deepEqual(dependencies, [{ outputIndex: 0, nodeId: used.id }]);
   });
 
-  test("blocked node-lane work is not returned ready again", () => {
-    const job = { dependencies: [], laneIndex: 0, nodeId: "image" };
+  test("blocked node-output work is not returned ready again", () => {
+    const job = { dependencies: [], outputIndex: 0, nodeId: "image" };
     assert.deepEqual(
-      getReadyWorkflowLaneJobs({
-        blockedLanes: new Set([getWorkflowLaneKey(job)]),
-        completedLanes: new Set(),
+      getReadyWorkflowOutputJobs({
+        blockedOutputs: new Set([getWorkflowOutputKey(job)]),
+        completedOutputs: new Set(),
         plan: { jobs: [job] },
       }),
       [],
     );
   });
 
-  test("failed source lanes transitively settle dependent lanes", () => {
+  test("failed source outputs transitively settle dependent outputs", () => {
     const plan = {
       jobs: [
-        { dependencies: [], laneIndex: 0, nodeId: "image" },
+        { dependencies: [], outputIndex: 0, nodeId: "image" },
         {
-          dependencies: [{ laneIndex: 0, nodeId: "image" }],
-          laneIndex: 0,
+          dependencies: [{ outputIndex: 0, nodeId: "image" }],
+          outputIndex: 0,
           nodeId: "video",
         },
       ],
     };
-    const failedLanes = new Set(["image:0"]);
+    const failedOutputs = new Set(["image:0"]);
 
     assert.deepEqual(
-      getFailedWorkflowLaneClosure({ failedLanes, plan }),
+      getFailedWorkflowOutputClosure({ failedOutputs, plan }),
       new Set(["image:0", "video:0"]),
     );
     assert.equal(
-      areWorkflowLaneJobsSettled({
-        completedLanes: new Set(),
-        failedLanes,
+      areWorkflowOutputJobsSettled({
+        completedOutputs: new Set(),
+        failedOutputs,
         plan,
       }),
       true,
     );
     assert.deepEqual(
-      getReadyWorkflowLaneJobs({
-        blockedLanes: getFailedWorkflowLaneClosure({ failedLanes, plan }),
-        completedLanes: new Set(),
+      getReadyWorkflowOutputJobs({
+        blockedOutputs: getFailedWorkflowOutputClosure({ failedOutputs, plan }),
+        completedOutputs: new Set(),
         plan,
       }),
       [],
     );
   });
 
-  test("unrelated lanes remain runnable after a lane failure", () => {
+  test("unrelated outputs remain runnable after a output failure", () => {
     const plan = {
       jobs: [
-        { dependencies: [], laneIndex: 0, nodeId: "image" },
-        { dependencies: [], laneIndex: 1, nodeId: "image" },
+        { dependencies: [], outputIndex: 0, nodeId: "image" },
+        { dependencies: [], outputIndex: 1, nodeId: "image" },
         {
-          dependencies: [{ laneIndex: 0, nodeId: "image" }],
-          laneIndex: 0,
+          dependencies: [{ outputIndex: 0, nodeId: "image" }],
+          outputIndex: 0,
           nodeId: "video",
         },
         {
-          dependencies: [{ laneIndex: 1, nodeId: "image" }],
-          laneIndex: 1,
+          dependencies: [{ outputIndex: 1, nodeId: "image" }],
+          outputIndex: 1,
           nodeId: "video",
         },
       ],
     };
-    const failedClosure = getFailedWorkflowLaneClosure({
-      failedLanes: new Set(["image:0"]),
+    const failedClosure = getFailedWorkflowOutputClosure({
+      failedOutputs: new Set(["image:0"]),
       plan,
     });
 
     assert.deepEqual(
-      getReadyWorkflowLaneJobs({
-        blockedLanes: failedClosure,
-        completedLanes: new Set(["image:1"]),
+      getReadyWorkflowOutputJobs({
+        blockedOutputs: failedClosure,
+        completedOutputs: new Set(["image:1"]),
         plan,
       }),
       [
         {
-          dependencies: [{ laneIndex: 1, nodeId: "image" }],
-          laneIndex: 1,
+          dependencies: [{ outputIndex: 1, nodeId: "image" }],
+          outputIndex: 1,
           nodeId: "video",
         },
       ],
     );
     assert.equal(
-      areWorkflowLaneJobsSettled({
-        completedLanes: new Set(["image:1", "video:1"]),
-        failedLanes: new Set(["image:0"]),
+      areWorkflowOutputJobsSettled({
+        completedOutputs: new Set(["image:1", "video:1"]),
+        failedOutputs: new Set(["image:0"]),
         plan,
       }),
       true,
     );
   });
 
-  test("durable lane failures settle dependent lanes and leave siblings runnable", () => {
+  test("durable output failures settle dependent outputs and leave siblings runnable", () => {
     const plan = {
       jobs: [
-        { dependencies: [], laneIndex: 0, nodeId: "image" },
-        { dependencies: [], laneIndex: 1, nodeId: "image" },
+        { dependencies: [], outputIndex: 0, nodeId: "image" },
+        { dependencies: [], outputIndex: 1, nodeId: "image" },
         {
-          dependencies: [{ laneIndex: 0, nodeId: "image" }],
-          laneIndex: 0,
+          dependencies: [{ outputIndex: 0, nodeId: "image" }],
+          outputIndex: 0,
           nodeId: "video",
         },
         {
-          dependencies: [{ laneIndex: 1, nodeId: "image" }],
-          laneIndex: 1,
+          dependencies: [{ outputIndex: 1, nodeId: "image" }],
+          outputIndex: 1,
           nodeId: "video",
         },
       ],
     };
-    const artifacts: WorkflowRunArtifacts = {
-      laneResults: [
+    const artifacts: WorkflowOutputArtifacts = {
+      outputResults: [
         success(output("image", 1)),
         {
           attempt: 0,
-          error: "lane failed",
+          error: "output failed",
           failedAt: "2026-01-01T00:00:00.000Z",
-          laneIndex: 0,
+          outputIndex: 0,
           nodeId: "image",
           ownerUserId: "user",
           projectId: "project",
-          runId: "run",
+          executionId: "run",
           status: "error",
         },
       ],
     };
 
-    const settlement = getWorkflowLaneSettlement({ artifacts, plan });
+    const settlement = getWorkflowOutputSettlement({ artifacts, plan });
 
     assert.deepEqual(settlement.failedClosure, new Set(["image:0", "video:0"]));
     assert.equal(settlement.settled, false);
     assert.deepEqual(
-      getReadyWorkflowLaneJobs({
-        blockedLanes: settlement.blockedLanes,
-        completedLanes: settlement.completedLanes,
+      getReadyWorkflowOutputJobs({
+        blockedOutputs: settlement.blockedOutputs,
+        completedOutputs: settlement.completedOutputs,
         plan,
       }),
       [
         {
-          dependencies: [{ laneIndex: 1, nodeId: "image" }],
-          laneIndex: 1,
+          dependencies: [{ outputIndex: 1, nodeId: "image" }],
+          outputIndex: 1,
           nodeId: "video",
         },
       ],
     );
 
     assert.equal(
-      getWorkflowLaneSettlement({
+      getWorkflowOutputSettlement({
         artifacts: {
           ...artifacts,
-          laneResults: [...artifacts.laneResults, success(output("video", 1))],
+          outputResults: [
+            ...artifacts.outputResults,
+            success(output("video", 1)),
+          ],
         },
         plan,
       }).settled,
       true,
     );
-    assert.equal(isWorkflowRunLockingStatus("error"), false);
+    assert.equal(isWorkflowExecutionLockingStatus("error"), false);
   });
 
-  test("later successful attempt supersedes stale lane error", () => {
-    const artifacts: WorkflowRunArtifacts = {
-      laneResults: [
+  test("later successful attempt supersedes stale output error", () => {
+    const artifacts: WorkflowOutputArtifacts = {
+      outputResults: [
         errorResult("image", 0, 0),
         success({ ...output("image", 0), attempt: 1 }),
       ],
     };
-    const settlement = getWorkflowLaneSettlement({
+    const settlement = getWorkflowOutputSettlement({
       artifacts,
-      plan: { jobs: [{ dependencies: [], laneIndex: 0, nodeId: "image" }] },
+      plan: { jobs: [{ dependencies: [], outputIndex: 0, nodeId: "image" }] },
     });
 
-    assert.deepEqual(getErroredWorkflowLaneResults(artifacts), []);
-    assert.deepEqual(settlement.completedLanes, new Set(["image:0"]));
-    assert.deepEqual(settlement.failedLanes, new Set());
+    assert.deepEqual(getErroredWorkflowOutputResults(artifacts), []);
+    assert.deepEqual(settlement.completedOutputs, new Set(["image:0"]));
+    assert.deepEqual(settlement.failedOutputs, new Set());
     assert.equal(settlement.settled, true);
   });
 
   test("later error attempt supersedes stale successful completion", () => {
-    const artifacts: WorkflowRunArtifacts = {
-      laneResults: [success(output("image", 0)), errorResult("image", 0, 1)],
+    const artifacts: WorkflowOutputArtifacts = {
+      outputResults: [success(output("image", 0)), errorResult("image", 0, 1)],
     };
-    const settlement = getWorkflowLaneSettlement({
+    const settlement = getWorkflowOutputSettlement({
       artifacts,
-      plan: { jobs: [{ dependencies: [], laneIndex: 0, nodeId: "image" }] },
+      plan: { jobs: [{ dependencies: [], outputIndex: 0, nodeId: "image" }] },
     });
 
-    assert.deepEqual(getSuccessfulWorkflowLaneOutputs(artifacts), []);
-    assert.deepEqual(settlement.completedLanes, new Set());
-    assert.deepEqual(settlement.failedLanes, new Set(["image:0"]));
+    assert.deepEqual(getSuccessfulWorkflowOutputs(artifacts), []);
+    assert.deepEqual(settlement.completedOutputs, new Set());
+    assert.deepEqual(settlement.failedOutputs, new Set(["image:0"]));
     assert.equal(settlement.settled, true);
   });
 });

@@ -21,12 +21,12 @@ export type StudioContextValue = {
   clearNodeAssets: (nodeId: string) => void;
   getGeneratorIterationInfo: (nodeId: string) => GeneratorIterationInfo;
   getGeneratorInputs: (nodeId: string) => GeneratorHandleDefinition[];
-  setLaneReorderMode: (nodeId: string, mode: "shift" | "manual") => void;
-  setLaneReorderOrder: (nodeId: string, order: number[]) => void;
-  setLaneReorderShift: (nodeId: string, shift: number) => void;
-  setLaneSelectIndices: (nodeId: string, indices: number[]) => void;
-  setLaneSplitCount: (nodeId: string, splitCount: number) => void;
-  setLaneZipAlignMode: (nodeId: string, mode: "zip" | "broadcast") => void;
+  setOutputReorderMode: (nodeId: string, mode: "shift" | "manual") => void;
+  setOutputReorderOrder: (nodeId: string, order: number[]) => void;
+  setOutputReorderShift: (nodeId: string, shift: number) => void;
+  setOutputSelectIndices: (nodeId: string, indices: number[]) => void;
+  setOutputSplitCount: (nodeId: string, splitCount: number) => void;
+  setOutputZipAlignMode: (nodeId: string, mode: "zip" | "broadcast") => void;
   setImageGeneratorModel: (
     nodeId: string,
     model: ImageGeneratorModelId,

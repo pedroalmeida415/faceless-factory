@@ -6,9 +6,7 @@ import {
   createEmptyWorkflowDocument,
   deserializeStoredWorkflowGraphDocument,
   hydrateWorkflowGraphDocument,
-  toWorkflowGraphDocument,
-  type WorkflowDocument,
-  type WorkflowDocumentNode,
+  toWorkflowDefinitionGraphDocument,
   type WorkflowGraphDocument,
 } from "~/lib/workflow/document";
 import {
@@ -23,9 +21,9 @@ import {
 } from "~/lib/workflow/project";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 import { db } from "~/server/db";
-import { workflowProjects } from "~/server/db/schema";
+import { workflows } from "~/server/db/schema";
 
-type WorkflowProjectRow = typeof workflowProjects.$inferSelect;
+type WorkflowProjectRow = typeof workflows.$inferSelect;
 
 async function getWorkflowProjectRow(params: {
   ownerUserId: string;
@@ -33,11 +31,11 @@ async function getWorkflowProjectRow(params: {
 }) {
   const [project] = await db
     .select()
-    .from(workflowProjects)
+    .from(workflows)
     .where(
       and(
-        eq(workflowProjects.id, params.projectId),
-        eq(workflowProjects.ownerUserId, params.ownerUserId),
+        eq(workflows.id, params.projectId),
+        eq(workflows.ownerUserId, params.ownerUserId),
       ),
     )
     .limit(1);
@@ -53,8 +51,14 @@ async function getWorkflowProjectRow(params: {
 
 function toWorkflowProject(row: WorkflowProjectRow): WorkflowProject {
   const document = deserializeStoredWorkflowGraphDocument(row.document);
+  const definitionDocument = document
+    ? toWorkflowDefinitionGraphDocument(document)
+    : null;
+  const hydratedDocument = definitionDocument
+    ? hydrateWorkflowGraphDocument(definitionDocument)
+    : null;
 
-  if (!document) {
+  if (!hydratedDocument) {
     throw new WorkflowValidationError({
       message: `Workflow project ${row.id} contains an invalid document.`,
     });
@@ -63,73 +67,9 @@ function toWorkflowProject(row: WorkflowProjectRow): WorkflowProject {
   return {
     id: row.id,
     name: row.name,
-    document,
+    document: hydratedDocument,
     documentRevision: row.documentRevision,
   };
-}
-
-function mergeGeneratorExecutionResult(
-  currentNode: WorkflowDocumentNode,
-  executionNode: WorkflowDocumentNode | undefined,
-) {
-  if (
-    currentNode.kind === "imageGenerator" &&
-    executionNode?.kind === "imageGenerator"
-  ) {
-    return {
-      ...currentNode,
-      lastPrompt: executionNode.lastPrompt,
-      outputLanes: executionNode.outputLanes,
-      review: executionNode.review,
-    } satisfies WorkflowDocumentNode;
-  }
-
-  if (
-    currentNode.kind === "videoGenerator" &&
-    executionNode?.kind === "videoGenerator"
-  ) {
-    return {
-      ...currentNode,
-      lastPrompt: executionNode.lastPrompt,
-      outputLanes: executionNode.outputLanes,
-      review: executionNode.review,
-    } satisfies WorkflowDocumentNode;
-  }
-
-  if (
-    currentNode.kind === "llmGenerator" &&
-    executionNode?.kind === "llmGenerator"
-  ) {
-    return {
-      ...currentNode,
-      lastPrompt: executionNode.lastPrompt,
-      lastSystemPrompt: executionNode.lastSystemPrompt,
-      outputLanes: executionNode.outputLanes,
-      review: executionNode.review,
-    } satisfies WorkflowDocumentNode;
-  }
-
-  return currentNode;
-}
-
-function mergeWorkflowExecutionResults(params: {
-  currentDocument: WorkflowDocument;
-  executionDocument: WorkflowDocument;
-}) {
-  const executionNodeById = new Map(
-    params.executionDocument.nodes.map((node) => [node.id, node]),
-  );
-  const nodes = params.currentDocument.nodes.map((node) =>
-    mergeGeneratorExecutionResult(node, executionNodeById.get(node.id)),
-  );
-  const nextDocument = {
-    ...params.currentDocument,
-    nodes,
-  } satisfies WorkflowDocument;
-
-  return JSON.stringify(params.currentDocument) === JSON.stringify(nextDocument)
-    ? params.currentDocument
-    : nextDocument;
 }
 
 function assertLockedExecutionSliceUnchanged(params: {
@@ -173,19 +113,18 @@ export async function getOrCreateWorkflowProject(
   const now = new Date();
   const [existingProject] = await db
     .select()
-    .from(workflowProjects)
-    .where(eq(workflowProjects.ownerUserId, ownerUserId))
-    .orderBy(
-      desc(workflowProjects.lastOpenedAt),
-      desc(workflowProjects.updatedAt),
-    )
+    .from(workflows)
+    .where(eq(workflows.ownerUserId, ownerUserId))
+    .orderBy(desc(workflows.lastOpenedAt), desc(workflows.updatedAt))
     .limit(1);
 
   if (!existingProject) {
     const [createdProject] = await db
-      .insert(workflowProjects)
+      .insert(workflows)
       .values({
-        document: toWorkflowGraphDocument(createEmptyWorkflowDocument()),
+        document: toWorkflowDefinitionGraphDocument(
+          createEmptyWorkflowDocument(),
+        ),
         id: randomUUID(),
         lastOpenedAt: now,
         name: DEFAULT_WORKFLOW_PROJECT_NAME,
@@ -204,9 +143,9 @@ export async function getOrCreateWorkflowProject(
   }
 
   const [updatedProject] = await db
-    .update(workflowProjects)
+    .update(workflows)
     .set({ lastOpenedAt: now })
-    .where(eq(workflowProjects.id, existingProject.id))
+    .where(eq(workflows.id, existingProject.id))
     .returning();
 
   return toWorkflowProject(updatedProject ?? existingProject);
@@ -245,6 +184,8 @@ export async function saveWorkflowProjectDocument(params: {
     });
   }
   WorkflowGraphValidator.validateDocument(nextDocument);
+  const nextDefinitionDocument =
+    toWorkflowDefinitionGraphDocument(nextDocument);
 
   const currentProject = await getWorkflowProject({
     ownerUserId: params.ownerUserId,
@@ -258,8 +199,9 @@ export async function saveWorkflowProjectDocument(params: {
   });
 
   if (
-    JSON.stringify(currentProject.document) ===
-    JSON.stringify(nextGraphDocument)
+    JSON.stringify(
+      toWorkflowDefinitionGraphDocument(currentProject.document),
+    ) === JSON.stringify(nextDefinitionDocument)
   ) {
     return {
       documentRevision: currentProject.documentRevision,
@@ -273,21 +215,21 @@ export async function saveWorkflowProjectDocument(params: {
   }
 
   const [updatedProject] = await db
-    .update(workflowProjects)
+    .update(workflows)
     .set({
-      document: nextGraphDocument,
+      document: nextDefinitionDocument,
       documentRevision: params.documentRevision + 1,
       updatedAt: new Date(),
     })
     .where(
       and(
-        eq(workflowProjects.documentRevision, params.documentRevision),
-        eq(workflowProjects.id, params.projectId),
-        eq(workflowProjects.ownerUserId, params.ownerUserId),
+        eq(workflows.documentRevision, params.documentRevision),
+        eq(workflows.id, params.projectId),
+        eq(workflows.ownerUserId, params.ownerUserId),
       ),
     )
     .returning({
-      documentRevision: workflowProjects.documentRevision,
+      documentRevision: workflows.documentRevision,
     });
 
   if (!updatedProject) {
@@ -297,64 +239,4 @@ export async function saveWorkflowProjectDocument(params: {
   }
 
   return updatedProject;
-}
-
-export async function saveWorkflowProjectExecutionResults(params: {
-  document: WorkflowDocument;
-  ownerUserId: string;
-  projectId: string;
-}): Promise<WorkflowProjectSaveResponse> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const currentProject = await getWorkflowProject({
-      ownerUserId: params.ownerUserId,
-      projectId: params.projectId,
-    });
-    const currentDocument = hydrateWorkflowGraphDocument(
-      currentProject.document,
-    );
-    if (!currentDocument) {
-      throw new WorkflowValidationError({
-        message: "Workflow project contains an invalid graph document.",
-      });
-    }
-
-    const nextDocument = mergeWorkflowExecutionResults({
-      currentDocument,
-      executionDocument: params.document,
-    });
-    if (nextDocument === currentDocument) {
-      return {
-        documentRevision: currentProject.documentRevision,
-      };
-    }
-
-    const [updatedProject] = await db
-      .update(workflowProjects)
-      .set({
-        document: toWorkflowGraphDocument(nextDocument),
-        documentRevision: currentProject.documentRevision + 1,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(
-            workflowProjects.documentRevision,
-            currentProject.documentRevision,
-          ),
-          eq(workflowProjects.id, params.projectId),
-          eq(workflowProjects.ownerUserId, params.ownerUserId),
-        ),
-      )
-      .returning({
-        documentRevision: workflowProjects.documentRevision,
-      });
-
-    if (updatedProject) {
-      return updatedProject;
-    }
-  }
-
-  throw new WorkflowValidationError({
-    message: "Workflow project changed while saving generated results.",
-  });
 }

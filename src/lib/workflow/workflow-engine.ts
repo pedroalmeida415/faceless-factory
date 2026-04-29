@@ -19,13 +19,13 @@ import {
   getGeneratorInputHandles,
   isValidWorkflowConnection,
   normalizeGeneratorTargetHandles,
-  normalizeLaneReorderValueTypes,
+  normalizeOutputReorderValueTypes,
   type WorkflowHandleReference,
 } from "~/lib/workflow/graph";
 import {
   formatNodeTitle,
-  LANE_REORDER_OUTPUT_HANDLE_ID,
-  LANE_TRANSFORM_OUTPUT_HANDLE_ID,
+  OUTPUT_REORDER_OUTPUT_HANDLE_ID,
+  OUTPUT_TRANSFORM_OUTPUT_HANDLE_ID,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
 import {
@@ -82,39 +82,40 @@ function syncEngineState(
     document.nodes,
     document.edges,
   );
-  const normalizedNodes = normalizeLaneReorderValueTypes(
+  const normalizedNodes = normalizeOutputReorderValueTypes(
     document.nodes,
     normalizedEdges,
   );
-  const untypedLaneTransformNodeIds = new Set(
+  const untypedOutputTransformNodeIds = new Set(
     normalizedNodes.flatMap((node) =>
-      (node.kind === "laneReorder" ||
-        node.kind === "laneSelect" ||
-        node.kind === "laneSplit" ||
-        node.kind === "laneMerge" ||
-        node.kind === "laneZipAlign") &&
+      (node.kind === "outputReorder" ||
+        node.kind === "outputSelect" ||
+        node.kind === "outputSplit" ||
+        node.kind === "outputMerge" ||
+        node.kind === "outputZipAlign") &&
       !node.valueType
         ? [node.id]
         : [],
     ),
   );
-  const normalizedLaneEdges = untypedLaneTransformNodeIds.size
+  const normalizedOutputEdges = untypedOutputTransformNodeIds.size
     ? normalizedEdges.filter(
         (edge) =>
           !(
-            untypedLaneTransformNodeIds.has(edge.source) &&
-            (edge.sourceHandle === LANE_REORDER_OUTPUT_HANDLE_ID ||
-              edge.sourceHandle === LANE_TRANSFORM_OUTPUT_HANDLE_ID ||
-              edge.sourceHandle?.startsWith("lane-"))
+            untypedOutputTransformNodeIds.has(edge.source) &&
+            (edge.sourceHandle === OUTPUT_REORDER_OUTPUT_HANDLE_ID ||
+              edge.sourceHandle === OUTPUT_TRANSFORM_OUTPUT_HANDLE_ID ||
+              edge.sourceHandle?.startsWith("output-"))
           ),
       )
     : normalizedEdges;
   const normalizedDocument =
-    normalizedLaneEdges === document.edges && normalizedNodes === document.nodes
+    normalizedOutputEdges === document.edges &&
+    normalizedNodes === document.nodes
       ? document
       : ({
           ...document,
-          edges: normalizedLaneEdges,
+          edges: normalizedOutputEdges,
           nodes: normalizedNodes,
         } satisfies WorkflowDocument);
 

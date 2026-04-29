@@ -84,7 +84,7 @@ export function OutputGallery({ assets }: { assets: WorkflowAsset[] }) {
     return (
       <Card className="border-dashed">
         <CardContent className="py-4 text-muted-foreground">
-          No outputs yet.
+          No materialized task output yet.
         </CardContent>
       </Card>
     );
@@ -212,6 +212,16 @@ export function NodeShell({
   const outputHandles = outputs ?? (output ? [output] : []);
   const socketTop = 64;
   const socketGap = 32;
+  const statusLabel =
+    data.status === "running"
+      ? "Running task"
+      : data.status === "waiting"
+        ? "Waiting for review"
+        : data.status === "success"
+          ? "Materialized"
+          : data.status === "error"
+            ? "Task failed"
+            : null;
 
   return (
     <Card
@@ -291,15 +301,20 @@ export function NodeShell({
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <CardTitle className="text-lg leading-tight">{data.label}</CardTitle>
-          {headerDetail || data.status === "running" ? (
+          {headerDetail || statusLabel ? (
             <div className="flex items-center gap-2">
               {headerDetail}
-              {data.status === "running" ? (
-                <div
-                  aria-label="Running"
-                  className="mt-1 h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-muted border-t-foreground"
-                  role="status"
-                />
+              {statusLabel ? (
+                <div className="flex items-center gap-1.5 rounded-full border bg-muted/50 px-2 py-1 text-[10px] text-muted-foreground uppercase tracking-[0.18em]">
+                  {data.status === "running" ? (
+                    <div
+                      aria-label="Running"
+                      className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-muted border-t-foreground"
+                      role="status"
+                    />
+                  ) : null}
+                  <span>{statusLabel}</span>
+                </div>
               ) : null}
             </div>
           ) : null}

@@ -35,18 +35,19 @@ export type WorkflowExecutionPriceQuote = {
 };
 
 type WorkflowExecutionEstimateOptions = {
-  completedLaneKeys?: ReadonlySet<string>;
+  completedOutputKeys?: ReadonlySet<string>;
 };
 
 function buildWorkflowExecutionPriceLineItem(
   node: WorkflowDocumentNode,
   iterationInfo: GeneratorIterationInfo,
-  completedLaneKeys: ReadonlySet<string> | undefined,
+  completedOutputKeys: ReadonlySet<string> | undefined,
 ): WorkflowExecutionPriceLineItem | null {
   const plannedIterations = Math.max(1, iterationInfo.iterations);
-  const iterations = completedLaneKeys
+  const iterations = completedOutputKeys
     ? Array.from({ length: plannedIterations }).filter(
-        (_, laneIndex) => !completedLaneKeys.has(`${node.id}:${laneIndex}`),
+        (_, outputIndex) =>
+          !completedOutputKeys.has(`${node.id}:${outputIndex}`),
       ).length
     : plannedIterations;
 
@@ -127,7 +128,7 @@ function buildWorkflowExecutionPriceQuote(
                 iterations: 1,
                 mismatchedIterators: false,
               },
-              options?.completedLaneKeys,
+              options?.completedOutputKeys,
             ),
           ]
         : [],

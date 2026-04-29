@@ -46,11 +46,11 @@ export type WorkflowNodeKind =
   | "list"
   | "prompt"
   | "asset"
-  | "laneReorder"
-  | "laneSelect"
-  | "laneSplit"
-  | "laneMerge"
-  | "laneZipAlign"
+  | "outputReorder"
+  | "outputSelect"
+  | "outputSplit"
+  | "outputMerge"
+  | "outputZipAlign"
   | "imageGenerator"
   | "videoGenerator"
   | "llmGenerator";
@@ -65,9 +65,9 @@ export type LlmThinkingLevel = (typeof LLM_THINKING_LEVELS)[number];
 export type GeneratorConfigValue = string | number | boolean | null;
 export type GeneratorConfig = Record<string, GeneratorConfigValue>;
 export type PromptDisplayMode = (typeof PROMPT_DISPLAY_MODES)[number];
-export type LaneReorderMode = "shift" | "manual";
-export type LaneZipAlignMode = "zip" | "broadcast";
-export type LaneTransformValueType = "text" | "image" | "video" | null;
+export type OutputReorderMode = "shift" | "manual";
+export type OutputZipAlignMode = "zip" | "broadcast";
+export type OutputTransformValueType = "text" | "image" | "video" | null;
 
 export type PromptVariable = {
   key: string;
@@ -114,41 +114,42 @@ export type AssetNodeFields = {
   assets: WorkflowAsset[];
 };
 
-export type LaneReorderNodeFields = {
-  mode: LaneReorderMode;
+export type OutputReorderNodeFields = {
+  mode: OutputReorderMode;
   order: number[];
   shift: number;
-  valueType: LaneTransformValueType;
+  valueType: OutputTransformValueType;
 };
 
-export type LaneSelectNodeFields = {
+export type OutputSelectNodeFields = {
   indices: number[];
-  valueType: LaneTransformValueType;
+  valueType: OutputTransformValueType;
 };
 
-export type LaneSplitNodeFields = {
+export type OutputSplitNodeFields = {
   splitCount: number;
-  valueType: LaneTransformValueType;
+  valueType: OutputTransformValueType;
 };
 
-export type LaneMergeNodeFields = {
-  valueType: LaneTransformValueType;
+export type OutputMergeNodeFields = {
+  valueType: OutputTransformValueType;
 };
 
-export type LaneZipAlignNodeFields = {
-  mode: LaneZipAlignMode;
-  valueType: LaneTransformValueType;
+export type OutputZipAlignNodeFields = {
+  mode: OutputZipAlignMode;
+  valueType: OutputTransformValueType;
 };
 
-export type WorkflowReviewLaneStatus =
+export type WorkflowOutputReviewStatus =
   | "pending"
   | "approved"
   | "rejected"
   | "regenerating";
 
-export type WorkflowReviewLane = {
-  laneIndex: number;
-  status: WorkflowReviewLaneStatus;
+export type WorkflowReviewOutput = {
+  executionId: string | null;
+  outputIndex: number;
+  status: WorkflowOutputReviewStatus;
   attempt: number;
   assets: WorkflowAsset[];
   text: string | null;
@@ -157,8 +158,8 @@ export type WorkflowReviewLane = {
 export type WorkflowReviewState = {
   sourceNodeId: string | null;
   updatedAt: string | null;
-  valueType: LaneTransformValueType;
-  lanes: WorkflowReviewLane[];
+  valueType: OutputTransformValueType;
+  outputs: WorkflowReviewOutput[];
 };
 
 export type GeneratorReviewFields = {
@@ -168,13 +169,13 @@ export type GeneratorReviewFields = {
 
 export type WorkflowGeneratorResult = {
   lastPrompt: string;
-  outputLanes: WorkflowAsset[][];
+  outputs: WorkflowAsset[][];
 };
 
 export type WorkflowLlmResult = {
   lastPrompt: string;
   lastSystemPrompt: string;
-  outputLanes: string[];
+  outputs: string[];
 };
 
 type BaseGeneratorSettings<ModelId extends string> = {
@@ -214,29 +215,29 @@ export type AssetNodeData = BaseNodeData &
     kind: "asset";
   };
 
-export type LaneReorderNodeData = BaseNodeData &
-  LaneReorderNodeFields & {
-    kind: "laneReorder";
+export type OutputReorderNodeData = BaseNodeData &
+  OutputReorderNodeFields & {
+    kind: "outputReorder";
   };
 
-export type LaneSelectNodeData = BaseNodeData &
-  LaneSelectNodeFields & {
-    kind: "laneSelect";
+export type OutputSelectNodeData = BaseNodeData &
+  OutputSelectNodeFields & {
+    kind: "outputSelect";
   };
 
-export type LaneSplitNodeData = BaseNodeData &
-  LaneSplitNodeFields & {
-    kind: "laneSplit";
+export type OutputSplitNodeData = BaseNodeData &
+  OutputSplitNodeFields & {
+    kind: "outputSplit";
   };
 
-export type LaneMergeNodeData = BaseNodeData &
-  LaneMergeNodeFields & {
-    kind: "laneMerge";
+export type OutputMergeNodeData = BaseNodeData &
+  OutputMergeNodeFields & {
+    kind: "outputMerge";
   };
 
-export type LaneZipAlignNodeData = BaseNodeData &
-  LaneZipAlignNodeFields & {
-    kind: "laneZipAlign";
+export type OutputZipAlignNodeData = BaseNodeData &
+  OutputZipAlignNodeFields & {
+    kind: "outputZipAlign";
   };
 
 export type ImageGeneratorNodeData = BaseNodeData &
@@ -264,11 +265,11 @@ export type WorkflowNodeData =
   | PromptNodeData
   | ListNodeData
   | AssetNodeData
-  | LaneReorderNodeData
-  | LaneSelectNodeData
-  | LaneSplitNodeData
-  | LaneMergeNodeData
-  | LaneZipAlignNodeData
+  | OutputReorderNodeData
+  | OutputSelectNodeData
+  | OutputSplitNodeData
+  | OutputMergeNodeData
+  | OutputZipAlignNodeData
   | ImageGeneratorNodeData
   | VideoGeneratorNodeData
   | LlmGeneratorNodeData;

@@ -10,7 +10,7 @@ import type {
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
 import { WorkflowExecutionError } from "~/lib/workflow/errors";
-import type { RuntimeValue } from "~/lib/workflow/lanes";
+import type { RuntimeValue } from "~/lib/workflow/runtime-values";
 import type {
   GenerateImageRequest,
   GenerateImageResponse,
@@ -19,7 +19,7 @@ import type {
   GenerateVideoRequest,
   GenerateVideoResponse,
   WorkflowNodeStatus,
-  WorkflowReviewLaneStatus,
+  WorkflowOutputReviewStatus,
 } from "~/lib/workflow/types";
 
 export type WorkflowExecutionTarget =
@@ -36,37 +36,53 @@ export type StartWorkflowExecutionRequest = {
   projectId?: string | null;
   target: WorkflowExecutionTarget;
   selection?: WorkflowExecutionSelection | null;
-  clientRunId?: string | null;
+  clientExecutionId?: string | null;
   documentRevision?: number | null;
   idempotencyKey?: string | null;
-  executionLaneFilter?: {
-    laneCount: number;
-    laneIndex: number;
+  executionOutputFilter?: {
+    outputCount: number;
+    outputIndex: number;
   } | null;
-  reviewLaneFilter?: {
-    laneIndex: number;
+  reviewOutputFilter?: {
+    outputIndex: number;
     reviewNodeId: string;
   } | null;
 };
 
-export type WorkflowRunStatus =
+export type TaskRunExecutionDocumentSnapshot = {
+  type: "workflow-task-run-execution-document-snapshot";
+  version: 1;
+  projectId: string;
+  executionId: string;
+  jobId: string;
+  taskRunId: string;
+  targetNodeId: string;
+  outputIndex: number;
+  outputCount: number;
+  documentRevision: number | null;
+  document: WorkflowDocument;
+  resolvedUpstreamOutputs: NodeOutputArtifact[];
+  requestContext: WorkflowExecutionRequestContext;
+};
+
+export type WorkflowExecutionStatus =
   | "queued"
   | "running"
   | "waiting_for_review"
   | "success"
   | "error";
 
-export type WorkflowRunArtifactStatus = Extract<
-  WorkflowRunStatus,
+export type WorkflowOutputArtifactStatus = Extract<
+  WorkflowExecutionStatus,
   "running" | "waiting_for_review" | "success" | "error"
 >;
 
-export type NodeLaneOutputArtifact = {
-  runId: string;
+export type NodeOutputArtifact = {
+  executionId: string;
   projectId: string;
   ownerUserId: string;
   nodeId: string;
-  laneIndex: number;
+  outputIndex: number;
   attempt: number;
   documentRevision: number | null;
   value: RuntimeValue;
@@ -74,55 +90,75 @@ export type NodeLaneOutputArtifact = {
   idempotencyKey: string;
   promptSnapshot: string | null;
   model: string | null;
-  reviewStatus: WorkflowReviewLaneStatus | null;
+  reviewStatus: WorkflowOutputReviewStatus | null;
 };
 
-export type WorkflowLaneErrorArtifact = {
-  runId: string;
+export type WorkflowOutputErrorArtifact = {
+  executionId: string;
   projectId: string;
   ownerUserId: string;
   nodeId: string;
-  laneIndex: number;
+  outputIndex: number;
   attempt: number;
   error: string;
   failedAt: string;
 };
 
-export type WorkflowLaneResultArtifact =
-  | ({ status: "success" } & NodeLaneOutputArtifact)
-  | ({ status: "error" } & WorkflowLaneErrorArtifact);
+export type WorkflowOutputResultArtifact =
+  | ({ status: "success" | "waiting_for_review" } & NodeOutputArtifact)
+  | ({ status: "error" } & WorkflowOutputErrorArtifact);
 
-export type ReviewLaneArtifact = {
-  runId: string;
+export type OutputReviewArtifact = {
+  executionId: string;
   projectId: string;
   ownerUserId: string;
   nodeId: string;
-  laneIndex: number;
+  outputIndex: number;
   attempt: number;
   valueType: RuntimeValue["type"];
-  status: WorkflowReviewLaneStatus;
+  status: WorkflowOutputReviewStatus;
 };
 
-export type LaneExecutionResult = {
-  runId: string;
-  laneIndex: number | null;
-  outputs: NodeLaneOutputArtifact[];
-  status: WorkflowRunArtifactStatus;
+export type OutputExecutionResult = {
+  executionId: string;
+  outputIndex: number | null;
+  outputs: NodeOutputArtifact[];
+  status: WorkflowOutputArtifactStatus;
   costCredits: number;
+  costCreditsByOutputKey?: ReadonlyMap<string, number>;
 };
 
-export type WorkflowRunArtifacts = {
-  laneResults: WorkflowLaneResultArtifact[];
+export type WorkflowOutputArtifacts = {
+  outputResults: WorkflowOutputResultArtifact[];
 };
 
-function workflowLaneResultKey(result: WorkflowLaneResultArtifact) {
-  return `${result.runId}:${result.nodeId}:${result.laneIndex}`;
+export function getWorkflowOutputKey(output: {
+  nodeId: string;
+  outputIndex: number;
+}) {
+  return `${output.nodeId}:${output.outputIndex}`;
 }
 
-export function getLatestWorkflowLaneResults(artifacts: WorkflowRunArtifacts) {
-  const latest = new Map<string, WorkflowLaneResultArtifact>();
-  for (const result of artifacts.laneResults) {
-    const key = workflowLaneResultKey(result);
+export type WorkflowCurrentOutputSlot = {
+  currentAttempt: WorkflowOutputResultArtifact;
+  committedOutput: NodeOutputArtifact | null;
+};
+
+export type WorkflowCurrentOutputProjection = ReadonlyMap<
+  string,
+  WorkflowCurrentOutputSlot
+>;
+
+function workflowOutputResultKey(result: WorkflowOutputResultArtifact) {
+  return `${result.projectId}:${result.nodeId}:${result.outputIndex}`;
+}
+
+export function getLatestWorkflowOutputResults(
+  artifacts: WorkflowOutputArtifacts,
+) {
+  const latest = new Map<string, WorkflowOutputResultArtifact>();
+  for (const result of artifacts.outputResults) {
+    const key = workflowOutputResultKey(result);
     const existing = latest.get(key);
     if (!existing || existing.attempt < result.attempt) {
       latest.set(key, result);
@@ -131,30 +167,56 @@ export function getLatestWorkflowLaneResults(artifacts: WorkflowRunArtifacts) {
   return Array.from(latest.values());
 }
 
-export function getSuccessfulWorkflowLaneOutputs(
-  artifacts: WorkflowRunArtifacts,
+export function buildCurrentWorkflowOutputProjection(
+  artifacts: WorkflowOutputArtifacts,
+): WorkflowCurrentOutputProjection {
+  return new Map(
+    getLatestWorkflowOutputResults(artifacts).map((result) => [
+      workflowOutputResultKey(result),
+      {
+        currentAttempt: result,
+        committedOutput: result.status === "success" ? result : null,
+      },
+    ]),
+  );
+}
+
+export function getSuccessfulWorkflowOutputs(
+  artifacts: WorkflowOutputArtifacts,
 ) {
-  return getLatestWorkflowLaneResults(artifacts).flatMap((result) =>
+  return getLatestWorkflowOutputResults(artifacts).flatMap((result) =>
     result.status === "success" ? [result] : [],
   );
 }
 
-export function getLatestReviewLaneArtifacts(artifacts: WorkflowRunArtifacts) {
-  const latest = new Map<string, ReviewLaneArtifact>();
-  for (const output of getSuccessfulWorkflowLaneOutputs(artifacts)) {
+export function getMaterializedWorkflowOutputs(
+  artifacts: WorkflowOutputArtifacts,
+) {
+  return getLatestWorkflowOutputResults(artifacts).flatMap((result) =>
+    result.status === "success" || result.status === "waiting_for_review"
+      ? [result]
+      : [],
+  );
+}
+
+export function getLatestOutputReviewArtifacts(
+  artifacts: WorkflowOutputArtifacts,
+) {
+  const latest = new Map<string, OutputReviewArtifact>();
+  for (const output of getMaterializedWorkflowOutputs(artifacts)) {
     if (!output.reviewStatus) {
       continue;
     }
-    const key = `${output.runId}:${output.nodeId}:${output.laneIndex}`;
+    const key = `${output.projectId}:${output.nodeId}:${output.outputIndex}`;
     const existing = latest.get(key);
     if (!existing || existing.attempt < output.attempt) {
       latest.set(key, {
         attempt: output.attempt,
-        laneIndex: output.laneIndex,
+        outputIndex: output.outputIndex,
         nodeId: output.nodeId,
         ownerUserId: output.ownerUserId,
         projectId: output.projectId,
-        runId: output.runId,
+        executionId: output.executionId,
         status: output.reviewStatus,
         valueType: output.value.type,
       });
@@ -163,29 +225,35 @@ export function getLatestReviewLaneArtifacts(artifacts: WorkflowRunArtifacts) {
   return Array.from(latest.values());
 }
 
-export function getErroredWorkflowLaneResults(artifacts: WorkflowRunArtifacts) {
-  return getLatestWorkflowLaneResults(artifacts).flatMap((result) =>
+export function getErroredWorkflowOutputResults(
+  artifacts: WorkflowOutputArtifacts,
+) {
+  return getLatestWorkflowOutputResults(artifacts).flatMap((result) =>
     result.status === "error" ? [result] : [],
   );
 }
 
-export type NodeLaneOutputQuery = {
-  runId: string;
+export type NodeOutputQuery = {
+  executionId: string;
+  projectId?: string | null;
   ownerUserId: string;
   nodeId: string;
-  laneIndex: number;
+  outputIndex: number;
   attempt: number;
   inputHash: string;
 };
 
 export type RegenerationAttemptRequest = {
-  runId: string;
+  executionId: string;
+  projectId?: string | null;
   ownerUserId: string;
   nodeId: string;
-  laneIndex: number;
+  outputIndex: number;
 };
 
-export function isWorkflowRunActiveStatus(status: WorkflowRunStatus) {
+export function isWorkflowExecutionActiveStatus(
+  status: WorkflowExecutionStatus,
+) {
   return (
     status === "queued" ||
     status === "running" ||
@@ -193,13 +261,15 @@ export function isWorkflowRunActiveStatus(status: WorkflowRunStatus) {
   );
 }
 
-export function isWorkflowRunLockingStatus(status: WorkflowRunStatus) {
+export function isWorkflowExecutionLockingStatus(
+  status: WorkflowExecutionStatus,
+) {
   return status === "queued" || status === "running";
 }
 
 export type WorkflowExecutionRequestContext = Omit<
   StartWorkflowExecutionRequest,
-  "document" | "executionLaneFilter" | "reviewLaneFilter"
+  "document" | "executionOutputFilter" | "reviewOutputFilter"
 >;
 
 export type WorkflowExecutionNodeRuntimeState = {
@@ -224,7 +294,7 @@ export type WorkflowCreditsSummary = {
 
 export type WorkflowExecutionStatusResponse = {
   accruedCostCredits: number;
-  runId: string;
+  executionId: string;
   targetNodeIds: string[];
   projectDocumentRevision: number | null;
   finalCostCredits: number | null;
@@ -233,7 +303,7 @@ export type WorkflowExecutionStatusResponse = {
   requestContext: WorkflowExecutionRequestContext | null;
   activity: string;
   credits: WorkflowCreditsSummary | null;
-  status: WorkflowRunStatus;
+  status: WorkflowExecutionStatus;
 };
 
 export type WorkflowExecutionPortError =
@@ -250,16 +320,16 @@ export class WorkflowReviewPause {
   readonly _tag = "WorkflowReviewPause";
 }
 
-export class WorkflowLaneDependencyMissing extends WorkflowExecutionError {
+export class WorkflowOutputDependencyMissing extends WorkflowExecutionError {
   constructor(
     readonly params: {
-      laneIndex: number;
+      outputIndex: number;
       nodeId: string;
       nodeLabel: string;
     },
   ) {
     super({
-      message: `Invariant violation: ${params.nodeLabel} lane ${params.laneIndex + 1} was scheduled before upstream lane ${params.nodeId}:${params.laneIndex} was visible.`,
+      message: `Invariant violation: ${params.nodeLabel} output ${params.outputIndex + 1} was scheduled before upstream output ${params.nodeId}:${params.outputIndex} was visible.`,
     });
   }
 }
@@ -274,19 +344,27 @@ export type WorkflowExecutionPorts = {
   readonly generateLlm: (
     request: GenerateLlmRequest,
   ) => Effect.Effect<GenerateLlmResponse, WorkflowExecutionPortError>;
-  readonly getNodeLaneOutput: (
-    query: Omit<NodeLaneOutputQuery, "ownerUserId">,
-  ) => Effect.Effect<NodeLaneOutputArtifact | null, WorkflowExecutionPortError>;
-  readonly getNodeLaneValue: (query: {
-    runId: string;
+  readonly getNodeOutput: (
+    query: Omit<NodeOutputQuery, "ownerUserId">,
+  ) => Effect.Effect<NodeOutputArtifact | null, WorkflowExecutionPortError>;
+  readonly getNodeOutputValue: (query: {
+    executionId: string;
     nodeId: string;
-    laneIndex: number;
+    outputIndex: number;
   }) => Effect.Effect<RuntimeValue | null, WorkflowExecutionPortError>;
+  readonly onOutputCost?: (params: {
+    amount: number;
+    attempt: number;
+    idempotencyKey: string;
+    inputHash: string;
+    nodeId: string;
+    outputIndex: number;
+  }) => Effect.Effect<number, WorkflowExecutionPortError>;
   readonly onCompleted?: (params: {
     document: WorkflowDocument;
     finalCostCredits: number;
     request: StartWorkflowExecutionRequest;
-    runId: string;
+    executionId: string;
     targetNodeIds: string[];
   }) => Effect.Effect<number | null, WorkflowExecutionPortError>;
   readonly onStateChange?: (

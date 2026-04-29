@@ -2,7 +2,7 @@ import type { WorkflowDocument } from "~/lib/workflow/document";
 import {
   buildIncomingByTarget,
   buildOutgoingBySource,
-  getAlignedLaneCount,
+  getAlignedOutputCount,
   getGeneratorInputHandles,
   getIncomingEdgesForHandle,
   getPromptNodeReferencedVariableKeys,
@@ -10,16 +10,16 @@ import {
   getWorkflowGeneratorOutputRuntimeValue,
 } from "~/lib/workflow/graph";
 import {
-  getLaneSelectionValidationMessage,
-  getLaneSplitValidationMessage,
-} from "~/lib/workflow/lanes";
-import {
-  LANE_REORDER_INPUT_HANDLE_ID,
-  LANE_TRANSFORM_INPUT_HANDLE_ID,
+  OUTPUT_REORDER_INPUT_HANDLE_ID,
+  OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
   PROMPT_VARIABLE_PATTERN,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
-import { getReviewLaneCount } from "~/lib/workflow/review-state";
+import { getReviewOutputCount } from "~/lib/workflow/review-state";
+import {
+  getOutputSelectionValidationMessage,
+  getOutputSplitValidationMessage,
+} from "~/lib/workflow/runtime-values";
 
 export type GeneratorIterationInfo = {
   hasIterator: boolean;
@@ -29,7 +29,7 @@ export type GeneratorIterationInfo = {
 
 type PlannedValue = {
   type: WorkflowValueType;
-  laneCount: number;
+  outputCount: number;
   mismatched: boolean;
 };
 
@@ -68,11 +68,11 @@ function getNodeOutputValueType(
       return "text";
     case "asset":
       return node.assetKind;
-    case "laneReorder":
-    case "laneSelect":
-    case "laneSplit":
-    case "laneMerge":
-    case "laneZipAlign":
+    case "outputReorder":
+    case "outputSelect":
+    case "outputSplit":
+    case "outputMerge":
+    case "outputZipAlign":
       return node.valueType;
     case "imageGenerator":
       return "image";
@@ -84,15 +84,15 @@ function getNodeOutputValueType(
 function toGeneratorIterationInfo(
   values: readonly PlannedValue[],
 ): GeneratorIterationInfo {
-  const laneCounts = values.map((value) => value.laneCount);
+  const outputCounts = values.map((value) => value.outputCount);
   const hasNestedMismatch = values.some((value) => value.mismatched);
 
-  if (!laneCounts.length) {
+  if (!outputCounts.length) {
     return DEFAULT_GENERATOR_ITERATION_INFO;
   }
 
   try {
-    const iterations = getAlignedLaneCount(laneCounts);
+    const iterations = getAlignedOutputCount(outputCounts);
     return {
       hasIterator: iterations > 1,
       iterations,
@@ -101,7 +101,7 @@ function toGeneratorIterationInfo(
   } catch {
     return {
       hasIterator: true,
-      iterations: Math.max(...laneCounts),
+      iterations: Math.max(...outputCounts),
       mismatchedIterators: true,
     };
   }
@@ -119,7 +119,7 @@ function mergePlannedValues(
   const info = toGeneratorIterationInfo(filteredValues);
   return {
     type,
-    laneCount: info.iterations,
+    outputCount: info.iterations,
     mismatched: info.mismatchedIterators,
   };
 }
@@ -138,16 +138,16 @@ function zipAlignPlannedValues(
     return mergePlannedValues(type, filteredValues);
   }
 
-  const laneCounts = filteredValues.map((value) => value.laneCount);
-  const [laneCount] = laneCounts;
+  const outputCounts = filteredValues.map((value) => value.outputCount);
+  const [outputCount] = outputCounts;
   const mismatched =
-    laneCount === undefined ||
+    outputCount === undefined ||
     filteredValues.some((value) => value.mismatched) ||
-    laneCounts.some((count) => count !== laneCount);
+    outputCounts.some((count) => count !== outputCount);
 
   return {
     type,
-    laneCount: mismatched ? Math.max(...laneCounts) : laneCount,
+    outputCount: mismatched ? Math.max(...outputCounts) : outputCount,
     mismatched,
   };
 }
@@ -192,14 +192,14 @@ function resolvePromptPlan(
 
   if (!variableValues.length) {
     return hasPromptStaticText(node)
-      ? { laneCount: 1, mismatched: false, type: "text" }
+      ? { outputCount: 1, mismatched: false, type: "text" }
       : null;
   }
 
   const info = toGeneratorIterationInfo(variableValues);
   return {
     type: "text",
-    laneCount: info.iterations,
+    outputCount: info.iterations,
     mismatched: info.mismatchedIterators,
   };
 }
@@ -240,11 +240,11 @@ function planGeneratorNode(
   const inputInfo = toGeneratorIterationInfo(
     resolveGeneratorInputPlans(context, node.id, path),
   );
-  const reviewLaneCount = getReviewLaneCount(node);
+  const reviewOutputCount = getReviewOutputCount(node);
   const info = {
     ...inputInfo,
-    hasIterator: inputInfo.hasIterator || reviewLaneCount > 1,
-    iterations: Math.max(inputInfo.iterations, reviewLaneCount),
+    hasIterator: inputInfo.hasIterator || reviewOutputCount > 1,
+    iterations: Math.max(inputInfo.iterations, reviewOutputCount),
   };
   context.generatorIterationById.set(node.id, info);
   return info;
@@ -276,22 +276,24 @@ function resolveNodePlan(
 
   switch (node.kind) {
     case "list": {
-      const laneCount = node.items.filter((item) => item.trim()).length;
-      return laneCount ? { laneCount, mismatched: false, type: "text" } : null;
+      const outputCount = node.items.filter((item) => item.trim()).length;
+      return outputCount
+        ? { outputCount, mismatched: false, type: "text" }
+        : null;
     }
     case "asset":
       return node.assetKind && node.assets.length
         ? {
-            laneCount: node.assets.length,
+            outputCount: node.assets.length,
             mismatched: false,
             type: node.assetKind,
           }
         : null;
-    case "laneReorder": {
+    case "outputReorder": {
       const incomingEdges = getIncomingEdgesForHandle(
         context.incomingByTarget,
         node.id,
-        LANE_REORDER_INPUT_HANDLE_ID,
+        OUTPUT_REORDER_INPUT_HANDLE_ID,
       );
       if (incomingEdges.length !== 1) {
         return null;
@@ -310,11 +312,11 @@ function resolveNodePlan(
       );
       return value?.type === node.valueType ? value : null;
     }
-    case "laneSelect": {
+    case "outputSelect": {
       const incomingEdge = getIncomingEdgesForHandle(
         context.incomingByTarget,
         node.id,
-        LANE_TRANSFORM_INPUT_HANDLE_ID,
+        OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
       )[0];
       const value = incomingEdge
         ? resolveNodePlan(
@@ -327,23 +329,23 @@ function resolveNodePlan(
       return value?.type === node.valueType
         ? {
             ...value,
-            laneCount: node.indices.length,
+            outputCount: node.indices.length,
             mismatched:
               value.mismatched ||
               Boolean(
-                getLaneSelectionValidationMessage(
+                getOutputSelectionValidationMessage(
                   node.indices,
-                  value.laneCount,
+                  value.outputCount,
                 ),
               ),
           }
         : null;
     }
-    case "laneSplit": {
+    case "outputSplit": {
       const incomingEdge = getIncomingEdgesForHandle(
         context.incomingByTarget,
         node.id,
-        LANE_TRANSFORM_INPUT_HANDLE_ID,
+        OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
       )[0];
       const value = incomingEdge
         ? resolveNodePlan(
@@ -354,27 +356,30 @@ function resolveNodePlan(
           )
         : null;
       const outputIndex = Number(
-        (sourceHandleId ?? "lane-0").replace("lane-", ""),
+        (sourceHandleId ?? "output-0").replace("output-", ""),
       );
       return value?.type === node.valueType && Number.isInteger(outputIndex)
         ? {
             ...value,
-            laneCount: 1,
+            outputCount: 1,
             mismatched:
               value.mismatched ||
               Boolean(
-                getLaneSplitValidationMessage(node.splitCount, value.laneCount),
+                getOutputSplitValidationMessage(
+                  node.splitCount,
+                  value.outputCount,
+                ),
               ) ||
-              outputIndex >= value.laneCount,
+              outputIndex >= value.outputCount,
           }
         : null;
     }
-    case "laneMerge":
-    case "laneZipAlign": {
+    case "outputMerge":
+    case "outputZipAlign": {
       const values = getIncomingEdgesForHandle(
         context.incomingByTarget,
         node.id,
-        LANE_TRANSFORM_INPUT_HANDLE_ID,
+        OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
       )
         .map((edge) =>
           resolveNodePlan(context, edge.source, nextPath, edge.sourceHandle),
@@ -386,9 +391,12 @@ function resolveNodePlan(
       if (!values.length || !node.valueType) {
         return null;
       }
-      return node.kind === "laneMerge"
+      return node.kind === "outputMerge"
         ? {
-            laneCount: values.reduce((sum, value) => sum + value.laneCount, 0),
+            outputCount: values.reduce(
+              (sum, value) => sum + value.outputCount,
+              0,
+            ),
             mismatched: values.some((value) => value.mismatched),
             type: node.valueType,
           }
@@ -402,7 +410,7 @@ function resolveNodePlan(
       const storedOutput = getWorkflowGeneratorOutputRuntimeValue(node);
       if (storedOutput && !context.targetNodeIdSet.has(node.id)) {
         return {
-          laneCount: storedOutput.lanes.length,
+          outputCount: storedOutput.items.length,
           mismatched: false,
           type: storedOutput.type,
         };
@@ -410,23 +418,23 @@ function resolveNodePlan(
 
       const awaitingReviewOutput =
         getWorkflowGeneratorAwaitingReviewRuntimeValue(node);
-      const reviewLaneCount = getReviewLaneCount(node);
+      const reviewOutputCount = getReviewOutputCount(node);
       if (awaitingReviewOutput && !context.targetNodeIdSet.has(node.id)) {
         context.reviewBarrierNodeIds.add(node.id);
         return {
-          laneCount: Math.max(
-            awaitingReviewOutput.lanes.length,
-            reviewLaneCount,
+          outputCount: Math.max(
+            awaitingReviewOutput.items.length,
+            reviewOutputCount,
           ),
           mismatched: false,
           type: awaitingReviewOutput.type,
         };
       }
 
-      if (reviewLaneCount > 0 && !context.targetNodeIdSet.has(node.id)) {
+      if (reviewOutputCount > 0 && !context.targetNodeIdSet.has(node.id)) {
         context.reviewBarrierNodeIds.add(node.id);
         return {
-          laneCount: reviewLaneCount,
+          outputCount: reviewOutputCount,
           mismatched: false,
           type: node.review.valueType ?? outputType,
         };
@@ -434,7 +442,7 @@ function resolveNodePlan(
 
       const info = planGeneratorNode(context, node, nextPath);
       return {
-        laneCount: info.iterations,
+        outputCount: info.iterations,
         mismatched: info.mismatchedIterators,
         type: outputType,
       };
@@ -470,7 +478,7 @@ export function buildWorkflowExecutionPlan(
   };
 }
 
-export function getWorkflowPlannedLaneCount(
+export function getWorkflowPlannedOutputCount(
   document: WorkflowDocument,
   nodeId: string,
   sourceHandleId?: string | null,
@@ -501,7 +509,8 @@ export function getWorkflowPlannedLaneCount(
   };
 
   return (
-    resolveNodePlan(context, nodeId, new Set(), sourceHandleId)?.laneCount ?? 1
+    resolveNodePlan(context, nodeId, new Set(), sourceHandleId)?.outputCount ??
+    1
   );
 }
 

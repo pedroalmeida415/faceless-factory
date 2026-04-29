@@ -8,15 +8,15 @@ import {
   type WorkflowDocument,
 } from "~/lib/workflow/document";
 import { executeWorkflow } from "~/lib/workflow/execution/core";
-import type { NodeLaneOutputArtifact } from "~/lib/workflow/execution/types";
+import type { NodeOutputArtifact } from "~/lib/workflow/execution/types";
 import { GEMINI_3_FLASH_PREVIEW_MODEL_ID } from "~/lib/workflow/types";
 
-describe("workflow execution lane scope", () => {
-  test("execution lane filter wins over review continuation metadata", async () => {
+describe("workflow execution output scope", () => {
+  test("execution output filter wins over review continuation metadata", async () => {
     const list = {
       ...createWorkflowNode("list", 0),
       id: "list",
-      items: ["lane-zero", "lane-one"],
+      items: ["output-zero", "output-one"],
     };
     const prompt = {
       ...createWorkflowNode("prompt", 1),
@@ -68,24 +68,24 @@ describe("workflow execution lane scope", () => {
               },
             });
           },
-          getNodeLaneOutput: () => Effect.succeed(null),
-          getNodeLaneValue: () => Effect.succeed(null),
+          getNodeOutput: () => Effect.succeed(null),
+          getNodeOutputValue: () => Effect.succeed(null),
         },
         request: {
           document,
-          executionLaneFilter: { laneCount: 2, laneIndex: 0 },
-          reviewLaneFilter: { laneIndex: 1, reviewNodeId: "review" },
+          executionOutputFilter: { outputCount: 2, outputIndex: 0 },
+          reviewOutputFilter: { outputIndex: 1, reviewNodeId: "review" },
           selection: { nodeIds: [llm.id] },
           target: { type: "selected-or-all" },
         },
-        runId: "run",
+        executionId: "run",
       }),
     );
 
-    assert.equal(generatedPrompt, "lane-zero");
+    assert.equal(generatedPrompt, "output-zero");
   });
 
-  test("cached lane output matches only successful attempt and input hash", async () => {
+  test("cached output output matches only successful attempt and input hash", async () => {
     const list = {
       ...createWorkflowNode("list", 0),
       id: "list",
@@ -129,7 +129,7 @@ describe("workflow execution lane scope", () => {
           generateImage: () => Effect.die("unexpected image generation"),
           generateVideo: () => Effect.die("unexpected video generation"),
           generateLlm: () => Effect.die("unexpected llm generation"),
-          getNodeLaneOutput: (query) => {
+          getNodeOutput: (query) => {
             queries.push({
               attempt: query.attempt,
               inputHash: query.inputHash,
@@ -139,16 +139,16 @@ describe("workflow execution lane scope", () => {
               documentRevision: null,
               idempotencyKey: "cache-hit",
               inputHash: query.inputHash,
-              laneIndex: query.laneIndex,
+              outputIndex: query.outputIndex,
               model: GEMINI_3_FLASH_PREVIEW_MODEL_ID,
               nodeId: query.nodeId,
               ownerUserId: "user",
               projectId: "project",
               promptSnapshot: null,
               reviewStatus: null,
-              runId: query.runId,
-              value: { lanes: ["cached text"], type: "text" },
-            } satisfies NodeLaneOutputArtifact;
+              executionId: query.executionId,
+              value: { items: ["cached text"], type: "text" },
+            } satisfies NodeOutputArtifact;
             const rows = [
               { ...cached, status: "error" as const },
               {
@@ -168,14 +168,14 @@ describe("workflow execution lane scope", () => {
               ) ?? null,
             );
           },
-          getNodeLaneValue: () => Effect.succeed(null),
+          getNodeOutputValue: () => Effect.succeed(null),
         },
         request: {
           document,
           selection: { nodeIds: [llm.id] },
           target: { type: "selected-or-all" },
         },
-        runId: "run",
+        executionId: "run",
       }),
     );
 
@@ -183,5 +183,74 @@ describe("workflow execution lane scope", () => {
       queries.map((query) => query.attempt),
       [0],
     );
+  });
+
+  test("charges only provider-backed output execution", async () => {
+    const prompt = {
+      ...createWorkflowNode("prompt", 0),
+      id: "prompt",
+      prompt: "write",
+      variables: [],
+    };
+    const llm = {
+      ...createWorkflowNode("llmGenerator", 1),
+      id: "llm",
+    };
+    const document: WorkflowDocument = {
+      edges: [
+        {
+          id: "prompt-llm",
+          source: prompt.id,
+          sourceHandle: "text",
+          target: llm.id,
+          targetHandle: "prompt",
+        },
+      ],
+      nodes: [prompt, llm],
+      version: WORKFLOW_DOCUMENT_VERSION,
+    };
+    const charges: { idempotencyKey: string; inputHash: string }[] = [];
+
+    const result = await Effect.runPromise(
+      executeWorkflow({
+        ports: {
+          generateImage: () => Effect.die("unexpected image generation"),
+          generateVideo: () => Effect.die("unexpected video generation"),
+          generateLlm: () =>
+            Effect.succeed({
+              model: GEMINI_3_FLASH_PREVIEW_MODEL_ID,
+              responseText: "done",
+              usage: {
+                candidatesTokenCount: 10,
+                promptTokenCount: 10,
+                thoughtsTokenCount: 0,
+                totalTokenCount: 20,
+              },
+            }),
+          getNodeOutput: () => Effect.succeed(null),
+          getNodeOutputValue: () => Effect.succeed(null),
+          onOutputCost: (charge) => {
+            charges.push({
+              idempotencyKey: charge.idempotencyKey,
+              inputHash: charge.inputHash,
+            });
+            return Effect.succeed(7);
+          },
+        },
+        request: {
+          document,
+          selection: { nodeIds: [llm.id] },
+          target: { type: "selected-or-all" },
+        },
+        executionId: "run",
+      }),
+    );
+
+    assert.equal(charges.length, 1);
+    const charge = charges[0];
+    assert.ok(charge);
+    assert.equal(charge.idempotencyKey.startsWith("run:llm:0:0:"), true);
+    assert.equal(charge.inputHash.length > 0, true);
+    assert.equal(result.accruedCostCredits, 7);
   });
 });

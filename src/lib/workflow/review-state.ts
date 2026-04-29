@@ -1,6 +1,6 @@
 import type { WorkflowDocumentNode } from "~/lib/workflow/document";
-import type { RuntimeValue } from "~/lib/workflow/lanes";
-import type { WorkflowAsset, WorkflowReviewLane } from "~/lib/workflow/types";
+import type { RuntimeValue } from "~/lib/workflow/runtime-values";
+import type { WorkflowAsset, WorkflowReviewOutput } from "~/lib/workflow/types";
 
 type ReviewableGeneratorNode = Extract<
   WorkflowDocumentNode,
@@ -16,28 +16,28 @@ function getAssetIdentity(asset: WorkflowAsset) {
   ].join("::");
 }
 
-export function isSameReviewLaneValue(
+export function isSameReviewOutputValue(
   value: RuntimeValue,
-  laneIndex: number,
-  existingLane: WorkflowReviewLane | undefined,
+  outputIndex: number,
+  existingOutput: WorkflowReviewOutput | undefined,
 ) {
-  if (!existingLane) {
+  if (!existingOutput) {
     return false;
   }
 
   switch (value.type) {
     case "text":
       return (
-        (value.lanes[laneIndex]?.trim() ?? "") ===
-        (existingLane.text?.trim() ?? "")
+        (value.items[outputIndex]?.trim() ?? "") ===
+        (existingOutput.text?.trim() ?? "")
       );
     case "image":
     case "video": {
-      const assets = value.lanes[laneIndex] ?? [];
+      const assets = value.items[outputIndex] ?? [];
       return (
-        assets.length === existingLane.assets.length &&
+        assets.length === existingOutput.assets.length &&
         assets.every((asset, index) => {
-          const existingAsset = existingLane.assets[index];
+          const existingAsset = existingOutput.assets[index];
           return (
             existingAsset !== undefined &&
             getAssetIdentity(asset) === getAssetIdentity(existingAsset)
@@ -48,35 +48,41 @@ export function isSameReviewLaneValue(
   }
 }
 
-export function toReviewLane(
+export function toReviewOutput(
   value: RuntimeValue,
-  laneIndex: number,
-  existingLane?: WorkflowReviewLane,
-): WorkflowReviewLane {
-  const isSameValue = isSameReviewLaneValue(value, laneIndex, existingLane);
-  const existingStatus = existingLane?.status;
+  outputIndex: number,
+  existingOutput?: WorkflowReviewOutput,
+): WorkflowReviewOutput {
+  const isSameValue = isSameReviewOutputValue(
+    value,
+    outputIndex,
+    existingOutput,
+  );
+  const existingStatus = existingOutput?.status;
   const status =
     isSameValue &&
     (existingStatus === "approved" || existingStatus === "regenerating")
       ? existingStatus
       : "pending";
-  const attempt = isSameValue ? (existingLane?.attempt ?? 0) : 0;
+  const attempt = isSameValue ? (existingOutput?.attempt ?? 0) : 0;
 
   switch (value.type) {
     case "text":
       return {
         assets: [],
         attempt,
-        laneIndex,
+        executionId: existingOutput?.executionId ?? null,
+        outputIndex,
         status,
-        text: value.lanes[laneIndex] ?? null,
+        text: value.items[outputIndex] ?? null,
       };
     case "image":
     case "video":
       return {
-        assets: value.lanes[laneIndex] ?? [],
+        assets: value.items[outputIndex] ?? [],
         attempt,
-        laneIndex,
+        executionId: existingOutput?.executionId ?? null,
+        outputIndex,
         status,
         text: null,
       };
@@ -93,18 +99,18 @@ export function syncGeneratorReviewForOutput(
   const existingByIndex = new Map(
     node.review.valueType === params.inputValue.type &&
       node.review.sourceNodeId === node.id
-      ? node.review.lanes.map((lane) => [lane.laneIndex, lane])
+      ? node.review.outputs.map((output) => [output.outputIndex, output])
       : [],
   );
   return {
     node: {
       ...node,
       review: {
-        lanes: params.inputValue.lanes.map((_, laneIndex) =>
-          toReviewLane(
+        outputs: params.inputValue.items.map((_, outputIndex) =>
+          toReviewOutput(
             params.inputValue,
-            laneIndex,
-            existingByIndex.get(laneIndex),
+            outputIndex,
+            existingByIndex.get(outputIndex),
           ),
         ),
         sourceNodeId: node.id,
@@ -126,22 +132,24 @@ export function getApprovedReviewRuntimeValue(
   }
 
   if (params) {
-    const laneCount = getReviewLaneCount(node);
+    const outputCount = getReviewOutputCount(node);
     if (
       node.review.sourceNodeId !== node.id ||
       params.inputValue.type !== node.review.valueType ||
-      params.inputValue.lanes.length !== laneCount
+      params.inputValue.items.length !== outputCount
     ) {
       return null;
     }
 
     if (
-      params.inputValue.lanes.some(
-        (_, laneIndex) =>
-          !isSameReviewLaneValue(
+      params.inputValue.items.some(
+        (_, outputIndex) =>
+          !isSameReviewOutputValue(
             params.inputValue,
-            laneIndex,
-            node.review.lanes.find((lane) => lane.laneIndex === laneIndex),
+            outputIndex,
+            node.review.outputs.find(
+              (output) => output.outputIndex === outputIndex,
+            ),
           ),
       )
     ) {
@@ -149,11 +157,11 @@ export function getApprovedReviewRuntimeValue(
     }
   }
 
-  const lanes = node.review.lanes
-    .filter((lane) => lane.status === "approved")
-    .sort((left, right) => left.laneIndex - right.laneIndex);
-  const laneCount = getReviewLaneCount(node);
-  if (!lanes.length || lanes.length !== laneCount) {
+  const outputs = node.review.outputs
+    .filter((output) => output.status === "approved")
+    .sort((left, right) => left.outputIndex - right.outputIndex);
+  const outputCount = getReviewOutputCount(node);
+  if (!outputs.length || outputs.length !== outputCount) {
     return null;
   }
 
@@ -161,20 +169,20 @@ export function getApprovedReviewRuntimeValue(
     case "text":
       return {
         type: "text",
-        lanes: lanes.map((lane) => lane.text?.trim() ?? ""),
+        items: outputs.map((output) => output.text?.trim() ?? ""),
       };
     case "image":
     case "video":
       return {
         type: node.review.valueType,
-        lanes: lanes.map((lane) => lane.assets),
+        items: outputs.map((output) => output.assets),
       };
   }
 }
 
-export function getApprovedReviewLaneRuntimeValue(
+export function getApprovedReviewOutputRuntimeValue(
   node: ReviewableGeneratorNode,
-  laneIndex: number,
+  outputIndex: number,
   params?: {
     inputValue: RuntimeValue;
   },
@@ -187,11 +195,11 @@ export function getApprovedReviewLaneRuntimeValue(
     if (
       node.review.sourceNodeId !== node.id ||
       params.inputValue.type !== node.review.valueType ||
-      !isSameReviewLaneValue(
+      !isSameReviewOutputValue(
         params.inputValue,
-        laneIndex,
-        node.review.lanes.find(
-          (candidate) => candidate.laneIndex === laneIndex,
+        outputIndex,
+        node.review.outputs.find(
+          (candidate) => candidate.outputIndex === outputIndex,
         ),
       )
     ) {
@@ -199,26 +207,26 @@ export function getApprovedReviewLaneRuntimeValue(
     }
   }
 
-  const lane = node.review.lanes.find(
-    (candidate) => candidate.laneIndex === laneIndex,
+  const output = node.review.outputs.find(
+    (candidate) => candidate.outputIndex === outputIndex,
   );
-  if (!lane || lane.status !== "approved") {
+  if (!output || output.status !== "approved") {
     return null;
   }
 
   switch (node.review.valueType) {
     case "text":
-      return { type: "text", lanes: [lane.text?.trim() ?? ""] };
+      return { type: "text", items: [output.text?.trim() ?? ""] };
     case "image":
     case "video":
-      return { type: node.review.valueType, lanes: [lane.assets] };
+      return { type: node.review.valueType, items: [output.assets] };
   }
 }
 
-export function getReviewLaneCount(node: ReviewableGeneratorNode) {
+export function getReviewOutputCount(node: ReviewableGeneratorNode) {
   return node.reviewEnabled && node.review.valueType !== null
-    ? node.review.lanes.reduce(
-        (count, lane) => Math.max(count, lane.laneIndex + 1),
+    ? node.review.outputs.reduce(
+        (count, output) => Math.max(count, output.outputIndex + 1),
         0,
       )
     : 0;
@@ -235,10 +243,10 @@ export function isReviewFullyApproved(node: WorkflowDocumentNode | undefined) {
     return false;
   }
 
-  const laneCount = getReviewLaneCount(node);
+  const outputCount = getReviewOutputCount(node);
   return (
-    laneCount > 0 &&
-    node.review.lanes.length === laneCount &&
-    node.review.lanes.every((lane) => lane.status === "approved")
+    outputCount > 0 &&
+    node.review.outputs.length === outputCount &&
+    node.review.outputs.every((output) => output.status === "approved")
   );
 }

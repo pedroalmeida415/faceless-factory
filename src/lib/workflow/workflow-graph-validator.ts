@@ -6,20 +6,20 @@ import {
   buildOutgoingBySource,
   getGeneratorInputHandles,
   getIncomingEdgesForHandle,
-  getLaneReorderInputValue,
-  getLaneTransformInputValue,
+  getOutputReorderInputValue,
+  getOutputTransformInputValue,
   isValidWorkflowEdge,
   resolvePromptNodeTextBatch,
 } from "~/lib/workflow/graph";
 import {
-  getLanePermutationValidationMessage,
-  getLaneSelectionValidationMessage,
-  getLaneSplitValidationMessage,
-} from "~/lib/workflow/lanes";
-import {
-  LANE_REORDER_INPUT_HANDLE_ID,
-  LANE_TRANSFORM_INPUT_HANDLE_ID,
+  OUTPUT_REORDER_INPUT_HANDLE_ID,
+  OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
 } from "~/lib/workflow/node-definitions";
+import {
+  getOutputPermutationValidationMessage,
+  getOutputSelectionValidationMessage,
+  getOutputSplitValidationMessage,
+} from "~/lib/workflow/runtime-values";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
 
 function failValidation(message: string): never {
@@ -81,7 +81,7 @@ function validateExecutionPlanNodes(
             getIncomingEdgesForHandle(incomingByTarget, node.id, key).length
               ? {
                   type: "text",
-                  lanes: [key],
+                  items: [key],
                 }
               : null,
           )
@@ -94,28 +94,28 @@ function validateExecutionPlanNodes(
           failValidation("Asset node is empty.");
         }
         break;
-      case "laneReorder": {
+      case "outputReorder": {
         const inputEdges = getIncomingEdgesForHandle(
           incomingByTarget,
           node.id,
-          LANE_REORDER_INPUT_HANDLE_ID,
+          OUTPUT_REORDER_INPUT_HANDLE_ID,
         );
 
         if (inputEdges.length !== 1) {
-          failValidation("Lane Reorder needs exactly one input.");
+          failValidation("Output Reorder needs exactly one input.");
         }
 
-        const inputValue = getLaneReorderInputValue(document, node.id);
+        const inputValue = getOutputReorderInputValue(document, node.id);
         if (inputValue && inputValue.type !== node.valueType) {
           failValidation(
-            "Lane Reorder input type does not match its lane type.",
+            "Output Reorder input type does not match its output type.",
           );
         }
 
         if (node.mode === "manual" && inputValue) {
-          const message = getLanePermutationValidationMessage(
+          const message = getOutputPermutationValidationMessage(
             node.order,
-            inputValue.lanes.length,
+            inputValue.items.length,
           );
           if (message) {
             failValidation(message);
@@ -123,39 +123,39 @@ function validateExecutionPlanNodes(
         }
         break;
       }
-      case "laneSelect":
-      case "laneSplit": {
+      case "outputSelect":
+      case "outputSplit": {
         if (
           getIncomingEdgesForHandle(
             incomingByTarget,
             node.id,
-            LANE_TRANSFORM_INPUT_HANDLE_ID,
+            OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
           ).length !== 1
         ) {
           failValidation(`${node.label} needs exactly one input.`);
         }
 
-        const inputValue = getLaneTransformInputValue(document, node.id);
+        const inputValue = getOutputTransformInputValue(document, node.id);
         if (inputValue && inputValue.type !== node.valueType) {
           failValidation(
-            `${node.label} input type does not match its lane type.`,
+            `${node.label} input type does not match its output type.`,
           );
         }
 
-        if (node.kind === "laneSelect" && inputValue) {
-          const message = getLaneSelectionValidationMessage(
+        if (node.kind === "outputSelect" && inputValue) {
+          const message = getOutputSelectionValidationMessage(
             node.indices,
-            inputValue.lanes.length,
+            inputValue.items.length,
           );
           if (message) {
             failValidation(message);
           }
         }
 
-        if (node.kind === "laneSplit" && inputValue) {
-          const message = getLaneSplitValidationMessage(
+        if (node.kind === "outputSplit" && inputValue) {
+          const message = getOutputSplitValidationMessage(
             node.splitCount,
-            inputValue.lanes.length,
+            inputValue.items.length,
           );
           if (message) {
             failValidation(message);
@@ -163,13 +163,13 @@ function validateExecutionPlanNodes(
         }
         break;
       }
-      case "laneMerge":
-      case "laneZipAlign":
+      case "outputMerge":
+      case "outputZipAlign":
         if (
           !getIncomingEdgesForHandle(
             incomingByTarget,
             node.id,
-            LANE_TRANSFORM_INPUT_HANDLE_ID,
+            OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
           ).length
         ) {
           failValidation(`${node.label} needs at least one input.`);
@@ -203,7 +203,7 @@ function validateExecutionPlanNodes(
         if (
           executionPlan.generatorIterationById.get(node.id)?.mismatchedIterators
         ) {
-          failValidation("Connected input lane counts do not match.");
+          failValidation("Connected input output counts do not match.");
         }
         break;
       }

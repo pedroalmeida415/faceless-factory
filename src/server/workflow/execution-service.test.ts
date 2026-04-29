@@ -8,11 +8,11 @@ mock.module("~/server/workflow/artifact-store", () => {
   class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")() {}
   return {
     WorkflowArtifactStore,
-    buildLaneExecutionResultFromDocument: () => ({
+    buildOutputExecutionResultFromDocument: () => ({
       costCredits: 0,
-      laneIndex: null,
+      outputIndex: null,
       outputs: [],
-      runId: "run",
+      executionId: "run",
       status: "success",
     }),
   };
@@ -30,9 +30,11 @@ mock.module("~/server/workflow/project-store", () => {
   return { WorkflowProjectStore };
 });
 
-mock.module("~/server/workflow/run-store", () => {
-  class WorkflowRunStore extends Context.Tag("WorkflowRunStore")() {}
-  return { WorkflowRunStore };
+mock.module("~/server/workflow/execution-store", () => {
+  class WorkflowExecutionStore extends Context.Tag(
+    "WorkflowExecutionStore",
+  )() {}
+  return { WorkflowExecutionStore };
 });
 
 mock.module("~/server/workflow/vertex", () => {
@@ -42,15 +44,37 @@ mock.module("~/server/workflow/vertex", () => {
 
 const enqueuedJobs = [];
 mock.module("~/server/workflow/queue", () => ({
-  createWorkflowExecutionLaneJobId: ({ laneIndex, nodeId, runId }) =>
-    `${runId}:${nodeId}:${laneIndex}`,
-  createWorkflowReviewRegenerationJobId: () => "review-job",
-  enqueueWorkflowExecutionJob: (job, options) => {
-    enqueuedJobs.push({ job, options });
+  enqueueWorkflowTaskRunJob: (job) => {
+    enqueuedJobs.push({ job, options: { jobId: job.taskRunId } });
     return Promise.resolve();
   },
-  enqueueWorkflowReviewRegenerationJob: () => Promise.resolve(),
   getWorkflowExecutionQueue: () => ({ getJobs: () => Promise.resolve([]) }),
+}));
+
+mock.module("~/server/workflow/task-queue-scanner", () => ({
+  enqueueQueuedWorkflowTasks: ({ taskRunIds }) => {
+    for (const taskRunId of taskRunIds ?? []) {
+      enqueuedJobs.push({ job: { taskRunId }, options: { jobId: taskRunId } });
+    }
+    return Effect.succeed(taskRunIds?.length ?? 0);
+  },
+}));
+
+mock.module("~/server/workflow/task-run-store", () => ({
+  claimQueuedWorkflowTaskRun: () =>
+    Effect.succeed({ claimed: false, row: null }),
+  createQueuedWorkflowTaskRuns: ({ executionId, jobs, ownerUserId }) =>
+    Effect.succeed(
+      jobs.map((job) => ({
+        executionId,
+        jobId: `${executionId}:${job.nodeId}:${job.outputIndex}`,
+        taskRunId: `${executionId}:${job.nodeId}:${job.outputIndex}`,
+        userId: ownerUserId,
+      })),
+    ),
+  getTaskRunExecutionDocumentSnapshot: () => null,
+  getTaskRunSnapshotOutputValue: () => null,
+  toTaskRunExecutionRequest: (snapshot) => snapshot,
 }));
 
 const {
@@ -58,7 +82,6 @@ const {
   toWorkflowGraphDocument,
   WORKFLOW_DOCUMENT_VERSION,
 } = await import("~/lib/workflow/document");
-const { LLM_ESTIMATED_CREDIT_COST } = await import("~/lib/workflow/llm-models");
 const { WorkflowExecutionService } = await import(
   "~/server/workflow/execution-service"
 );
@@ -69,7 +92,9 @@ const { WorkflowCreditsService } = await import("~/server/workflow/credits");
 const { WorkflowProjectStore } = await import(
   "~/server/workflow/project-store"
 );
-const { WorkflowRunStore } = await import("~/server/workflow/run-store");
+const { WorkflowExecutionStore } = await import(
+  "~/server/workflow/execution-store"
+);
 const { VertexAi } = await import("~/server/workflow/vertex");
 
 function workflowDocument() {
@@ -107,59 +132,59 @@ function workflowDocument() {
   };
 }
 
-function success(laneIndex, runId, updatedAt) {
+function success(outputIndex, executionId, updatedAt) {
   return {
     attempt: 0,
     documentRevision: 1,
-    idempotencyKey: `${runId}:${laneIndex}`,
-    inputHash: `${runId}:ignored-input-${laneIndex}`,
-    laneIndex,
+    idempotencyKey: `${executionId}:${outputIndex}`,
+    inputHash: `${executionId}:ignored-input-${outputIndex}`,
+    outputIndex,
     model: "ignored-model",
     nodeId: "llm",
     ownerUserId: "user",
     projectId: "project",
     promptSnapshot: "ignored prompt",
     reviewStatus: null,
-    runId,
+    executionId,
     status: "success",
     updatedAt,
-    value: { lanes: [`output-${laneIndex}`], type: "text" },
+    value: { items: [`output-${outputIndex}`], type: "text" },
   };
 }
 
-function laneError(laneIndex, runId, updatedAt) {
+function outputError(outputIndex, executionId, updatedAt) {
   return {
     attempt: 0,
     error: "failed",
     failedAt: updatedAt,
-    laneIndex,
+    outputIndex,
     nodeId: "llm",
     ownerUserId: "user",
     projectId: "project",
-    runId,
+    executionId,
     status: "error",
     updatedAt,
   };
 }
 
-describe("WorkflowExecutionService startRun lane recovery", () => {
-  test("starts a new run, reuses only latest successful lanes, quotes and queues only missing lanes", async () => {
+describe("WorkflowExecutionService startExecution output recovery", () => {
+  test("starts a new run without upfront debit and queues only missing outputs", async () => {
     enqueuedJobs.length = 0;
-    const oldFailedRunId = "old-failed-run";
-    const oldLaneError = laneError(
+    const oldFailedExecutionId = "old-failed-run";
+    const oldOutputError = outputError(
       1,
-      oldFailedRunId,
+      oldFailedExecutionId,
       "2026-01-03T00:00:00.000Z",
     );
     const priorResults = [
-      success(0, oldFailedRunId, "2026-01-01T00:00:00.000Z"),
+      success(0, oldFailedExecutionId, "2026-01-01T00:00:00.000Z"),
       success(1, "older-success", "2026-01-01T00:00:00.000Z"),
-      oldLaneError,
+      oldOutputError,
       success(2, "old-success-run", "2026-01-02T00:00:00.000Z"),
     ];
     const copiedOutputs = [];
     const createdRuns = [];
-    const debits = [];
+    const outputDebits = [];
     const document = workflowDocument();
 
     const TestLayer = WorkflowExecutionService.Live.pipe(
@@ -175,30 +200,38 @@ describe("WorkflowExecutionService startRun lane recovery", () => {
               }),
           }),
           Layer.succeed(WorkflowArtifactStore, {
-            copyReusableLaneOutputs: ({ outputs }) => {
+            copyReusableOutputs: ({ outputs }) => {
               copiedOutputs.push(...outputs);
               return Effect.succeed(outputs.length);
             },
-            getProjectLaneReuseCandidates: () => Effect.succeed(priorResults),
-            getRunArtifacts: () =>
+            getActiveOutputKeys: () => Effect.succeed([]),
+            getProjectOutputReuseCandidates: () => Effect.succeed(priorResults),
+            getOutputArtifacts: () =>
               Effect.succeed({
-                laneResults: copiedOutputs.map((output) => ({
+                outputResults: copiedOutputs.map((output) => ({
                   ...output,
                   status: "success",
                 })),
               }),
           }),
           Layer.succeed(WorkflowCreditsService, {
-            debitExecution: (params) => {
-              debits.push(params);
+            debitExecutionOutput: (params) => {
+              outputDebits.push(params);
               return Effect.succeed({
                 available: 1000,
-                reserved: params.amount,
+                reserved: 0,
                 totalCost: params.amount,
-                used: 0,
+                used: params.amount,
               });
             },
-            refundExecution: () =>
+            getBalanceSummary: () =>
+              Effect.succeed({
+                available: 1000,
+                reserved: 0,
+                totalCost: 0,
+                used: 0,
+              }),
+            getExecutionSummary: () =>
               Effect.succeed({
                 available: 1000,
                 reserved: 0,
@@ -206,12 +239,12 @@ describe("WorkflowExecutionService startRun lane recovery", () => {
                 used: 0,
               }),
           }),
-          Layer.succeed(WorkflowRunStore, {
-            createRun: ({ run }) => {
+          Layer.succeed(WorkflowExecutionStore, {
+            createExecution: ({ run }) => {
               createdRuns.push(run);
               return Effect.succeed(run);
             },
-            updateRun: (run) => Effect.succeed(run),
+            updateExecution: (run) => Effect.succeed(run),
           }),
           Layer.succeed(VertexAi, {}),
         ),
@@ -221,7 +254,7 @@ describe("WorkflowExecutionService startRun lane recovery", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const service = yield* WorkflowExecutionService;
-        return yield* service.startRun("user", {
+        return yield* service.startExecution("user", {
           document,
           documentRevision: 1,
           projectId: "project",
@@ -230,20 +263,16 @@ describe("WorkflowExecutionService startRun lane recovery", () => {
       }).pipe(Effect.provide(TestLayer)),
     );
 
-    assert.notEqual(result.runId, oldFailedRunId);
-    assert.equal(oldLaneError.status, "error");
+    assert.notEqual(result.executionId, oldFailedExecutionId);
+    assert.equal(oldOutputError.status, "error");
     assert.deepEqual(
-      copiedOutputs.map((output) => output.laneIndex),
+      copiedOutputs.map((output) => output.outputIndex),
       [0, 2],
     );
-    assert.equal(debits[0].amount, LLM_ESTIMATED_CREDIT_COST);
+    assert.equal(outputDebits.length, 0);
     assert.deepEqual(
-      enqueuedJobs.map(({ job }) => job.request.executionLaneFilter.laneIndex),
-      [1],
-    );
-    assert.deepEqual(
-      enqueuedJobs.map(({ job }) => job.request.selection.nodeIds),
-      [["llm"]],
+      enqueuedJobs.map(({ job }) => job.taskRunId.split(":").slice(1)),
+      [["llm", "1"]],
     );
     assert.equal(createdRuns[0].status, "queued");
   });

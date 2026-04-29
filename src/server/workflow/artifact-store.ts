@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray, isNotNull, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import {
@@ -14,30 +14,30 @@ import {
   getGeneratorOutputInputHash,
 } from "~/lib/workflow/execution/artifact-identity";
 import {
-  getWorkflowLaneKey,
-  type WorkflowLaneIdentity,
-} from "~/lib/workflow/execution/lane-dependencies";
-import type { ReusableWorkflowLaneCandidate } from "~/lib/workflow/execution/lane-result-reuse";
+  getWorkflowOutputKey,
+  type WorkflowOutputIdentity,
+} from "~/lib/workflow/execution/output-dependencies";
+import type { ReusableWorkflowOutputCandidate } from "~/lib/workflow/execution/output-result-reuse";
 import type {
-  LaneExecutionResult,
-  NodeLaneOutputArtifact,
-  NodeLaneOutputQuery,
+  NodeOutputArtifact,
+  NodeOutputQuery,
+  OutputExecutionResult,
   RegenerationAttemptRequest,
-  WorkflowLaneErrorArtifact,
-  WorkflowRunArtifactStatus,
-  WorkflowRunArtifacts,
+  WorkflowOutputArtifactStatus,
+  WorkflowOutputArtifacts,
+  WorkflowOutputErrorArtifact,
 } from "~/lib/workflow/execution/types";
-import type { RuntimeValue } from "~/lib/workflow/lanes";
+import type { RuntimeValue } from "~/lib/workflow/runtime-values";
 import type {
   WorkflowAsset,
-  WorkflowReviewLaneStatus,
+  WorkflowOutputReviewStatus,
 } from "~/lib/workflow/types";
 import { db } from "~/server/db";
-import { assets, workflowLaneResults, workflowRuns } from "~/server/db/schema";
+import { assets, nodeExecutions, taskRuns } from "~/server/db/schema";
 
-type LaneResultRow = typeof workflowLaneResults.$inferSelect;
 type AssetRow = typeof assets.$inferSelect;
-
+type NodeExecutionRow = typeof nodeExecutions.$inferSelect;
+type TaskRunRow = typeof taskRuns.$inferSelect;
 type ArtifactStoreError = WorkflowInfrastructureError | WorkflowValidationError;
 type GeneratorWorkflowNode = Extract<
   WorkflowDocument["nodes"][number],
@@ -70,180 +70,152 @@ function toWorkflowAsset(row: AssetRow): WorkflowAsset {
   };
 }
 
-function toOutputArtifact(params: {
-  laneIndex: number;
-  documentRevision: number | null;
-  node: GeneratorWorkflowNode;
-  ownerUserId: string;
+function getOutputPersistenceKey(output: {
   projectId: string;
-  runId: string;
+  nodeId: string;
+  outputIndex: number;
 }) {
-  const { laneIndex, node } = params;
-  const attempt = getGeneratorOutputAttempt(node, laneIndex);
-
-  if (node.kind === "llmGenerator") {
-    const text = node.outputLanes[laneIndex]?.trim();
-    if (!text) {
-      return null;
-    }
-    const value = { type: "text", lanes: [text] } satisfies RuntimeValue;
-    const promptSnapshot = node.lastPrompt || null;
-    const inputHash = getGeneratorOutputInputHash({
-      laneIndex,
-      node,
-      promptSnapshot,
-      systemPromptSnapshot: node.lastSystemPrompt || null,
-    });
-    return {
-      attempt,
-      documentRevision: params.documentRevision,
-      idempotencyKey: getGeneratorOutputIdempotencyKey({
-        attempt,
-        inputHash,
-        laneIndex,
-        node,
-        runId: params.runId,
-      }),
-      inputHash,
-      laneIndex,
-      model: node.model,
-      nodeId: node.id,
-      ownerUserId: params.ownerUserId,
-      projectId: params.projectId,
-      promptSnapshot,
-      reviewStatus: getNodeReviewStatus(node, laneIndex, attempt),
-      runId: params.runId,
-      value,
-    } satisfies NodeLaneOutputArtifact;
-  }
-
-  const assets = node.outputLanes[laneIndex] ?? [];
-  if (!assets.length) {
-    return null;
-  }
-  const value = {
-    type: node.kind === "imageGenerator" ? "image" : "video",
-    lanes: [assets],
-  } satisfies RuntimeValue;
-  const promptSnapshot = node.lastPrompt || null;
-  const inputHash = getGeneratorOutputInputHash({
-    laneIndex,
-    node,
-    promptSnapshot,
-  });
-
-  return {
-    attempt,
-    documentRevision: params.documentRevision,
-    idempotencyKey: getGeneratorOutputIdempotencyKey({
-      attempt,
-      inputHash,
-      laneIndex,
-      node,
-      runId: params.runId,
-    }),
-    inputHash,
-    laneIndex,
-    model: node.model,
-    nodeId: node.id,
-    ownerUserId: params.ownerUserId,
-    projectId: params.projectId,
-    promptSnapshot,
-    reviewStatus: getNodeReviewStatus(node, laneIndex, attempt),
-    runId: params.runId,
-    value,
-  } satisfies NodeLaneOutputArtifact;
+  return `${output.projectId}:${output.nodeId}:${output.outputIndex}`;
 }
 
 function getNodeReviewStatus(
   node: GeneratorWorkflowNode,
-  laneIndex: number,
+  outputIndex: number,
   attempt: number,
 ) {
   return node.reviewEnabled
-    ? (node.review.lanes.find(
-        (lane) => lane.laneIndex === laneIndex && lane.attempt === attempt,
+    ? (node.review.outputs.find(
+        (output) =>
+          output.outputIndex === outputIndex && output.attempt === attempt,
       )?.status ?? "pending")
     : null;
 }
 
-export function buildLaneExecutionResultFromDocument(params: {
-  costCredits: number;
-  document: WorkflowDocument;
+function toOutputArtifact(params: {
+  outputIndex: number;
   documentRevision: number | null;
-  laneIndex: number | null;
+  node: GeneratorWorkflowNode;
   ownerUserId: string;
   projectId: string;
-  runId: string;
-  status: WorkflowRunArtifactStatus;
+  executionId: string;
+}) {
+  const { node, outputIndex } = params;
+  const attempt = getGeneratorOutputAttempt(node, outputIndex);
+  const promptSnapshot = node.lastPrompt || null;
+  const systemPromptSnapshot =
+    node.kind === "llmGenerator" ? node.lastSystemPrompt || null : undefined;
+  const inputHash = getGeneratorOutputInputHash({
+    outputIndex,
+    node,
+    promptSnapshot,
+    systemPromptSnapshot,
+  });
+  const value =
+    node.kind === "llmGenerator"
+      ? node.outputs[outputIndex]?.trim()
+        ? ({
+            type: "text",
+            items: [node.outputs[outputIndex] ?? ""],
+          } satisfies RuntimeValue)
+        : null
+      : (node.outputs[outputIndex]?.length ?? 0) > 0
+        ? ({
+            type: node.kind === "imageGenerator" ? "image" : "video",
+            items: [node.outputs[outputIndex] ?? []],
+          } satisfies RuntimeValue)
+        : null;
+
+  return value
+    ? ({
+        attempt,
+        documentRevision: params.documentRevision,
+        executionId: params.executionId,
+        idempotencyKey: getGeneratorOutputIdempotencyKey({
+          attempt,
+          inputHash,
+          outputIndex,
+          node,
+          executionId: params.executionId,
+        }),
+        inputHash,
+        model: node.model,
+        nodeId: node.id,
+        outputIndex,
+        ownerUserId: params.ownerUserId,
+        projectId: params.projectId,
+        promptSnapshot,
+        reviewStatus: getNodeReviewStatus(node, outputIndex, attempt),
+        value,
+      } satisfies NodeOutputArtifact)
+    : null;
+}
+
+export function buildOutputExecutionResultFromDocument(params: {
+  costCredits: number;
+  costCreditsByOutputKey?: ReadonlyMap<string, number>;
+  document: WorkflowDocument;
+  documentRevision: number | null;
+  outputIndex: number | null;
+  ownerUserId: string;
+  projectId: string;
+  executionId: string;
+  status: WorkflowOutputArtifactStatus;
   targetNodeIds: readonly string[];
 }) {
   const targetNodeIds = new Set(params.targetNodeIds);
-  const laneFilter = params.laneIndex;
-  const outputs: NodeLaneOutputArtifact[] = [];
-
-  for (const node of params.document.nodes) {
-    if (!targetNodeIds.has(node.id)) {
-      continue;
-    }
+  const outputs = params.document.nodes.flatMap((node) => {
     if (
-      node.kind !== "imageGenerator" &&
-      node.kind !== "videoGenerator" &&
-      node.kind !== "llmGenerator"
+      !targetNodeIds.has(node.id) ||
+      (node.kind !== "imageGenerator" &&
+        node.kind !== "videoGenerator" &&
+        node.kind !== "llmGenerator")
     ) {
-      continue;
+      return [];
     }
-
-    const laneCount = node.outputLanes.length;
-    for (let laneIndex = 0; laneIndex < laneCount; laneIndex += 1) {
-      if (laneFilter !== null && laneIndex !== laneFilter) {
-        continue;
+    return node.outputs.flatMap((_, outputIndex) => {
+      if (params.outputIndex !== null && outputIndex !== params.outputIndex) {
+        return [];
       }
-      const output = toOutputArtifact({
-        laneIndex,
-        node,
-        documentRevision: params.documentRevision,
-        ownerUserId: params.ownerUserId,
-        projectId: params.projectId,
-        runId: params.runId,
-      });
-      if (output) {
-        outputs.push(output);
-      }
-    }
-  }
+      return (
+        toOutputArtifact({
+          documentRevision: params.documentRevision,
+          executionId: params.executionId,
+          node,
+          outputIndex,
+          ownerUserId: params.ownerUserId,
+          projectId: params.projectId,
+        }) ?? []
+      );
+    });
+  });
 
   return {
     costCredits: params.costCredits,
-    laneIndex: params.laneIndex,
+    costCreditsByOutputKey: params.costCreditsByOutputKey,
+    executionId: params.executionId,
+    outputIndex: params.outputIndex,
     outputs,
-    runId: params.runId,
     status: params.status,
-  } satisfies LaneExecutionResult;
+  } satisfies OutputExecutionResult;
 }
 
-function outputToRowValue(output: NodeLaneOutputArtifact) {
-  if (output.value.type === "text") {
-    return {
-      assetIds: [],
-      textValue: output.value.lanes[0] ?? "",
-      valueType: output.value.type,
-    };
-  }
-
-  return {
-    assetIds: output.value.lanes[0]?.map((asset) => asset.id) ?? [],
-    textValue: null,
-    valueType: output.value.type,
-  };
+function outputToRowValue(output: NodeOutputArtifact) {
+  return output.value.type === "text"
+    ? {
+        assetIds: [],
+        textValue: output.value.items[0] ?? "",
+        valueType: output.value.type,
+      }
+    : {
+        assetIds: output.value.items[0]?.map((asset) => asset.id) ?? [],
+        textValue: null,
+        valueType: output.value.type,
+      };
 }
 
-function rowToOutput(
-  row: LaneResultRow,
-  assetById: Map<string, WorkflowAsset>,
-) {
+function rowToOutput(row: TaskRunRow, assetById: Map<string, WorkflowAsset>) {
   if (
-    row.status !== "success" ||
+    (row.status !== "success" && row.status !== "waiting_for_review") ||
     !row.valueType ||
     !row.inputHash ||
     !row.idempotencyKey
@@ -257,201 +229,312 @@ function rowToOutput(
   const value =
     row.valueType === "text"
       ? row.textValue?.trim()
-        ? ({ type: "text", lanes: [row.textValue] } satisfies RuntimeValue)
+        ? ({ type: "text", items: [row.textValue] } satisfies RuntimeValue)
         : null
       : row.assetIds.length > 0 && resolvedAssets.length === row.assetIds.length
         ? ({
             type: row.valueType,
-            lanes: [resolvedAssets],
+            items: [resolvedAssets],
           } satisfies RuntimeValue)
         : null;
 
-  if (!value) {
+  return value
+    ? ({
+        attempt: row.version,
+        documentRevision: row.documentRevision,
+        executionId: row.executionId,
+        idempotencyKey: row.idempotencyKey,
+        inputHash: row.inputHash,
+        model: row.model,
+        nodeId: row.nodeId,
+        outputIndex: row.outputIndex,
+        ownerUserId: row.ownerUserId,
+        projectId: row.workflowId,
+        promptSnapshot: row.promptSnapshot,
+        reviewStatus: row.reviewStatus,
+        value,
+      } satisfies NodeOutputArtifact)
+    : null;
+}
+
+function rowToOutputResult(
+  row: TaskRunRow,
+  assetById: Map<string, WorkflowAsset>,
+) {
+  if (row.status === "success" || row.status === "waiting_for_review") {
+    const output = rowToOutput(row, assetById);
+    return output ? { ...output, status: row.status } : null;
+  }
+
+  if (row.status !== "error") {
     return null;
   }
 
   return {
-    attempt: row.attempt,
-    documentRevision: null,
-    idempotencyKey: row.idempotencyKey,
-    inputHash: row.inputHash,
-    laneIndex: row.laneIndex,
-    model: row.model,
-    nodeId: row.nodeId,
-    ownerUserId: row.ownerUserId,
-    projectId: row.projectId,
-    promptSnapshot: row.promptSnapshot,
-    reviewStatus: row.reviewStatus,
-    runId: row.runId,
-    value,
-  } satisfies NodeLaneOutputArtifact;
-}
-
-function rowToLaneResult(
-  row: LaneResultRow,
-  assetById: Map<string, WorkflowAsset>,
-) {
-  if (row.status === "success") {
-    const output = rowToOutput(row, assetById);
-    return output ? { ...output, status: "success" as const } : null;
-  }
-
-  return {
-    attempt: row.attempt,
-    error: row.error ?? "Workflow execution lane failed.",
+    attempt: row.version,
+    error: row.error ?? "Workflow execution output failed.",
+    executionId: row.executionId,
     failedAt: (row.failedAt ?? row.updatedAt).toISOString(),
-    laneIndex: row.laneIndex,
     nodeId: row.nodeId,
+    outputIndex: row.outputIndex,
     ownerUserId: row.ownerUserId,
-    projectId: row.projectId,
-    runId: row.runId,
+    projectId: row.workflowId,
     status: "error" as const,
-  } satisfies WorkflowLaneErrorArtifact & { status: "error" };
+  } satisfies WorkflowOutputErrorArtifact & { status: "error" };
 }
 
-function getRunArtifactsEffect(params: { ownerUserId: string; runId: string }) {
-  return Effect.tryPromise({
-    try: async () => {
-      const resultRows = await db
-        .select()
-        .from(workflowLaneResults)
-        .where(
-          and(
-            eq(workflowLaneResults.runId, params.runId),
-            eq(workflowLaneResults.ownerUserId, params.ownerUserId),
-          ),
-        );
-      const assetIds = Array.from(
-        new Set(resultRows.flatMap((row) => row.assetIds)),
-      );
-      const assetRows = assetIds.length
-        ? await db
-            .select()
-            .from(assets)
-            .where(
-              and(
-                eq(assets.ownerUserId, params.ownerUserId),
-                inArray(assets.id, assetIds),
-              ),
-            )
-        : [];
-      const assetById = new Map(
-        assetRows.map((row) => [row.id, toWorkflowAsset(row)]),
-      );
-      return {
-        laneResults: resultRows.flatMap((row) => {
-          const result = rowToLaneResult(row, assetById);
-          return result ? [result] : [];
-        }),
-      } satisfies WorkflowRunArtifacts;
-    },
-    catch: toArtifactStoreError,
-  });
+function compareNodeExecution(left: NodeExecutionRow, right: NodeExecutionRow) {
+  return (
+    left.createdAt.getTime() - right.createdAt.getTime() ||
+    left.id.localeCompare(right.id)
+  );
 }
 
-function getNodeLaneOutputEffect(params: NodeLaneOutputQuery) {
-  return Effect.tryPromise({
-    try: async () => {
-      const output = await db
+function latestNodeExecutions(rows: readonly NodeExecutionRow[]) {
+  const latest = new Map<string, NodeExecutionRow>();
+  for (const row of rows) {
+    const existing = latest.get(row.nodeId);
+    if (!existing || compareNodeExecution(existing, row) < 0) {
+      latest.set(row.nodeId, row);
+    }
+  }
+  return latest;
+}
+
+function latestTaskVersions(rows: readonly TaskRunRow[]) {
+  const latest = new Map<string, TaskRunRow>();
+  for (const row of rows) {
+    const key = `${row.nodeExecutionId}:${row.outputIndex}`;
+    const existing = latest.get(key);
+    if (!existing || existing.version < row.version) {
+      latest.set(key, row);
+    }
+  }
+  return Array.from(latest.values());
+}
+
+async function loadAssetsForRows(
+  ownerUserId: string,
+  rows: readonly TaskRunRow[],
+) {
+  const assetIds = Array.from(new Set(rows.flatMap((row) => row.assetIds)));
+  const assetRows = assetIds.length
+    ? await db
         .select()
-        .from(workflowLaneResults)
+        .from(assets)
         .where(
           and(
-            eq(workflowLaneResults.runId, params.runId),
-            eq(workflowLaneResults.ownerUserId, params.ownerUserId),
-            eq(workflowLaneResults.nodeId, params.nodeId),
-            eq(workflowLaneResults.laneIndex, params.laneIndex),
-            eq(workflowLaneResults.attempt, params.attempt),
-            eq(workflowLaneResults.status, "success"),
-            eq(workflowLaneResults.inputHash, params.inputHash),
+            eq(assets.ownerUserId, ownerUserId),
+            inArray(assets.id, assetIds),
           ),
         )
-        .then((rows) => rows[0] ?? null);
-      if (!output) {
-        return null;
-      }
+    : [];
+  return new Map(assetRows.map((row) => [row.id, toWorkflowAsset(row)]));
+}
 
-      const assetRows = output.assetIds.length
-        ? await db
-            .select()
-            .from(assets)
-            .where(
-              and(
-                eq(assets.ownerUserId, params.ownerUserId),
-                inArray(assets.id, output.assetIds),
-              ),
-            )
-        : [];
-      const assetById = new Map(
-        assetRows.map((row) => [row.id, toWorkflowAsset(row)]),
+async function getCurrentTaskRows(params: {
+  ownerUserId: string;
+  workflowId: string;
+  excludeExecutionId?: string | null;
+}) {
+  const executionRows = await db
+    .select()
+    .from(nodeExecutions)
+    .where(
+      and(
+        eq(nodeExecutions.ownerUserId, params.ownerUserId),
+        eq(nodeExecutions.workflowId, params.workflowId),
+      ),
+    );
+  const latestExecutionIds = new Set(
+    Array.from(latestNodeExecutions(executionRows).values()).map(
+      (row) => row.id,
+    ),
+  );
+  if (!latestExecutionIds.size) {
+    return [];
+  }
+  const rows = await db
+    .select()
+    .from(taskRuns)
+    .where(
+      and(
+        eq(taskRuns.ownerUserId, params.ownerUserId),
+        eq(taskRuns.workflowId, params.workflowId),
+        inArray(taskRuns.nodeExecutionId, Array.from(latestExecutionIds)),
+      ),
+    );
+  return latestTaskVersions(
+    params.excludeExecutionId
+      ? rows.filter((row) => row.executionId !== params.excludeExecutionId)
+      : rows,
+  );
+}
+
+async function ensureNodeExecution(params: {
+  documentRevision: number | null;
+  executionId: string;
+  nodeId: string;
+  outputCount: number;
+  ownerUserId: string;
+  workflowId: string;
+}) {
+  const [existing] = await db
+    .select()
+    .from(nodeExecutions)
+    .where(
+      and(
+        eq(nodeExecutions.ownerUserId, params.ownerUserId),
+        eq(nodeExecutions.workflowId, params.workflowId),
+        eq(nodeExecutions.executionId, params.executionId),
+        eq(nodeExecutions.nodeId, params.nodeId),
+      ),
+    )
+    .orderBy(desc(nodeExecutions.createdAt), desc(nodeExecutions.id))
+    .limit(1);
+
+  if (existing) {
+    return existing;
+  }
+
+  const now = new Date();
+  const [created] = await db
+    .insert(nodeExecutions)
+    .values({
+      createdAt: now,
+      dispatchedAt: now,
+      documentRevision: params.documentRevision,
+      executionId: params.executionId,
+      id: randomUUID(),
+      nodeId: params.nodeId,
+      outputCount: params.outputCount,
+      ownerUserId: params.ownerUserId,
+      status: "dispatched",
+      targetReason: "node_run",
+      updatedAt: now,
+      workflowId: params.workflowId,
+    })
+    .returning();
+
+  if (!created) {
+    throw new WorkflowInfrastructureError({
+      message: "Failed to create node execution.",
+    });
+  }
+  return created;
+}
+
+function getOutputCount(outputs: readonly { outputIndex: number }[]) {
+  return Math.max(1, ...outputs.map((output) => output.outputIndex + 1));
+}
+
+function getOutputArtifactsEffect(params: {
+  ownerUserId: string;
+  executionId: string;
+}) {
+  return Effect.tryPromise({
+    try: async () => {
+      const rows = latestTaskVersions(
+        await db
+          .select()
+          .from(taskRuns)
+          .where(
+            and(
+              eq(taskRuns.executionId, params.executionId),
+              eq(taskRuns.ownerUserId, params.ownerUserId),
+            ),
+          ),
       );
-      return rowToOutput(output, assetById);
+      const assetById = await loadAssetsForRows(params.ownerUserId, rows);
+      return {
+        outputResults: rows.flatMap(
+          (row) => rowToOutputResult(row, assetById) ?? [],
+        ),
+      } satisfies WorkflowOutputArtifacts;
     },
     catch: toArtifactStoreError,
   });
 }
 
-function getProjectLaneReuseCandidatesEffect(params: {
-  excludeRunId?: string | null;
-  lanes: readonly WorkflowLaneIdentity[];
+function getProjectArtifactsEffect(params: {
   ownerUserId: string;
   projectId: string;
 }) {
   return Effect.tryPromise({
     try: async () => {
-      const laneKeys = new Set(params.lanes.map(getWorkflowLaneKey));
-      if (!laneKeys.size) {
-        return [];
-      }
+      const rows = await getCurrentTaskRows({
+        ownerUserId: params.ownerUserId,
+        workflowId: params.projectId,
+      });
+      const assetById = await loadAssetsForRows(params.ownerUserId, rows);
+      return {
+        outputResults: rows.flatMap(
+          (row) => rowToOutputResult(row, assetById) ?? [],
+        ),
+      } satisfies WorkflowOutputArtifacts;
+    },
+    catch: toArtifactStoreError,
+  });
+}
 
-      const rows = await db
-        .select({ laneResult: workflowLaneResults })
-        .from(workflowLaneResults)
-        .innerJoin(workflowRuns, eq(workflowRuns.id, workflowLaneResults.runId))
+function getNodeOutputEffect(params: NodeOutputQuery) {
+  return Effect.tryPromise({
+    try: async () => {
+      const [row] = await db
+        .select()
+        .from(taskRuns)
         .where(
           and(
-            eq(workflowLaneResults.ownerUserId, params.ownerUserId),
-            eq(workflowLaneResults.projectId, params.projectId),
-            inArray(workflowRuns.status, ["success", "error"]),
-            params.excludeRunId
-              ? ne(workflowLaneResults.runId, params.excludeRunId)
-              : undefined,
-            inArray(
-              workflowLaneResults.nodeId,
-              Array.from(new Set(params.lanes.map((lane) => lane.nodeId))),
-            ),
+            eq(taskRuns.ownerUserId, params.ownerUserId),
+            eq(taskRuns.nodeId, params.nodeId),
+            eq(taskRuns.outputIndex, params.outputIndex),
+            eq(taskRuns.version, params.attempt),
+            eq(taskRuns.status, "success"),
+            eq(taskRuns.inputHash, params.inputHash),
+            params.projectId
+              ? eq(taskRuns.workflowId, params.projectId)
+              : eq(taskRuns.executionId, params.executionId),
           ),
         )
-        .then((rows) => rows.map((row) => row.laneResult));
-      const candidateRows = rows.filter((row) =>
-        laneKeys.has(getWorkflowLaneKey(row)),
-      );
-      const assetIds = Array.from(
-        new Set(candidateRows.flatMap((row) => row.assetIds)),
-      );
-      const assetRows = assetIds.length
-        ? await db
-            .select()
-            .from(assets)
-            .where(
-              and(
-                eq(assets.ownerUserId, params.ownerUserId),
-                inArray(assets.id, assetIds),
-              ),
-            )
-        : [];
-      const assetById = new Map(
-        assetRows.map((row) => [row.id, toWorkflowAsset(row)]),
-      );
+        .limit(1);
+      if (!row) {
+        return null;
+      }
+      const assetById = await loadAssetsForRows(params.ownerUserId, [row]);
+      return rowToOutput(row, assetById);
+    },
+    catch: toArtifactStoreError,
+  });
+}
 
-      return candidateRows.flatMap((row) => {
-        const result = rowToLaneResult(row, assetById);
+function getProjectOutputReuseCandidatesEffect(params: {
+  excludeExecutionId?: string | null;
+  items: readonly WorkflowOutputIdentity[];
+  ownerUserId: string;
+  projectId: string;
+}) {
+  return Effect.tryPromise({
+    try: async () => {
+      const outputKeys = new Set(params.items.map(getWorkflowOutputKey));
+      if (!outputKeys.size) {
+        return [];
+      }
+      const rows = (
+        await getCurrentTaskRows({
+          excludeExecutionId: params.excludeExecutionId,
+          ownerUserId: params.ownerUserId,
+          workflowId: params.projectId,
+        })
+      ).filter((row) => outputKeys.has(getWorkflowOutputKey(row)));
+      const assetById = await loadAssetsForRows(params.ownerUserId, rows);
+      return rows.flatMap((row) => {
+        const result = rowToOutputResult(row, assetById);
         return result
           ? [
               {
                 ...result,
                 updatedAt: row.updatedAt.toISOString(),
-              } satisfies ReusableWorkflowLaneCandidate,
+              } satisfies ReusableWorkflowOutputCandidate,
             ]
           : [];
       });
@@ -460,65 +543,58 @@ function getProjectLaneReuseCandidatesEffect(params: {
   });
 }
 
-function copyReusableLaneOutputsEffect(params: {
-  outputs: readonly NodeLaneOutputArtifact[];
+function copyReusableOutputsEffect(params: {
+  outputs: readonly NodeOutputArtifact[];
   ownerUserId: string;
   projectId: string;
-  runId: string;
+  executionId: string;
 }) {
   return Effect.tryPromise({
     try: async () => {
       const now = new Date();
-      await db.transaction(async (tx) => {
-        for (const output of params.outputs) {
-          const rowValue = outputToRowValue(output);
-          await tx
-            .insert(workflowLaneResults)
-            .values({
-              ...rowValue,
-              attempt: 0,
-              createdAt: now,
-              error: null,
-              failedAt: null,
-              id: randomUUID(),
-              idempotencyKey: `reused:${params.runId}:${output.nodeId}:${output.laneIndex}:0:${output.runId}:${output.attempt}`,
-              inputHash: output.inputHash,
-              laneIndex: output.laneIndex,
-              model: output.model,
-              nodeId: output.nodeId,
-              ownerUserId: params.ownerUserId,
-              projectId: params.projectId,
-              promptSnapshot: output.promptSnapshot,
-              reviewStatus: output.reviewStatus,
-              runId: params.runId,
-              status: "success",
-              updatedAt: now,
-            })
-            .onConflictDoUpdate({
-              target: [
-                workflowLaneResults.runId,
-                workflowLaneResults.nodeId,
-                workflowLaneResults.laneIndex,
-                workflowLaneResults.attempt,
-              ],
-              set: {
-                assetIds: rowValue.assetIds,
-                error: null,
-                failedAt: null,
-                idempotencyKey: `reused:${params.runId}:${output.nodeId}:${output.laneIndex}:0:${output.runId}:${output.attempt}`,
-                inputHash: output.inputHash,
-                model: output.model,
-                promptSnapshot: output.promptSnapshot,
-                reviewStatus: output.reviewStatus,
-                status: "success",
-                textValue: rowValue.textValue,
-                updatedAt: now,
-                valueType: rowValue.valueType,
-              },
-            });
-        }
-      });
-
+      for (const output of params.outputs) {
+        const rowValue = outputToRowValue(output);
+        const nodeExecution = await ensureNodeExecution({
+          documentRevision: output.documentRevision,
+          executionId: params.executionId,
+          nodeId: output.nodeId,
+          outputCount: output.outputIndex + 1,
+          ownerUserId: params.ownerUserId,
+          workflowId: params.projectId,
+        });
+        const id = randomUUID();
+        await db
+          .insert(taskRuns)
+          .values({
+            ...rowValue,
+            costCredits: 0,
+            createdAt: now,
+            documentRevision: output.documentRevision,
+            error: null,
+            executionId: params.executionId,
+            failedAt: null,
+            finishedAt: now,
+            id,
+            idempotencyKey: `reused:${params.executionId}:${output.nodeId}:${output.outputIndex}:${output.idempotencyKey}:${output.attempt}`,
+            inputHash: output.inputHash,
+            jobId: id,
+            model: output.model,
+            nodeExecutionId: nodeExecution.id,
+            nodeId: output.nodeId,
+            outputIndex: output.outputIndex,
+            ownerUserId: params.ownerUserId,
+            promptSnapshot: output.promptSnapshot,
+            queuedAt: now,
+            reviewStatus: output.reviewStatus,
+            startedAt: now,
+            status: "success",
+            targetReason: "dependency_run",
+            updatedAt: now,
+            version: 0,
+            workflowId: params.projectId,
+          })
+          .onConflictDoNothing();
+      }
       return params.outputs.length;
     },
     catch: toArtifactStoreError,
@@ -531,38 +607,46 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
     readonly createNextAttempt: (
       params: RegenerationAttemptRequest,
     ) => Effect.Effect<number, ArtifactStoreError>;
-    readonly getRunArtifacts: (params: {
+    readonly getOutputArtifacts: (params: {
       ownerUserId: string;
-      runId: string;
-    }) => Effect.Effect<WorkflowRunArtifacts, ArtifactStoreError>;
-    readonly getProjectLaneReuseCandidates: (params: {
-      excludeRunId?: string | null;
-      lanes: readonly WorkflowLaneIdentity[];
+      executionId: string;
+    }) => Effect.Effect<WorkflowOutputArtifacts, ArtifactStoreError>;
+    readonly getProjectArtifacts: (params: {
       ownerUserId: string;
       projectId: string;
-    }) => Effect.Effect<ReusableWorkflowLaneCandidate[], ArtifactStoreError>;
-    readonly copyReusableLaneOutputs: (params: {
-      outputs: readonly NodeLaneOutputArtifact[];
+    }) => Effect.Effect<WorkflowOutputArtifacts, ArtifactStoreError>;
+    readonly getProjectOutputReuseCandidates: (params: {
+      excludeExecutionId?: string | null;
+      items: readonly WorkflowOutputIdentity[];
       ownerUserId: string;
       projectId: string;
-      runId: string;
+    }) => Effect.Effect<ReusableWorkflowOutputCandidate[], ArtifactStoreError>;
+    readonly copyReusableOutputs: (params: {
+      outputs: readonly NodeOutputArtifact[];
+      ownerUserId: string;
+      projectId: string;
+      executionId: string;
     }) => Effect.Effect<number, ArtifactStoreError>;
-    readonly getNodeLaneOutput: (
-      params: NodeLaneOutputQuery,
-    ) => Effect.Effect<NodeLaneOutputArtifact | null, ArtifactStoreError>;
-    readonly setReviewLaneStatus: (params: {
+    readonly getActiveOutputKeys: (params: {
+      executionId: string;
+    }) => Effect.Effect<string[], ArtifactStoreError>;
+    readonly getNodeOutput: (
+      params: NodeOutputQuery,
+    ) => Effect.Effect<NodeOutputArtifact | null, ArtifactStoreError>;
+    readonly setReviewOutputStatus: (params: {
       attempt?: number | null;
-      laneIndex: number;
+      outputIndex: number;
       nodeId: string;
       ownerUserId: string;
-      runId: string;
-      status: WorkflowReviewLaneStatus;
+      projectId?: string | null;
+      executionId: string;
+      status: WorkflowOutputReviewStatus;
     }) => Effect.Effect<void, ArtifactStoreError>;
-    readonly upsertLaneError: (
-      params: WorkflowLaneErrorArtifact,
+    readonly upsertOutputError: (
+      params: WorkflowOutputErrorArtifact,
     ) => Effect.Effect<void, ArtifactStoreError>;
-    readonly upsertLaneExecutionResult: (
-      result: LaneExecutionResult,
+    readonly upsertOutputExecutionResult: (
+      result: OutputExecutionResult,
     ) => Effect.Effect<void, ArtifactStoreError>;
   }
 >() {
@@ -572,126 +656,153 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
       createNextAttempt: (params) =>
         Effect.tryPromise({
           try: async () => {
-            const outputRows = await db
-              .select({ attempt: workflowLaneResults.attempt })
-              .from(workflowLaneResults)
+            const rows = await db
+              .select()
+              .from(taskRuns)
               .where(
                 and(
-                  eq(workflowLaneResults.runId, params.runId),
-                  eq(workflowLaneResults.ownerUserId, params.ownerUserId),
-                  eq(workflowLaneResults.nodeId, params.nodeId),
-                  eq(workflowLaneResults.laneIndex, params.laneIndex),
+                  eq(taskRuns.ownerUserId, params.ownerUserId),
+                  eq(taskRuns.nodeId, params.nodeId),
+                  eq(taskRuns.outputIndex, params.outputIndex),
+                  params.projectId
+                    ? eq(taskRuns.workflowId, params.projectId)
+                    : eq(taskRuns.executionId, params.executionId),
                 ),
               );
-            const latestAttempt = Math.max(
+            const latestVersion = Math.max(
               -1,
-              ...outputRows.map((row) => row.attempt),
+              ...rows.map((row) => row.version),
             );
-            if (latestAttempt >= 0) {
+            const latest = rows.find((row) => row.version === latestVersion);
+            if (latest?.reviewStatus) {
               await db
-                .update(workflowLaneResults)
+                .update(taskRuns)
                 .set({ reviewStatus: "regenerating", updatedAt: new Date() })
-                .where(
-                  and(
-                    eq(workflowLaneResults.runId, params.runId),
-                    eq(workflowLaneResults.ownerUserId, params.ownerUserId),
-                    eq(workflowLaneResults.nodeId, params.nodeId),
-                    eq(workflowLaneResults.laneIndex, params.laneIndex),
-                    eq(workflowLaneResults.attempt, latestAttempt),
-                    isNotNull(workflowLaneResults.reviewStatus),
-                  ),
-                );
+                .where(eq(taskRuns.id, latest.id));
             }
-            return latestAttempt + 1;
+            return latestVersion + 1;
           },
           catch: toArtifactStoreError,
         }),
-      getRunArtifacts: getRunArtifactsEffect,
-      getProjectLaneReuseCandidates: getProjectLaneReuseCandidatesEffect,
-      copyReusableLaneOutputs: copyReusableLaneOutputsEffect,
-      getNodeLaneOutput: getNodeLaneOutputEffect,
-      setReviewLaneStatus: (params) =>
+      copyReusableOutputs: copyReusableOutputsEffect,
+      getActiveOutputKeys: (params) =>
+        Effect.tryPromise({
+          try: async () => {
+            const rows = await db
+              .select({
+                nodeId: taskRuns.nodeId,
+                outputIndex: taskRuns.outputIndex,
+              })
+              .from(taskRuns)
+              .where(
+                and(
+                  eq(taskRuns.executionId, params.executionId),
+                  inArray(taskRuns.status, [
+                    "queued",
+                    "running",
+                    "waiting_for_review",
+                  ]),
+                ),
+              );
+            return rows.map(getWorkflowOutputKey);
+          },
+          catch: toArtifactStoreError,
+        }),
+      getNodeOutput: getNodeOutputEffect,
+      getOutputArtifacts: getOutputArtifactsEffect,
+      getProjectArtifacts: getProjectArtifactsEffect,
+      getProjectOutputReuseCandidates: getProjectOutputReuseCandidatesEffect,
+      setReviewOutputStatus: (params) =>
         Effect.gen(function* () {
           const rows = yield* Effect.tryPromise({
             try: () =>
               db
-                .select({ attempt: workflowLaneResults.attempt })
-                .from(workflowLaneResults)
+                .select()
+                .from(taskRuns)
                 .where(
                   and(
-                    eq(workflowLaneResults.runId, params.runId),
-                    eq(workflowLaneResults.ownerUserId, params.ownerUserId),
-                    eq(workflowLaneResults.nodeId, params.nodeId),
-                    eq(workflowLaneResults.laneIndex, params.laneIndex),
-                    isNotNull(workflowLaneResults.reviewStatus),
+                    eq(taskRuns.ownerUserId, params.ownerUserId),
+                    eq(taskRuns.nodeId, params.nodeId),
+                    eq(taskRuns.outputIndex, params.outputIndex),
+                    isNotNull(taskRuns.reviewStatus),
+                    params.projectId
+                      ? eq(taskRuns.workflowId, params.projectId)
+                      : eq(taskRuns.executionId, params.executionId),
                   ),
                 ),
             catch: toArtifactStoreError,
           });
           const attempt =
-            params.attempt ?? Math.max(-1, ...rows.map((row) => row.attempt));
-          if (attempt < 0) {
+            params.attempt ?? Math.max(-1, ...rows.map((row) => row.version));
+          const row = rows.find((candidate) => candidate.version === attempt);
+          if (!row) {
             return yield* Effect.fail(
               new WorkflowValidationError({
-                message: `Review lane ${params.laneIndex + 1} does not exist.`,
+                message: `Review output ${params.outputIndex + 1} does not exist.`,
               }),
             );
           }
           yield* Effect.tryPromise({
             try: () =>
               db
-                .update(workflowLaneResults)
-                .set({ reviewStatus: params.status, updatedAt: new Date() })
-                .where(
-                  and(
-                    eq(workflowLaneResults.runId, params.runId),
-                    eq(workflowLaneResults.ownerUserId, params.ownerUserId),
-                    eq(workflowLaneResults.nodeId, params.nodeId),
-                    eq(workflowLaneResults.laneIndex, params.laneIndex),
-                    eq(workflowLaneResults.attempt, attempt),
-                    isNotNull(workflowLaneResults.reviewStatus),
-                  ),
-                ),
+                .update(taskRuns)
+                .set({
+                  reviewStatus: params.status,
+                  status: params.status === "approved" ? "success" : row.status,
+                  updatedAt: new Date(),
+                })
+                .where(eq(taskRuns.id, row.id)),
             catch: toArtifactStoreError,
           });
         }),
-      upsertLaneError: (params) =>
+      upsertOutputError: (params) =>
         Effect.tryPromise({
           try: async () => {
             const failedAt = new Date(params.failedAt);
+            const nodeExecution = await ensureNodeExecution({
+              documentRevision: null,
+              executionId: params.executionId,
+              nodeId: params.nodeId,
+              outputCount: params.outputIndex + 1,
+              ownerUserId: params.ownerUserId,
+              workflowId: params.projectId,
+            });
+            const id = randomUUID();
             await db
-              .insert(workflowLaneResults)
+              .insert(taskRuns)
               .values({
                 assetIds: [],
-                attempt: params.attempt,
+                costCredits: 0,
+                createdAt: failedAt,
                 error: params.error,
+                executionId: params.executionId,
                 failedAt,
-                reviewStatus: null,
-                id: randomUUID(),
-                laneIndex: params.laneIndex,
+                finishedAt: failedAt,
+                id,
+                jobId: id,
+                nodeExecutionId: nodeExecution.id,
                 nodeId: params.nodeId,
+                outputIndex: params.outputIndex,
                 ownerUserId: params.ownerUserId,
-                projectId: params.projectId,
-                runId: params.runId,
+                queuedAt: failedAt,
+                startedAt: failedAt,
                 status: "error",
+                targetReason: "node_run",
                 updatedAt: failedAt,
+                version: params.attempt,
+                workflowId: params.projectId,
               })
               .onConflictDoUpdate({
                 target: [
-                  workflowLaneResults.runId,
-                  workflowLaneResults.nodeId,
-                  workflowLaneResults.laneIndex,
-                  workflowLaneResults.attempt,
+                  taskRuns.nodeExecutionId,
+                  taskRuns.outputIndex,
+                  taskRuns.version,
                 ],
                 set: {
                   assetIds: [],
                   error: params.error,
                   failedAt,
-                  idempotencyKey: null,
-                  inputHash: null,
-                  model: null,
-                  promptSnapshot: null,
-                  reviewStatus: null,
+                  finishedAt: failedAt,
                   status: "error",
                   textValue: null,
                   updatedAt: failedAt,
@@ -701,75 +812,92 @@ export class WorkflowArtifactStore extends Context.Tag("WorkflowArtifactStore")<
           },
           catch: toArtifactStoreError,
         }),
-      upsertLaneExecutionResult: (result) =>
+      upsertOutputExecutionResult: (result) =>
         Effect.tryPromise({
           try: async () => {
             const now = new Date();
+            const outputCount = getOutputCount(result.outputs);
             for (const output of result.outputs) {
               const rowValue = outputToRowValue(output);
+              const nodeExecution = await ensureNodeExecution({
+                documentRevision: output.documentRevision,
+                executionId: output.executionId,
+                nodeId: output.nodeId,
+                outputCount,
+                ownerUserId: output.ownerUserId,
+                workflowId: output.projectId,
+              });
+              const costCredits =
+                result.costCreditsByOutputKey?.get(
+                  getOutputPersistenceKey(output),
+                ) ??
+                (result.outputIndex === null
+                  ? output === result.outputs[0]
+                    ? result.costCredits
+                    : 0
+                  : output.outputIndex === result.outputIndex
+                    ? result.costCredits
+                    : 0);
+              const id = randomUUID();
               await db
-                .insert(workflowLaneResults)
+                .insert(taskRuns)
                 .values({
                   ...rowValue,
-                  attempt: output.attempt,
+                  costCredits,
                   createdAt: now,
+                  documentRevision: output.documentRevision,
                   error: null,
+                  executionId: output.executionId,
                   failedAt: null,
-                  id: randomUUID(),
+                  finishedAt: now,
+                  id,
                   idempotencyKey: output.idempotencyKey,
                   inputHash: output.inputHash,
-                  laneIndex: output.laneIndex,
+                  jobId: id,
                   model: output.model,
+                  nodeExecutionId: nodeExecution.id,
                   nodeId: output.nodeId,
+                  outputIndex: output.outputIndex,
                   ownerUserId: output.ownerUserId,
-                  projectId: output.projectId,
                   promptSnapshot: output.promptSnapshot,
+                  queuedAt: now,
                   reviewStatus: output.reviewStatus,
-                  runId: output.runId,
-                  status: "success",
+                  startedAt: now,
+                  status:
+                    output.reviewStatus && output.reviewStatus !== "approved"
+                      ? "waiting_for_review"
+                      : "success",
+                  targetReason: "node_run",
                   updatedAt: now,
+                  version: output.attempt,
+                  workflowId: output.projectId,
                 })
                 .onConflictDoUpdate({
                   target: [
-                    workflowLaneResults.runId,
-                    workflowLaneResults.nodeId,
-                    workflowLaneResults.laneIndex,
-                    workflowLaneResults.attempt,
+                    taskRuns.nodeExecutionId,
+                    taskRuns.outputIndex,
+                    taskRuns.version,
                   ],
                   set: {
-                    assetIds: rowValue.assetIds,
+                    ...rowValue,
+                    costCredits,
+                    documentRevision: output.documentRevision,
                     error: null,
                     failedAt: null,
+                    finishedAt: now,
                     idempotencyKey: output.idempotencyKey,
                     inputHash: output.inputHash,
                     model: output.model,
                     promptSnapshot: output.promptSnapshot,
                     reviewStatus: output.reviewStatus,
-                    status: "success",
-                    textValue: rowValue.textValue,
+                    status:
+                      output.reviewStatus && output.reviewStatus !== "approved"
+                        ? "waiting_for_review"
+                        : "success",
                     updatedAt: now,
                     valueType: rowValue.valueType,
                   },
                 });
-
-              if (rowValue.assetIds.length) {
-                await db
-                  .update(assets)
-                  .set({
-                    projectId: output.projectId,
-                    workflowDocumentRevision: output.documentRevision,
-                    workflowAttempt: output.attempt,
-                    workflowLaneIndex: output.laneIndex,
-                    workflowNodeId: output.nodeId,
-                    workflowRunId: output.runId,
-                  })
-                  .where(
-                    and(
-                      eq(assets.ownerUserId, output.ownerUserId),
-                      inArray(assets.id, rowValue.assetIds),
-                    ),
-                  );
-              }
             }
           },
           catch: toArtifactStoreError,

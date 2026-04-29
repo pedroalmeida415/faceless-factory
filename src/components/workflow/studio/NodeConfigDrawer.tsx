@@ -196,14 +196,14 @@ function getDrawerHeading(node: WorkflowDocumentNode) {
         description: "Manage uploaded source media for this workflow branch.",
         title: "Asset",
       } as const;
-    case "laneReorder":
-    case "laneSelect":
-    case "laneSplit":
-    case "laneMerge":
-    case "laneZipAlign":
+    case "outputReorder":
+    case "outputSelect":
+    case "outputSplit":
+    case "outputMerge":
+    case "outputZipAlign":
       return {
         description:
-          "Transform lanes on this branch without mutating upstream output.",
+          "Transform outputs on this branch without mutating upstream output.",
         title: node.label,
       } as const;
     case "imageGenerator":
@@ -241,7 +241,7 @@ function GeneratorReviewConfigPanel({
         <div>
           <p className="text-sm">Require approval</p>
           <p className="text-muted-foreground text-xs">
-            Generated lanes pause here until approved or regenerated.
+            Generated outputs pause here until approved or regenerated.
           </p>
         </div>
         <Switch
@@ -269,7 +269,7 @@ function ListConfigPanel({ node }: { node: ListWorkflowNode }) {
       />
       <NodeFieldCard label="Iteration">
         <p className="text-sm">
-          {filledItemCount > 1 ? `${filledItemCount} lanes` : "1 lane"}
+          {filledItemCount > 1 ? `${filledItemCount} outputs` : "1 output"}
         </p>
       </NodeFieldCard>
     </div>
@@ -328,12 +328,12 @@ function AssetConfigPanel({ node }: { node: AssetWorkflowNode }) {
   );
 }
 
-function LaneReorderConfigPanel({ node }: { node: WorkflowDocumentNode }) {
+function OutputReorderConfigPanel({ node }: { node: WorkflowDocumentNode }) {
   return (
     <NodeFieldCard label="Inline settings">
       <p className="text-sm">
-        Adjust {node.label} directly on the node card. Its lane type is inferred
-        from the connected input and resets when disconnected.
+        Adjust {node.label} directly on the node card. Its output type is
+        inferred from the connected input and resets when disconnected.
       </p>
     </NodeFieldCard>
   );
@@ -509,7 +509,7 @@ function LlmEstimatePanel({ nodeId }: { nodeId: string }) {
     <NodeFieldCard label="Estimated cost">
       <p className="text-sm">
         {priceQuote
-          ? `${priceQuote.hasEstimate ? "~" : ""}${formatCredits(priceQuote.totalCost)} per run`
+          ? `${priceQuote.hasEstimate ? "~" : ""}${formatCredits(priceQuote.totalCost)} estimated`
           : "Unavailable"}
       </p>
     </NodeFieldCard>
@@ -556,12 +556,12 @@ function NodeConfigPanel({ node }: { node: WorkflowDocumentNode }) {
       return <PromptConfigPanel node={node} />;
     case "asset":
       return <AssetConfigPanel node={node} />;
-    case "laneReorder":
-    case "laneSelect":
-    case "laneSplit":
-    case "laneMerge":
-    case "laneZipAlign":
-      return <LaneReorderConfigPanel node={node} />;
+    case "outputReorder":
+    case "outputSelect":
+    case "outputSplit":
+    case "outputMerge":
+    case "outputZipAlign":
+      return <OutputReorderConfigPanel node={node} />;
     case "imageGenerator":
       return <ImageGeneratorConfigPanel node={node} />;
     case "videoGenerator":
@@ -595,11 +595,11 @@ function isSameNodeConfig(
         left.assetKind === right.assetKind &&
         left.assets === right.assets
       );
-    case "laneReorder":
-    case "laneSelect":
-    case "laneSplit":
-    case "laneMerge":
-    case "laneZipAlign":
+    case "outputReorder":
+    case "outputSelect":
+    case "outputSplit":
+    case "outputMerge":
+    case "outputZipAlign":
       return (
         right.kind === left.kind &&
         JSON.stringify(left) === JSON.stringify(right)

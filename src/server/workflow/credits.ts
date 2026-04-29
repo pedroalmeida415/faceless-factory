@@ -91,19 +91,11 @@ export class WorkflowCreditsService extends Context.Tag(
 )<
   WorkflowCreditsService,
   {
-    readonly alignExecutionCost: (params: {
-      executionId: string;
-      reason: string;
-      targetCost: number;
-      userId: string;
-    }) => Effect.Effect<
-      WorkflowCreditsSummary,
-      WorkflowCreditsError | WorkflowInfrastructureError
-    >;
-    readonly debitExecution: (params: {
+    readonly debitExecutionOutput: (params: {
       amount: number;
       executionId: string;
       reason: string;
+      sourceKey: string;
       userId: string;
     }) => Effect.Effect<
       WorkflowCreditsSummary,
@@ -112,16 +104,8 @@ export class WorkflowCreditsService extends Context.Tag(
     readonly getBalanceSummary: (
       userId: string,
     ) => Effect.Effect<WorkflowCreditsSummary, WorkflowInfrastructureError>;
-    readonly getRunSummary: (params: {
-      runId: string;
-      userId: string;
-    }) => Effect.Effect<
-      WorkflowCreditsSummary,
-      WorkflowCreditsError | WorkflowInfrastructureError
-    >;
-    readonly refundExecution: (params: {
+    readonly getExecutionSummary: (params: {
       executionId: string;
-      reason: string;
       userId: string;
     }) => Effect.Effect<
       WorkflowCreditsSummary,
@@ -155,117 +139,50 @@ export class WorkflowCreditsService extends Context.Tag(
   };
 
   static readonly Live = Layer.succeed(this, {
-    alignExecutionCost: ({ executionId, reason, targetCost, userId }) =>
-      Effect.tryPromise({
-        try: async () =>
-          db.transaction(async (tx) => {
-            const totals = await getExecutionTotals(tx, {
-              executionId,
-              userId,
-            });
-            const nextTargetCost = Math.max(0, targetCost);
-            const currentNetCost = Math.max(
-              0,
-              totals.totalCost - totals.refunded,
-            );
-
-            if (currentNetCost === nextTargetCost) {
-              return buildRunSummary({
-                available: await getUserCreditBalance(tx, userId),
-                refunded: totals.refunded,
-                totalCost: totals.totalCost,
-              });
-            }
-
-            const now = new Date();
-
-            if (currentNetCost < nextTargetCost) {
-              const debitAmount = nextTargetCost - currentNetCost;
-              const [updatedUser] = await tx
-                .update(user)
-                .set({
-                  creditBalance: sql`${user.creditBalance} - ${debitAmount}`,
-                  updatedAt: now,
-                })
-                .where(
-                  and(
-                    eq(user.id, userId),
-                    gte(user.creditBalance, debitAmount),
-                  ),
-                )
-                .returning({ creditBalance: user.creditBalance });
-
-              if (!updatedUser) {
-                throw new WorkflowCreditsError({
-                  message:
-                    "You do not have enough credits to settle this workflow execution.",
-                });
-              }
-
-              await tx.insert(creditLedgerEntries).values({
-                amount: debitAmount,
-                balanceAfter: updatedUser.creditBalance,
-                createdAt: now,
-                executionId,
-                id: randomUUID(),
-                kind: "debit",
-                reason,
-                userId,
-              });
-
-              return buildRunSummary({
-                available: updatedUser.creditBalance,
-                refunded: totals.refunded,
-                totalCost: totals.totalCost + debitAmount,
-              });
-            }
-
-            const refundAmount = currentNetCost - nextTargetCost;
-            const [updatedUser] = await tx
-              .update(user)
-              .set({
-                creditBalance: sql`${user.creditBalance} + ${refundAmount}`,
-                updatedAt: now,
-              })
-              .where(eq(user.id, userId))
-              .returning({ creditBalance: user.creditBalance });
-
-            if (!updatedUser) {
-              throw new WorkflowInfrastructureError({
-                message: `User ${userId} was not found.`,
-              });
-            }
-
-            await tx.insert(creditLedgerEntries).values({
-              amount: refundAmount,
-              balanceAfter: updatedUser.creditBalance,
-              createdAt: now,
-              executionId,
-              id: randomUUID(),
-              kind: "refund",
-              reason,
-              userId,
-            });
-
-            return buildRunSummary({
-              available: updatedUser.creditBalance,
-              refunded: totals.refunded + refundAmount,
-              totalCost: totals.totalCost,
-            });
-          }),
-        catch: WorkflowCreditsService.toCreditsError,
-      }),
-    debitExecution: ({ amount, executionId, reason, userId }) =>
+    debitExecutionOutput: ({
+      amount,
+      executionId,
+      reason,
+      sourceKey,
+      userId,
+    }) =>
       Effect.tryPromise({
         try: async () => {
           await syncSubscriptionCreditsForUser(userId);
 
           if (amount <= 0) {
             const available = await getUserCreditBalance(db, userId);
-            return buildRunSummary({ available, refunded: 0, totalCost: 0 });
+            const totals = await getExecutionTotals(db, {
+              executionId,
+              userId,
+            });
+            return buildRunSummary({
+              available,
+              refunded: totals.refunded,
+              totalCost: totals.totalCost,
+            });
           }
 
           return db.transaction(async (tx) => {
+            const existing = await tx
+              .select({ amount: creditLedgerEntries.amount })
+              .from(creditLedgerEntries)
+              .where(eq(creditLedgerEntries.sourceKey, sourceKey))
+              .limit(1)
+              .then((rows) => rows[0] ?? null);
+
+            if (existing) {
+              const [available, totals] = await Promise.all([
+                getUserCreditBalance(tx, userId),
+                getExecutionTotals(tx, { executionId, userId }),
+              ]);
+              return buildRunSummary({
+                available,
+                refunded: totals.refunded,
+                totalCost: totals.totalCost,
+              });
+            }
+
             const now = new Date();
             const [updatedUser] = await tx
               .update(user)
@@ -278,7 +195,8 @@ export class WorkflowCreditsService extends Context.Tag(
 
             if (!updatedUser) {
               throw new WorkflowCreditsError({
-                message: "You do not have enough credits to run this workflow.",
+                message:
+                  "You do not have enough credits to run this workflow output.",
               });
             }
 
@@ -290,13 +208,18 @@ export class WorkflowCreditsService extends Context.Tag(
               id: randomUUID(),
               kind: "debit",
               reason,
+              sourceKey,
               userId,
             });
 
+            const totals = await getExecutionTotals(tx, {
+              executionId,
+              userId,
+            });
             return buildRunSummary({
               available: updatedUser.creditBalance,
-              refunded: 0,
-              totalCost: amount,
+              refunded: totals.refunded,
+              totalCost: totals.totalCost,
             });
           });
         },
@@ -310,12 +233,12 @@ export class WorkflowCreditsService extends Context.Tag(
         },
         catch: WorkflowCreditsService.toCreditsInfraError,
       }),
-    getRunSummary: ({ runId, userId }) =>
+    getExecutionSummary: ({ executionId, userId }) =>
       Effect.tryPromise({
         try: async () => {
           const available = await getUserCreditBalance(db, userId);
           const totals = await getExecutionTotals(db, {
-            executionId: runId,
+            executionId: executionId,
             userId,
           });
 
@@ -325,62 +248,6 @@ export class WorkflowCreditsService extends Context.Tag(
             totalCost: totals.totalCost,
           });
         },
-        catch: WorkflowCreditsService.toCreditsError,
-      }),
-    refundExecution: ({ executionId, reason, userId }) =>
-      Effect.tryPromise({
-        try: async () =>
-          db.transaction(async (tx) => {
-            const totals = await getExecutionTotals(tx, {
-              executionId,
-              userId,
-            });
-            const refundableAmount = Math.max(
-              0,
-              totals.totalCost - totals.refunded,
-            );
-
-            if (refundableAmount <= 0) {
-              return buildRunSummary({
-                available: await getUserCreditBalance(tx, userId),
-                refunded: totals.refunded,
-                totalCost: totals.totalCost,
-              });
-            }
-
-            const now = new Date();
-            const [updatedUser] = await tx
-              .update(user)
-              .set({
-                creditBalance: sql`${user.creditBalance} + ${refundableAmount}`,
-                updatedAt: now,
-              })
-              .where(eq(user.id, userId))
-              .returning({ creditBalance: user.creditBalance });
-
-            if (!updatedUser) {
-              throw new WorkflowInfrastructureError({
-                message: `User ${userId} was not found.`,
-              });
-            }
-
-            await tx.insert(creditLedgerEntries).values({
-              amount: refundableAmount,
-              balanceAfter: updatedUser.creditBalance,
-              createdAt: now,
-              executionId,
-              id: randomUUID(),
-              kind: "refund",
-              reason,
-              userId,
-            });
-
-            return buildRunSummary({
-              available: updatedUser.creditBalance,
-              refunded: totals.refunded + refundableAmount,
-              totalCost: totals.totalCost,
-            });
-          }),
         catch: WorkflowCreditsService.toCreditsError,
       }),
   });

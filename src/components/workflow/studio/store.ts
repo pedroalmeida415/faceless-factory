@@ -26,20 +26,20 @@ import type {
   WorkflowExecutionStatusResponse,
 } from "~/lib/workflow/execution/types";
 import {
-  isWorkflowRunActiveStatus,
-  isWorkflowRunLockingStatus,
+  isWorkflowExecutionActiveStatus,
+  isWorkflowExecutionLockingStatus,
 } from "~/lib/workflow/execution/types";
 import type { WorkflowHandleReference } from "~/lib/workflow/graph";
 import type { WorkflowValueType } from "~/lib/workflow/node-definitions";
 import type { WorkflowProject } from "~/lib/workflow/project";
 import {
   ImageGeneratorService,
-  LaneReorderNodeService,
-  LaneSelectNodeService,
-  LaneSplitNodeService,
-  LaneZipAlignNodeService,
   ListNodeService,
   LlmGeneratorService,
+  OutputReorderNodeService,
+  OutputSelectNodeService,
+  OutputSplitNodeService,
+  OutputZipAlignNodeService,
   PromptNodeService,
   VideoGeneratorService,
   WorkflowNodeAssetService,
@@ -396,9 +396,9 @@ function mergeExecutionTargetResults(
         return {
           ...node,
           lastPrompt: projectedNode.lastPrompt,
-          outputLanes: mergeMediaExecutionLanes({
-            currentLanes: node.outputLanes,
-            projectedLanes: projectedNode.outputLanes,
+          outputs: mergeMediaExecutionOutputs({
+            currentOutputs: node.outputs,
+            projectedOutputs: projectedNode.outputs,
           }),
           review: mergeExecutionReview(node.review, projectedNode.review),
         };
@@ -411,9 +411,9 @@ function mergeExecutionTargetResults(
         return {
           ...node,
           lastPrompt: projectedNode.lastPrompt,
-          outputLanes: mergeMediaExecutionLanes({
-            currentLanes: node.outputLanes,
-            projectedLanes: projectedNode.outputLanes,
+          outputs: mergeMediaExecutionOutputs({
+            currentOutputs: node.outputs,
+            projectedOutputs: projectedNode.outputs,
           }),
           review: mergeExecutionReview(node.review, projectedNode.review),
         };
@@ -427,9 +427,9 @@ function mergeExecutionTargetResults(
           ...node,
           lastPrompt: projectedNode.lastPrompt,
           lastSystemPrompt: projectedNode.lastSystemPrompt,
-          outputLanes: mergeTextExecutionLanes({
-            currentLanes: node.outputLanes,
-            projectedLanes: projectedNode.outputLanes,
+          outputs: mergeTextExecutionOutputs({
+            currentOutputs: node.outputs,
+            projectedOutputs: projectedNode.outputs,
           }),
           review: mergeExecutionReview(node.review, projectedNode.review),
         };
@@ -440,54 +440,54 @@ function mergeExecutionTargetResults(
   } satisfies WorkflowDocument;
 }
 
-function mergeMediaExecutionLanes(params: {
-  currentLanes: readonly WorkflowAsset[][];
-  projectedLanes: readonly WorkflowAsset[][];
+function mergeMediaExecutionOutputs(params: {
+  currentOutputs: readonly WorkflowAsset[][];
+  projectedOutputs: readonly WorkflowAsset[][];
 }) {
-  const laneCount = Math.max(
-    params.currentLanes.length,
-    params.projectedLanes.length,
+  const outputCount = Math.max(
+    params.currentOutputs.length,
+    params.projectedOutputs.length,
   );
-  const lanes = Array.from(
-    { length: laneCount },
-    (_, laneIndex) => params.currentLanes[laneIndex] ?? [],
+  const outputs = Array.from(
+    { length: outputCount },
+    (_, outputIndex) => params.currentOutputs[outputIndex] ?? [],
   );
   for (
-    let laneIndex = 0;
-    laneIndex < params.projectedLanes.length;
-    laneIndex += 1
+    let outputIndex = 0;
+    outputIndex < params.projectedOutputs.length;
+    outputIndex += 1
   ) {
-    const projectedLane = params.projectedLanes[laneIndex];
-    if (projectedLane?.length) {
-      lanes[laneIndex] = projectedLane;
+    const projectedOutput = params.projectedOutputs[outputIndex];
+    if (projectedOutput?.length) {
+      outputs[outputIndex] = projectedOutput;
     }
   }
-  return lanes;
+  return outputs;
 }
 
-function mergeTextExecutionLanes(params: {
-  currentLanes: readonly string[];
-  projectedLanes: readonly string[];
+function mergeTextExecutionOutputs(params: {
+  currentOutputs: readonly string[];
+  projectedOutputs: readonly string[];
 }) {
-  const laneCount = Math.max(
-    params.currentLanes.length,
-    params.projectedLanes.length,
+  const outputCount = Math.max(
+    params.currentOutputs.length,
+    params.projectedOutputs.length,
   );
-  const lanes = Array.from(
-    { length: laneCount },
-    (_, laneIndex) => params.currentLanes[laneIndex] ?? "",
+  const outputs = Array.from(
+    { length: outputCount },
+    (_, outputIndex) => params.currentOutputs[outputIndex] ?? "",
   );
   for (
-    let laneIndex = 0;
-    laneIndex < params.projectedLanes.length;
-    laneIndex += 1
+    let outputIndex = 0;
+    outputIndex < params.projectedOutputs.length;
+    outputIndex += 1
   ) {
-    const projectedLane = params.projectedLanes[laneIndex];
-    if (projectedLane?.trim()) {
-      lanes[laneIndex] = projectedLane;
+    const projectedOutput = params.projectedOutputs[outputIndex];
+    if (projectedOutput?.trim()) {
+      outputs[outputIndex] = projectedOutput;
     }
   }
-  return lanes;
+  return outputs;
 }
 
 type ReviewState = WorkflowDocument["nodes"][number] extends infer Node
@@ -500,19 +500,19 @@ function mergeExecutionReview(
   currentReview: ReviewState,
   projectedReview: ReviewState,
 ) {
-  if (!projectedReview.lanes.length) {
+  if (!projectedReview.outputs.length) {
     return currentReview;
   }
 
-  const currentLaneByIndex = new Map(
-    currentReview.lanes.map((lane) => [lane.laneIndex, lane]),
+  const currentOutputByIndex = new Map(
+    currentReview.outputs.map((output) => [output.outputIndex, output]),
   );
-  const projectedLaneByIndex = new Map(
-    projectedReview.lanes.map((lane) => [lane.laneIndex, lane]),
+  const projectedOutputByIndex = new Map(
+    projectedReview.outputs.map((output) => [output.outputIndex, output]),
   );
-  const laneIndexes = new Set([
-    ...currentLaneByIndex.keys(),
-    ...projectedLaneByIndex.keys(),
+  const outputIndexes = new Set([
+    ...currentOutputByIndex.keys(),
+    ...projectedOutputByIndex.keys(),
   ]);
 
   return {
@@ -520,27 +520,27 @@ function mergeExecutionReview(
     sourceNodeId: projectedReview.sourceNodeId,
     updatedAt: projectedReview.updatedAt ?? currentReview.updatedAt,
     valueType: projectedReview.valueType,
-    lanes: Array.from(laneIndexes)
+    outputs: Array.from(outputIndexes)
       .sort((left, right) => left - right)
-      .flatMap((laneIndex) => {
-        const currentLane = currentLaneByIndex.get(laneIndex);
-        const projectedLane = projectedLaneByIndex.get(laneIndex);
-        if (!projectedLane) {
-          return currentLane ? [currentLane] : [];
+      .flatMap((outputIndex) => {
+        const currentOutput = currentOutputByIndex.get(outputIndex);
+        const projectedOutput = projectedOutputByIndex.get(outputIndex);
+        if (!projectedOutput) {
+          return currentOutput ? [currentOutput] : [];
         }
-        if (!currentLane) {
-          return [projectedLane];
+        if (!currentOutput) {
+          return [projectedOutput];
         }
         return [
           {
-            ...projectedLane,
-            assets: projectedLane.assets.length
-              ? projectedLane.assets
-              : currentLane.assets,
+            ...projectedOutput,
+            assets: projectedOutput.assets.length
+              ? projectedOutput.assets
+              : currentOutput.assets,
             text:
-              projectedLane.text && projectedLane.text.trim().length > 0
-                ? projectedLane.text
-                : currentLane.text,
+              projectedOutput.text && projectedOutput.text.trim().length > 0
+                ? projectedOutput.text
+                : currentOutput.text,
           },
         ];
       }),
@@ -571,7 +571,7 @@ type WorkflowStudioState = {
   savedLocalDocumentVersion: number;
   projectId: string | null;
   runtime: WorkflowRuntimeState;
-  activeRunId: string | null;
+  activeExecutionId: string | null;
   isStreamingExecutionStatus: boolean;
   lockedNodeIds: string[];
   lastExecutionFinishedAt: string | null;
@@ -588,13 +588,13 @@ type WorkflowStudioState = {
   applyServerExecutionState: (
     executionState: WorkflowExecutionStatusResponse,
   ) => void;
-  clearActiveRunId: () => void;
+  clearActiveExecutionId: () => void;
   setProjectPersistence: (
     documentRevision: number,
     savedLocalDocumentVersion: number,
   ) => void;
   setActivity: (activity: string) => void;
-  setActiveRunId: (runId: string) => void;
+  setActiveExecutionId: (executionId: string) => void;
   setExecutionStreaming: (isStreaming: boolean) => void;
   setNodeRuntimeState: (
     nodeId: string,
@@ -606,16 +606,16 @@ type WorkflowStudioState = {
     updater: (node: WorkflowDocumentNode) => WorkflowDocumentNode,
   ) => void;
   setListItems: (nodeId: string, items: string[]) => void;
-  setLaneReorderMode: (nodeId: string, mode: "shift" | "manual") => void;
-  setLaneReorderOrder: (nodeId: string, order: number[]) => void;
-  setLaneReorderShift: (nodeId: string, shift: number) => void;
-  setLaneReorderValueType: (
+  setOutputReorderMode: (nodeId: string, mode: "shift" | "manual") => void;
+  setOutputReorderOrder: (nodeId: string, order: number[]) => void;
+  setOutputReorderShift: (nodeId: string, shift: number) => void;
+  setOutputReorderValueType: (
     nodeId: string,
     valueType: WorkflowValueType | null,
   ) => void;
-  setLaneSelectIndices: (nodeId: string, indices: number[]) => void;
-  setLaneSplitCount: (nodeId: string, splitCount: number) => void;
-  setLaneZipAlignMode: (nodeId: string, mode: "zip" | "broadcast") => void;
+  setOutputSelectIndices: (nodeId: string, indices: number[]) => void;
+  setOutputSplitCount: (nodeId: string, splitCount: number) => void;
+  setOutputZipAlignMode: (nodeId: string, mode: "zip" | "broadcast") => void;
   setPrompt: (nodeId: string, prompt: string) => void;
   setPromptDisplayMode: (
     nodeId: string,
@@ -689,7 +689,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     savedLocalDocumentVersion: 0,
     projectId: null,
     runtime: initialSnapshot.runtime,
-    activeRunId: null,
+    activeExecutionId: null,
     isStreamingExecutionStatus: false,
     lockedNodeIds: [],
     lastExecutionFinishedAt: null,
@@ -718,7 +718,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           );
 
           applySnapshotToState(state, nextSnapshot);
-          state.activeRunId = null;
+          state.activeExecutionId = null;
           state.documentRevision = project.documentRevision;
           state.isStreamingExecutionStatus = false;
           state.lockedNodeIds = [];
@@ -731,7 +731,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           resetHistory(state);
           state.ready = true;
         } catch (error) {
-          state.activeRunId = null;
+          state.activeExecutionId = null;
           state.documentRevision = null;
           state.isStreamingExecutionStatus = false;
           state.lockedNodeIds = [];
@@ -770,13 +770,17 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           { persistDocument: false, recordHistory: false },
         );
 
-        state.activeRunId = isWorkflowRunActiveStatus(executionState.status)
-          ? executionState.runId
+        state.activeExecutionId = isWorkflowExecutionActiveStatus(
+          executionState.status,
+        )
+          ? executionState.executionId
           : null;
-        state.lockedNodeIds = isWorkflowRunLockingStatus(executionState.status)
+        state.lockedNodeIds = isWorkflowExecutionLockingStatus(
+          executionState.status,
+        )
           ? executionState.targetNodeIds
           : [];
-        state.isStreamingExecutionStatus = isWorkflowRunActiveStatus(
+        state.isStreamingExecutionStatus = isWorkflowExecutionActiveStatus(
           executionState.status,
         );
         state.documentRevision =
@@ -788,9 +792,9 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       });
     },
 
-    clearActiveRunId: () => {
+    clearActiveExecutionId: () => {
       set((state) => {
-        state.activeRunId = null;
+        state.activeExecutionId = null;
         state.isStreamingExecutionStatus = false;
         state.lockedNodeIds = [];
       });
@@ -812,9 +816,9 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       });
     },
 
-    setActiveRunId: (runId) => {
+    setActiveExecutionId: (executionId) => {
       set((state) => {
-        state.activeRunId = runId;
+        state.activeExecutionId = executionId;
       });
     },
 
@@ -878,58 +882,58 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       );
     },
 
-    setLaneReorderMode: (nodeId, mode) => {
+    setOutputReorderMode: (nodeId, mode) => {
       get().updateDocumentNode(nodeId, (node) =>
-        node.kind === "laneReorder"
-          ? LaneReorderNodeService.setMode(node, mode)
+        node.kind === "outputReorder"
+          ? OutputReorderNodeService.setMode(node, mode)
           : node,
       );
     },
 
-    setLaneReorderOrder: (nodeId, order) => {
+    setOutputReorderOrder: (nodeId, order) => {
       get().updateDocumentNode(nodeId, (node) =>
-        node.kind === "laneReorder"
-          ? LaneReorderNodeService.setOrder(node, order)
+        node.kind === "outputReorder"
+          ? OutputReorderNodeService.setOrder(node, order)
           : node,
       );
     },
 
-    setLaneReorderShift: (nodeId, shift) => {
+    setOutputReorderShift: (nodeId, shift) => {
       get().updateDocumentNode(nodeId, (node) =>
-        node.kind === "laneReorder"
-          ? LaneReorderNodeService.setShift(node, shift)
+        node.kind === "outputReorder"
+          ? OutputReorderNodeService.setShift(node, shift)
           : node,
       );
     },
 
-    setLaneReorderValueType: (nodeId, valueType) => {
+    setOutputReorderValueType: (nodeId, valueType) => {
       get().updateDocumentNode(nodeId, (node) =>
-        node.kind === "laneReorder"
-          ? LaneReorderNodeService.setValueType(node, valueType)
+        node.kind === "outputReorder"
+          ? OutputReorderNodeService.setValueType(node, valueType)
           : node,
       );
     },
 
-    setLaneSelectIndices: (nodeId, indices) => {
+    setOutputSelectIndices: (nodeId, indices) => {
       get().updateDocumentNode(nodeId, (node) =>
-        node.kind === "laneSelect"
-          ? LaneSelectNodeService.setIndices(node, indices)
+        node.kind === "outputSelect"
+          ? OutputSelectNodeService.setIndices(node, indices)
           : node,
       );
     },
 
-    setLaneSplitCount: (nodeId, splitCount) => {
+    setOutputSplitCount: (nodeId, splitCount) => {
       get().updateDocumentNode(nodeId, (node) =>
-        node.kind === "laneSplit"
-          ? LaneSplitNodeService.setSplitCount(node, splitCount)
+        node.kind === "outputSplit"
+          ? OutputSplitNodeService.setSplitCount(node, splitCount)
           : node,
       );
     },
 
-    setLaneZipAlignMode: (nodeId, mode) => {
+    setOutputZipAlignMode: (nodeId, mode) => {
       get().updateDocumentNode(nodeId, (node) =>
-        node.kind === "laneZipAlign"
-          ? LaneZipAlignNodeService.setMode(node, mode)
+        node.kind === "outputZipAlign"
+          ? OutputZipAlignNodeService.setMode(node, mode)
           : node,
       );
     },

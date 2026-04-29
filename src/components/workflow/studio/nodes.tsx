@@ -29,28 +29,28 @@ import {
   getVideoGeneratorModeOptions,
 } from "~/lib/workflow/generator-models";
 import {
-  getLaneReorderInputValue,
-  getLaneTransformInputValue,
+  getOutputReorderInputValue,
+  getOutputTransformInputValue,
 } from "~/lib/workflow/graph";
+import { getOutputSplitOutputHandleId } from "~/lib/workflow/node-definitions";
 import {
-  createIdentityLanePermutation,
-  getLanePermutationValidationMessage,
-  getLaneSelectionValidationMessage,
-  getLaneSplitValidationMessage,
-} from "~/lib/workflow/lanes";
-import { getLaneSplitOutputHandleId } from "~/lib/workflow/node-definitions";
+  createIdentityOutputPermutation,
+  getOutputPermutationValidationMessage,
+  getOutputSelectionValidationMessage,
+  getOutputSplitValidationMessage,
+} from "~/lib/workflow/runtime-values";
 import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
 import type {
   AssetNodeData,
   GeneratorConfigValue,
   ImageGeneratorNodeData,
-  LaneMergeNodeData,
-  LaneReorderNodeData,
-  LaneSelectNodeData,
-  LaneSplitNodeData,
-  LaneZipAlignNodeData,
   ListNodeData,
   LlmGeneratorNodeData,
+  OutputMergeNodeData,
+  OutputReorderNodeData,
+  OutputSelectNodeData,
+  OutputSplitNodeData,
+  OutputZipAlignNodeData,
   PromptNodeData,
   VideoGeneratorNodeData,
   WorkflowNodeData,
@@ -73,7 +73,7 @@ function capitalize(value: string) {
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
 }
 
-function getLaneValueTypeColor(valueType: "text" | "image" | "video" | null) {
+function getOutputValueTypeColor(valueType: "text" | "image" | "video" | null) {
   switch (valueType) {
     case "text":
       return "#f59e0b";
@@ -86,14 +86,14 @@ function getLaneValueTypeColor(valueType: "text" | "image" | "video" | null) {
   }
 }
 
-function parseLaneOrder(value: string) {
+function parseOutputOrder(value: string) {
   return value
     .split(/[\s,]+/)
     .map((entry) => entry.trim())
     .filter(Boolean)
     .flatMap((entry) => {
-      const laneNumber = Number(entry);
-      return Number.isInteger(laneNumber) ? [laneNumber - 1] : [];
+      const outputNumber = Number(entry);
+      return Number.isInteger(outputNumber) ? [outputNumber - 1] : [];
     });
 }
 
@@ -448,7 +448,7 @@ function WorkflowExecutionCostBadge({ nodeId }: { nodeId: string }) {
       }
       variant="outline"
     >
-      {`${priceQuote.hasEstimate ? "~" : ""}${formatCredits(priceQuote.totalCost)} / run`}
+      {`${priceQuote.hasEstimate ? "~" : ""}${formatCredits(priceQuote.totalCost)} est.`}
     </Badge>
   );
 }
@@ -541,7 +541,7 @@ const ListNode = memo(function ListNode({
             className="border-primary/20 bg-primary/10 text-primary"
             variant="outline"
           >
-            Lanes
+            Outputs
           </Badge>
         ) : null
       }
@@ -555,7 +555,7 @@ const ListNode = memo(function ListNode({
         onItemsChange={(nextItems) => setListItems(id, nextItems)}
       />
       {filledItemCount > 1 ? (
-        <NodeNotice tone="accent">{`${filledItemCount} lanes.`}</NodeNotice>
+        <NodeNotice tone="accent">{`${filledItemCount} outputs.`}</NodeNotice>
       ) : null}
     </NodeShell>
   );
@@ -606,7 +606,7 @@ const AssetNode = memo(function AssetNode({
       {!data.assets.length && !data.assetKind ? (
         <Card className="border-dashed py-0">
           <CardContent className="py-8 text-muted-foreground text-sm">
-            Each selected asset becomes an isolated execution lane.
+            Each selected asset becomes an isolated output item.
           </CardContent>
         </Card>
       ) : null}
@@ -626,19 +626,19 @@ const AssetNode = memo(function AssetNode({
   );
 }, isSameNodeRender);
 
-const LaneReorderNode = memo(function LaneReorderNode({
+const OutputReorderNode = memo(function OutputReorderNode({
   id,
   data,
   selected,
-}: NodeProps<LaneReorderNodeData>) {
-  const { setLaneReorderMode, setLaneReorderOrder, setLaneReorderShift } =
+}: NodeProps<OutputReorderNodeData>) {
+  const { setOutputReorderMode, setOutputReorderOrder, setOutputReorderShift } =
     useStudioContext();
   const document = useWorkflowStudioStore((state) => state.document);
-  const inputValue = getLaneReorderInputValue(document, id);
-  const laneCount =
-    inputValue?.type === data.valueType ? inputValue.lanes.length : null;
-  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Lane";
-  const color = getLaneValueTypeColor(data.valueType);
+  const inputValue = getOutputReorderInputValue(document, id);
+  const outputCount =
+    inputValue?.type === data.valueType ? inputValue.items.length : null;
+  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Output";
+  const color = getOutputValueTypeColor(data.valueType);
   const orderText = data.order.map((index) => index + 1).join(", ");
   const [orderDraft, setOrderDraft] = useState(orderText);
   const orderLabel =
@@ -646,10 +646,11 @@ const LaneReorderNode = memo(function LaneReorderNode({
       ? data.order.map((index) => index + 1).join(" -> ")
       : `Shift ${data.shift > 0 ? "+" : ""}${data.shift}`;
   const orderValidationMessage =
-    data.mode === "manual" && laneCount !== null
-      ? getLanePermutationValidationMessage(data.order, laneCount)
+    data.mode === "manual" && outputCount !== null
+      ? getOutputPermutationValidationMessage(data.order, outputCount)
       : null;
-  const commitOrder = () => setLaneReorderOrder(id, parseLaneOrder(orderDraft));
+  const commitOrder = () =>
+    setOutputReorderOrder(id, parseOutputOrder(orderDraft));
 
   useEffect(() => {
     setOrderDraft(orderText);
@@ -676,7 +677,7 @@ const LaneReorderNode = memo(function LaneReorderNode({
           className="border-border/70 bg-muted/50 text-foreground"
           variant="outline"
         >
-          {data.valueType ? `${valueTypeLabel} lanes` : "Connect lanes"}
+          {data.valueType ? `${valueTypeLabel} outputs` : "Connect outputs"}
         </Badge>
         <Badge
           className="border-primary/20 bg-primary/10 text-primary"
@@ -690,7 +691,7 @@ const LaneReorderNode = memo(function LaneReorderNode({
       ) : (
         <Card className="border-dashed py-0">
           <CardContent className="py-4 text-muted-foreground text-sm">
-            Connect text, image, or video lanes to infer this transform type.
+            Connect text, image, or video outputs to infer this transform type.
           </CardContent>
         </Card>
       )}
@@ -698,7 +699,7 @@ const LaneReorderNode = memo(function LaneReorderNode({
       <NodeFieldCard label="Mode">
         <Select
           onValueChange={(value) =>
-            setLaneReorderMode(id, value === "manual" ? "manual" : "shift")
+            setOutputReorderMode(id, value === "manual" ? "manual" : "shift")
           }
           value={data.mode}
         >
@@ -716,16 +717,16 @@ const LaneReorderNode = memo(function LaneReorderNode({
         <NodeFieldCard label="Shift">
           <div className="grid grid-cols-3 gap-2">
             <ShellButton
-              onClick={() => setLaneReorderShift(id, data.shift + 1)}
+              onClick={() => setOutputReorderShift(id, data.shift + 1)}
             >
               Left
             </ShellButton>
             <ShellButton
-              onClick={() => setLaneReorderShift(id, data.shift - 1)}
+              onClick={() => setOutputReorderShift(id, data.shift - 1)}
             >
               Right
             </ShellButton>
-            <ShellButton onClick={() => setLaneReorderShift(id, 0)}>
+            <ShellButton onClick={() => setOutputReorderShift(id, 0)}>
               Reset
             </ShellButton>
           </div>
@@ -745,16 +746,16 @@ const LaneReorderNode = memo(function LaneReorderNode({
             placeholder="Example: 2, 3, 1"
             value={orderDraft}
           />
-          {laneCount !== null ? (
+          {outputCount !== null ? (
             <div className="flex items-center justify-between gap-2">
               <p className="text-muted-foreground text-xs">
-                {laneCount} lane{laneCount === 1 ? "" : "s"}
+                {outputCount} output{outputCount === 1 ? "" : "s"}
               </p>
               <ShellButton
                 onClick={() =>
-                  setLaneReorderOrder(
+                  setOutputReorderOrder(
                     id,
-                    createIdentityLanePermutation(laneCount),
+                    createIdentityOutputPermutation(outputCount),
                   )
                 }
               >
@@ -771,23 +772,23 @@ const LaneReorderNode = memo(function LaneReorderNode({
   );
 }, isSameNodeRender);
 
-const LaneSelectNode = memo(function LaneSelectNode({
+const OutputSelectNode = memo(function OutputSelectNode({
   id,
   data,
   selected,
-}: NodeProps<LaneSelectNodeData>) {
-  const { setLaneSelectIndices } = useStudioContext();
+}: NodeProps<OutputSelectNodeData>) {
+  const { setOutputSelectIndices } = useStudioContext();
   const document = useWorkflowStudioStore((state) => state.document);
-  const inputValue = getLaneTransformInputValue(document, id);
-  const laneCount =
-    inputValue?.type === data.valueType ? inputValue.lanes.length : null;
-  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Lane";
-  const color = getLaneValueTypeColor(data.valueType);
+  const inputValue = getOutputTransformInputValue(document, id);
+  const outputCount =
+    inputValue?.type === data.valueType ? inputValue.items.length : null;
+  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Output";
+  const color = getOutputValueTypeColor(data.valueType);
   const orderText = data.indices.map((index) => index + 1).join(", ");
   const [draft, setDraft] = useState(orderText);
   const message =
-    data.valueType && laneCount !== null
-      ? getLaneSelectionValidationMessage(data.indices, laneCount)
+    data.valueType && outputCount !== null
+      ? getOutputSelectionValidationMessage(data.indices, outputCount)
       : null;
 
   useEffect(() => setDraft(orderText), [orderText]);
@@ -803,20 +804,22 @@ const LaneSelectNode = memo(function LaneSelectNode({
       selected={selected}
     >
       <NodeNotice tone="accent">
-        {data.valueType ? `Select ${orderText || "no"} lanes` : "Connect lanes"}
+        {data.valueType
+          ? `Select ${orderText || "no"} outputs`
+          : "Connect outputs"}
       </NodeNotice>
-      <NodeFieldCard label="Selected lanes">
+      <NodeFieldCard label="Selected outputs">
         <Input
           nativeInput
           className="nodrag nopan nowheel"
-          onBlur={() => setLaneSelectIndices(id, parseLaneOrder(draft))}
+          onBlur={() => setOutputSelectIndices(id, parseOutputOrder(draft))}
           onChange={(event) => setDraft(event.target.value)}
           placeholder="Example: 1, 3"
           value={draft}
         />
-        {laneCount !== null ? (
+        {outputCount !== null ? (
           <p className="text-muted-foreground text-xs">
-            {laneCount} upstream lanes
+            {outputCount} upstream outputs
           </p>
         ) : null}
         {message ? <p className="text-destructive text-xs">{message}</p> : null}
@@ -825,25 +828,25 @@ const LaneSelectNode = memo(function LaneSelectNode({
   );
 }, isSameNodeRender);
 
-const LaneSplitNode = memo(function LaneSplitNode({
+const OutputSplitNode = memo(function OutputSplitNode({
   id,
   data,
   selected,
-}: NodeProps<LaneSplitNodeData>) {
-  const { setLaneSplitCount } = useStudioContext();
+}: NodeProps<OutputSplitNodeData>) {
+  const { setOutputSplitCount } = useStudioContext();
   const document = useWorkflowStudioStore((state) => state.document);
-  const inputValue = getLaneTransformInputValue(document, id);
-  const laneCount =
-    inputValue?.type === data.valueType ? inputValue.lanes.length : null;
+  const inputValue = getOutputTransformInputValue(document, id);
+  const upstreamOutputCount =
+    inputValue?.type === data.valueType ? inputValue.items.length : null;
   const outputCount = data.valueType
-    ? Math.min(data.splitCount, laneCount ?? data.splitCount)
+    ? Math.min(data.splitCount, upstreamOutputCount ?? data.splitCount)
     : 0;
   const message =
-    laneCount === null
+    upstreamOutputCount === null
       ? null
-      : getLaneSplitValidationMessage(data.splitCount, laneCount);
-  const color = getLaneValueTypeColor(data.valueType);
-  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Lane";
+      : getOutputSplitValidationMessage(data.splitCount, upstreamOutputCount);
+  const color = getOutputValueTypeColor(data.valueType);
+  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Output";
 
   return (
     <NodeShell
@@ -853,8 +856,8 @@ const LaneSplitNode = memo(function LaneSplitNode({
       outputs={
         data.valueType
           ? Array.from({ length: outputCount }, (_, index) => ({
-              id: getLaneSplitOutputHandleId(index),
-              label: `Lane ${index + 1}`,
+              id: getOutputSplitOutputHandleId(index),
+              label: `Output ${index + 1}`,
               color,
             }))
           : []
@@ -862,22 +865,22 @@ const LaneSplitNode = memo(function LaneSplitNode({
       selected={selected}
     >
       <NodeNotice tone="accent">
-        {data.valueType ? `${outputCount} outputs` : "Connect lanes"}
+        {data.valueType ? `${outputCount} outputs` : "Connect outputs"}
       </NodeNotice>
       <NodeFieldCard label="Output count">
         <Input
           nativeInput
-          max={laneCount ?? undefined}
+          max={outputCount ?? undefined}
           min={1}
           onChange={(event) =>
-            setLaneSplitCount(id, Number(event.target.value))
+            setOutputSplitCount(id, Number(event.target.value))
           }
           type="number"
           value={data.splitCount}
         />
-        {laneCount !== null ? (
+        {outputCount !== null ? (
           <p className="text-muted-foreground text-xs">
-            {laneCount} upstream lanes
+            {outputCount} upstream outputs
           </p>
         ) : null}
         {message ? <p className="text-destructive text-xs">{message}</p> : null}
@@ -886,13 +889,13 @@ const LaneSplitNode = memo(function LaneSplitNode({
   );
 }, isSameNodeRender);
 
-const LaneMergeNode = memo(function LaneMergeNode({
+const OutputMergeNode = memo(function OutputMergeNode({
   id,
   data,
   selected,
-}: NodeProps<LaneMergeNodeData>) {
-  const color = getLaneValueTypeColor(data.valueType);
-  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Lane";
+}: NodeProps<OutputMergeNodeData>) {
+  const color = getOutputValueTypeColor(data.valueType);
+  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Output";
 
   return (
     <NodeShell
@@ -906,21 +909,21 @@ const LaneMergeNode = memo(function LaneMergeNode({
     >
       <NodeNotice tone="accent">
         {data.valueType
-          ? "Concatenate compatible lane streams"
-          : "Connect lanes"}
+          ? "Concatenate compatible output streams"
+          : "Connect outputs"}
       </NodeNotice>
     </NodeShell>
   );
 }, isSameNodeRender);
 
-const LaneZipAlignNode = memo(function LaneZipAlignNode({
+const OutputZipAlignNode = memo(function OutputZipAlignNode({
   id,
   data,
   selected,
-}: NodeProps<LaneZipAlignNodeData>) {
-  const { setLaneZipAlignMode } = useStudioContext();
-  const color = getLaneValueTypeColor(data.valueType);
-  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Lane";
+}: NodeProps<OutputZipAlignNodeData>) {
+  const { setOutputZipAlignMode } = useStudioContext();
+  const color = getOutputValueTypeColor(data.valueType);
+  const valueTypeLabel = data.valueType ? capitalize(data.valueType) : "Output";
 
   return (
     <NodeShell
@@ -933,12 +936,17 @@ const LaneZipAlignNode = memo(function LaneZipAlignNode({
       selected={selected}
     >
       <NodeNotice tone="accent">
-        {data.valueType ? "Zip with existing broadcast rules" : "Connect lanes"}
+        {data.valueType
+          ? "Zip with existing broadcast rules"
+          : "Connect outputs"}
       </NodeNotice>
       <NodeFieldCard label="Alignment">
         <Select
           onValueChange={(value) =>
-            setLaneZipAlignMode(id, value === "broadcast" ? "broadcast" : "zip")
+            setOutputZipAlignMode(
+              id,
+              value === "broadcast" ? "broadcast" : "zip",
+            )
           }
           value={data.mode}
         >
@@ -967,40 +975,47 @@ function GeneratorReviewPanel({
   valueType: "text" | "image" | "video";
 }) {
   const document = useWorkflowStudioStore((state) => state.document);
-  const activeRunId = useWorkflowStudioStore((state) => state.activeRunId);
+  const activeExecutionId = useWorkflowStudioStore(
+    (state) => state.activeExecutionId,
+  );
   const applyServerExecutionState = useWorkflowStudioStore(
     (state) => state.applyServerExecutionState,
   );
   const setActivity = useWorkflowStudioStore((state) => state.setActivity);
   const node = document.nodes.find((candidate) => candidate.id === nodeId);
-  const outputLaneCount =
+  const outputOutputCount =
     node && (node.kind === "imageGenerator" || node.kind === "videoGenerator")
-      ? node.outputLanes.length
+      ? node.outputs.length
       : node?.kind === "llmGenerator"
-        ? node.outputLanes.length
+        ? node.outputs.length
         : null;
-  const laneCount =
-    outputLaneCount && outputLaneCount > 0 ? outputLaneCount : null;
-  const reviewLanes = review.lanes;
+  const outputCount =
+    outputOutputCount && outputOutputCount > 0 ? outputOutputCount : null;
+  const reviewOutputs = review.outputs;
 
-  const decideLane = useCallback(
-    (laneIndex: number, decision: "approve" | "reject") => {
-      if (!activeRunId) {
-        setActivity("Run the workflow before reviewing lanes.");
+  const decideOutput = useCallback(
+    (
+      outputIndex: number,
+      decision: "approve" | "reject",
+      reviewExecutionId: string | null,
+    ) => {
+      const executionId = reviewExecutionId ?? activeExecutionId;
+      if (!executionId) {
+        setActivity("Run the workflow before reviewing outputs.");
         return;
       }
 
       const effect =
         decision === "approve"
-          ? WorkflowClientService.approveReviewLane({
-              laneIndex,
+          ? WorkflowClientService.approveReviewOutput({
+              outputIndex,
               reviewNodeId: nodeId,
-              runId: activeRunId,
+              executionId,
             })
-          : WorkflowClientService.rejectReviewLane({
-              laneIndex,
+          : WorkflowClientService.rejectReviewOutput({
+              outputIndex,
               reviewNodeId: nodeId,
-              runId: activeRunId,
+              executionId,
             });
 
       void Effect.runPromise(effect)
@@ -1011,7 +1026,7 @@ function GeneratorReviewPanel({
           setActivity(getErrorMessage(error));
         });
     },
-    [activeRunId, applyServerExecutionState, nodeId, setActivity],
+    [activeExecutionId, applyServerExecutionState, nodeId, setActivity],
   );
 
   if (!reviewEnabled) {
@@ -1021,46 +1036,50 @@ function GeneratorReviewPanel({
   return (
     <>
       <NodeNotice tone="accent">
-        Review is enabled. Approved lanes continue downstream; regenerated lanes
-        replace this generator output.
+        Review is enabled. Approved outputs continue downstream; regenerated
+        outputs replace this generator output.
       </NodeNotice>
 
-      {laneCount !== null && !reviewLanes.length ? (
-        <NodeNotice>{`${laneCount} lanes will be reviewed when execution reaches this node.`}</NodeNotice>
+      {outputCount !== null && !reviewOutputs.length ? (
+        <NodeNotice>{`${outputCount} output items will be reviewed when execution reaches this node.`}</NodeNotice>
       ) : null}
 
-      {reviewLanes.map((lane) => (
+      {reviewOutputs.map((output) => (
         <NodeFieldCard
-          key={lane.laneIndex}
-          label={`Lane ${lane.laneIndex + 1}`}
+          key={output.outputIndex}
+          label={`Output ${output.outputIndex + 1}`}
         >
           <div className="flex items-center justify-between gap-2">
-            <Badge variant="outline">{lane.status}</Badge>
+            <Badge variant="outline">{output.status}</Badge>
             <span className="text-muted-foreground text-xs">
-              Attempt {lane.attempt + 1}
+              Attempt {output.attempt + 1}
             </span>
           </div>
           {valueType === "text" ? (
             <p className="whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-sm">
-              {lane.text || "No text output."}
+              {output.text || "No text output."}
             </p>
           ) : (
-            <OutputGallery assets={lane.assets} />
+            <OutputGallery assets={output.assets} />
           )}
           <div className="grid grid-cols-2 gap-2">
             <ShellButton
               className="justify-center"
               disabled={
-                lane.status === "approved" || lane.status === "regenerating"
+                output.status === "approved" || output.status === "regenerating"
               }
-              onClick={() => decideLane(lane.laneIndex, "approve")}
+              onClick={() =>
+                decideOutput(output.outputIndex, "approve", output.executionId)
+              }
             >
               Approve
             </ShellButton>
             <ShellButton
               className="justify-center"
-              disabled={lane.status !== "pending"}
-              onClick={() => decideLane(lane.laneIndex, "reject")}
+              disabled={output.status !== "pending"}
+              onClick={() =>
+                decideOutput(output.outputIndex, "reject", output.executionId)
+              }
             >
               Regenerate
             </ShellButton>
@@ -1241,12 +1260,12 @@ const ImageGeneratorNode = memo(function ImageGeneratorNode({
       {iterationInfo.hasIterator ? (
         <NodeNotice tone="accent">
           {iterationInfo.mismatchedIterators
-            ? "Connected lane counts do not match. Use one lane for broadcast or matching lane counts for zip."
-            : `Will run ${iterationInfo.iterations} lane${iterationInfo.iterations === 1 ? "" : "s"}.`}
+            ? "Connected output counts do not match. Use one output for broadcast or matching output counts for zip."
+            : `Will run ${iterationInfo.iterations} output${iterationInfo.iterations === 1 ? "" : "s"}.`}
         </NodeNotice>
       ) : null}
 
-      <OutputGallery assets={data.outputLanes.flat()} />
+      <OutputGallery assets={data.outputs.flat()} />
 
       <GeneratorReviewPanel
         nodeId={id}
@@ -1319,12 +1338,12 @@ const VideoGeneratorNode = memo(function VideoGeneratorNode({
       {iterationInfo.hasIterator ? (
         <NodeNotice tone="accent">
           {iterationInfo.mismatchedIterators
-            ? "Connected lane counts do not match. Use one lane for broadcast or matching lane counts for zip."
-            : `Will run ${iterationInfo.iterations} lane${iterationInfo.iterations === 1 ? "" : "s"}.`}
+            ? "Connected output counts do not match. Use one output for broadcast or matching output counts for zip."
+            : `Will run ${iterationInfo.iterations} output${iterationInfo.iterations === 1 ? "" : "s"}.`}
         </NodeNotice>
       ) : null}
 
-      <OutputGallery assets={data.outputLanes.flat()} />
+      <OutputGallery assets={data.outputs.flat()} />
 
       <GeneratorReviewPanel
         nodeId={id}
@@ -1368,7 +1387,7 @@ const LlmGeneratorNode = memo(function LlmGeneratorNode({
       selected={selected}
     >
       <GeneratedTextPreview
-        text={data.outputLanes.filter(Boolean).join("\n\n") || null}
+        text={data.outputs.filter(Boolean).join("\n\n") || null}
       />
 
       <GeneratorReviewPanel
@@ -1392,11 +1411,11 @@ export const nodeTypes = {
   list: ListNode,
   prompt: PromptNode,
   asset: AssetNode,
-  laneReorder: LaneReorderNode,
-  laneSelect: LaneSelectNode,
-  laneSplit: LaneSplitNode,
-  laneMerge: LaneMergeNode,
-  laneZipAlign: LaneZipAlignNode,
+  outputReorder: OutputReorderNode,
+  outputSelect: OutputSelectNode,
+  outputSplit: OutputSplitNode,
+  outputMerge: OutputMergeNode,
+  outputZipAlign: OutputZipAlignNode,
   imageGenerator: ImageGeneratorNode,
   videoGenerator: VideoGeneratorNode,
   llmGenerator: LlmGeneratorNode,

@@ -25,7 +25,7 @@ type EvaluateNode<E> = (
   currentId: string,
   path: ReadonlySet<string>,
   sourceHandleId?: string | null,
-  requestedLaneIndex?: number | null,
+  requestedOutputIndex?: number | null,
 ) => Effect.Effect<RuntimeValue, E>;
 
 function getInputValues<E>(
@@ -34,7 +34,7 @@ function getInputValues<E>(
   handleId: string,
   incomingByTarget: IncomingByTarget,
   evaluateNode: EvaluateNode<E>,
-  requestedLaneIndex?: number | null,
+  requestedOutputIndex?: number | null,
 ) {
   const incomingEdges = getIncomingEdgesForHandle(
     incomingByTarget,
@@ -45,7 +45,7 @@ function getInputValues<E>(
   return Effect.forEach(
     incomingEdges,
     (edge) =>
-      evaluateNode(edge.source, path, edge.sourceHandle, requestedLaneIndex),
+      evaluateNode(edge.source, path, edge.sourceHandle, requestedOutputIndex),
     {
       concurrency: "unbounded",
     },
@@ -63,7 +63,7 @@ export function coerceTextInputBatch<E>(
   },
   incomingByTarget: IncomingByTarget,
   evaluateNode: EvaluateNode<E>,
-  requestedLaneIndex?: number | null,
+  requestedOutputIndex?: number | null,
 ) {
   return Effect.gen(function* () {
     const textHandle = getGeneratorInputHandles(document, targetId).find(
@@ -80,7 +80,7 @@ export function coerceTextInputBatch<E>(
       textHandle.id,
       incomingByTarget,
       evaluateNode,
-      requestedLaneIndex,
+      requestedOutputIndex,
     );
     const textValue = yield* Effect.try({
       try: () =>
@@ -118,7 +118,7 @@ export function coerceMediaInputBatches<E>(
   valueType: "image" | "video",
   incomingByTarget: IncomingByTarget,
   evaluateNode: EvaluateNode<E>,
-  requestedLaneIndex?: number | null,
+  requestedOutputIndex?: number | null,
 ) {
   return Effect.gen(function* () {
     const mediaHandles = getGeneratorInputHandles(document, targetId).filter(
@@ -134,7 +134,7 @@ export function coerceMediaInputBatches<E>(
             handle.id,
             incomingByTarget,
             evaluateNode,
-            requestedLaneIndex,
+            requestedOutputIndex,
           );
 
           return [

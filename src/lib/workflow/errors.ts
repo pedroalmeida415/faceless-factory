@@ -42,8 +42,8 @@ export class WorkflowStorageError extends Data.TaggedError(
   readonly cause?: unknown;
 }> {}
 
-export class WorkflowRunNotFoundError extends Data.TaggedError(
-  "WorkflowRunNotFoundError",
+export class WorkflowExecutionNotFoundError extends Data.TaggedError(
+  "WorkflowExecutionNotFoundError",
 )<{
   readonly message: string;
   readonly cause?: unknown;

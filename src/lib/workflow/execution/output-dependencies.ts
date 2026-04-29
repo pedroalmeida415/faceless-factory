@@ -4,10 +4,11 @@ import type {
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
 import { getWorkflowVisibleCompletionOutputs } from "~/lib/workflow/execution/artifact-projection";
-import { getWorkflowPlannedLaneCount } from "~/lib/workflow/execution/subgraph";
+import { getWorkflowPlannedOutputCount } from "~/lib/workflow/execution/subgraph";
 import {
-  getErroredWorkflowLaneResults,
-  type WorkflowRunArtifacts,
+  getErroredWorkflowOutputResults,
+  getWorkflowOutputKey,
+  type WorkflowOutputArtifacts,
 } from "~/lib/workflow/execution/types";
 import {
   buildIncomingByTarget,
@@ -15,23 +16,23 @@ import {
   getIncomingEdgesForHandle,
   getPromptNodeReferencedVariableKeys,
 } from "~/lib/workflow/graph";
-import { resolveLanePermutation } from "~/lib/workflow/lanes";
 import {
-  LANE_REORDER_INPUT_HANDLE_ID,
-  LANE_TRANSFORM_INPUT_HANDLE_ID,
+  OUTPUT_REORDER_INPUT_HANDLE_ID,
+  OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
 } from "~/lib/workflow/node-definitions";
+import { resolveOutputPermutation } from "~/lib/workflow/runtime-values";
 
-export type WorkflowLaneIdentity = {
+export type WorkflowOutputIdentity = {
   nodeId: string;
-  laneIndex: number;
+  outputIndex: number;
 };
 
-export type WorkflowPlannedLaneJob = WorkflowLaneIdentity & {
-  dependencies: WorkflowLaneIdentity[];
+export type WorkflowPlannedOutputJob = WorkflowOutputIdentity & {
+  dependencies: WorkflowOutputIdentity[];
 };
 
-export type WorkflowLaneDependencyPlan = {
-  jobs: WorkflowPlannedLaneJob[];
+export type WorkflowOutputDependencyPlan = {
+  jobs: WorkflowPlannedOutputJob[];
 };
 
 type IncomingByTarget = ReturnType<typeof buildIncomingByTarget>;
@@ -49,17 +50,15 @@ function isGeneratorNode(
   );
 }
 
-function laneKey(lane: WorkflowLaneIdentity) {
-  return `${lane.nodeId}:${lane.laneIndex}`;
-}
-
-function uniqueLanes(lanes: readonly WorkflowLaneIdentity[]) {
+function uniqueOutputs(items: readonly WorkflowOutputIdentity[]) {
   return Array.from(
-    new Map(lanes.map((lane) => [laneKey(lane), lane] as const)).values(),
+    new Map(
+      items.map((output) => [getWorkflowOutputKey(output), output] as const),
+    ).values(),
   ).sort(
     (left, right) =>
       left.nodeId.localeCompare(right.nodeId) ||
-      left.laneIndex - right.laneIndex,
+      left.outputIndex - right.outputIndex,
   );
 }
 
@@ -73,23 +72,23 @@ function getFirstInputEdge(
   );
 }
 
-function getBroadcastSourceLane(params: {
+function getBroadcastSourceOutput(params: {
   document: WorkflowDocument;
   generatorIterationById: ReadonlyMap<string, { iterations: number }>;
-  laneIndex: number;
+  outputIndex: number;
   sourceHandleId?: string | null;
   sourceNodeId: string;
 }) {
-  return getSourceLaneCount(params) === 1 ? 0 : params.laneIndex;
+  return getSourceOutputCount(params) === 1 ? 0 : params.outputIndex;
 }
 
-function getSourceLaneCount(params: {
+function getSourceOutputCount(params: {
   document: WorkflowDocument;
   generatorIterationById: ReadonlyMap<string, { iterations: number }>;
   sourceHandleId?: string | null;
   sourceNodeId: string;
 }): number {
-  return getWorkflowPlannedLaneCount(
+  return getWorkflowPlannedOutputCount(
     params.document,
     params.sourceNodeId,
     params.sourceHandleId,
@@ -97,41 +96,41 @@ function getSourceLaneCount(params: {
   );
 }
 
-function getLaneMergeSource(params: {
+function getOutputMergeSource(params: {
   document: WorkflowDocument;
   generatorIterationById: ReadonlyMap<string, { iterations: number }>;
   incomingEdges: readonly WorkflowDocumentEdge[];
-  laneIndex: number;
+  outputIndex: number;
 }) {
   let offset = 0;
   for (const edge of params.incomingEdges) {
-    const laneCount = getSourceLaneCount({
+    const outputCount = getSourceOutputCount({
       document: params.document,
       generatorIterationById: params.generatorIterationById,
       sourceHandleId: edge.sourceHandle,
       sourceNodeId: edge.source,
     });
-    if (params.laneIndex < offset + laneCount) {
-      return { edge, laneIndex: params.laneIndex - offset };
+    if (params.outputIndex < offset + outputCount) {
+      return { edge, outputIndex: params.outputIndex - offset };
     }
-    offset += laneCount;
+    offset += outputCount;
   }
 
   return null;
 }
 
-function resolveSourceLaneDependencies(params: {
+function resolveSourceOutputDependencies(params: {
   document: WorkflowDocument;
   generatorIterationById: ReadonlyMap<string, { iterations: number }>;
   incomingByTarget: IncomingByTarget;
-  laneIndex: number;
+  outputIndex: number;
   nodeById: ReadonlyMap<string, WorkflowDocumentNode>;
   nodeId: string;
   sourceHandleId?: string | null;
   targetNodeIds: ReadonlySet<string>;
   visiting: ReadonlySet<string>;
-}): WorkflowLaneIdentity[] {
-  const visitKey = `${params.nodeId}:${params.sourceHandleId ?? ""}:${params.laneIndex}`;
+}): WorkflowOutputIdentity[] {
+  const visitKey = `${params.nodeId}:${params.sourceHandleId ?? ""}:${params.outputIndex}`;
   if (params.visiting.has(visitKey)) {
     return [];
   }
@@ -142,31 +141,31 @@ function resolveSourceLaneDependencies(params: {
   }
 
   if (isGeneratorNode(node)) {
-    return [{ nodeId: node.id, laneIndex: params.laneIndex }];
+    return [{ nodeId: node.id, outputIndex: params.outputIndex }];
   }
 
   const visiting = new Set(params.visiting).add(visitKey);
-  const resolveEdge = (edge: WorkflowDocumentEdge, laneIndex: number) =>
-    resolveSourceLaneDependencies({
+  const resolveEdge = (edge: WorkflowDocumentEdge, outputIndex: number) =>
+    resolveSourceOutputDependencies({
       ...params,
-      laneIndex,
+      outputIndex,
       nodeId: edge.source,
       sourceHandleId: edge.sourceHandle,
       visiting,
     });
 
   switch (node.kind) {
-    case "laneReorder": {
+    case "outputReorder": {
       const edge = getFirstInputEdge(
         params.incomingByTarget,
         node.id,
-        LANE_REORDER_INPUT_HANDLE_ID,
+        OUTPUT_REORDER_INPUT_HANDLE_ID,
       );
       if (!edge) {
         return [];
       }
-      const laneOrder = resolveLanePermutation({
-        laneCount: getSourceLaneCount({
+      const outputOrder = resolveOutputPermutation({
+        outputCount: getSourceOutputCount({
           document: params.document,
           generatorIterationById: params.generatorIterationById,
           sourceHandleId: edge.sourceHandle,
@@ -178,67 +177,69 @@ function resolveSourceLaneDependencies(params: {
       });
       return resolveEdge(
         edge,
-        laneOrder[params.laneIndex] ??
-          getBroadcastSourceLane({
+        outputOrder[params.outputIndex] ??
+          getBroadcastSourceOutput({
             document: params.document,
             generatorIterationById: params.generatorIterationById,
-            laneIndex: params.laneIndex,
+            outputIndex: params.outputIndex,
             sourceHandleId: edge.sourceHandle,
             sourceNodeId: edge.source,
           }),
       );
     }
-    case "laneSelect": {
+    case "outputSelect": {
       const edge = getFirstInputEdge(
         params.incomingByTarget,
         node.id,
-        LANE_TRANSFORM_INPUT_HANDLE_ID,
+        OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
       );
-      return edge ? resolveEdge(edge, node.indices[params.laneIndex] ?? 0) : [];
-    }
-    case "laneSplit": {
-      const edge = getFirstInputEdge(
-        params.incomingByTarget,
-        node.id,
-        LANE_TRANSFORM_INPUT_HANDLE_ID,
-      );
-      const laneIndex = Number(
-        (params.sourceHandleId ?? "lane-0").replace("lane-", ""),
-      );
-      return edge && Number.isInteger(laneIndex)
-        ? resolveEdge(edge, laneIndex)
+      return edge
+        ? resolveEdge(edge, node.indices[params.outputIndex] ?? 0)
         : [];
     }
-    case "laneMerge": {
-      const source = getLaneMergeSource({
+    case "outputSplit": {
+      const edge = getFirstInputEdge(
+        params.incomingByTarget,
+        node.id,
+        OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
+      );
+      const outputIndex = Number(
+        (params.sourceHandleId ?? "output-0").replace("output-", ""),
+      );
+      return edge && Number.isInteger(outputIndex)
+        ? resolveEdge(edge, outputIndex)
+        : [];
+    }
+    case "outputMerge": {
+      const source = getOutputMergeSource({
         document: params.document,
         generatorIterationById: params.generatorIterationById,
         incomingEdges: getIncomingEdgesForHandle(
           params.incomingByTarget,
           node.id,
-          LANE_TRANSFORM_INPUT_HANDLE_ID,
+          OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
         ),
-        laneIndex: params.laneIndex,
+        outputIndex: params.outputIndex,
       });
-      return source ? resolveEdge(source.edge, source.laneIndex) : [];
+      return source ? resolveEdge(source.edge, source.outputIndex) : [];
     }
-    case "laneZipAlign":
+    case "outputZipAlign":
       return getIncomingEdgesForHandle(
         params.incomingByTarget,
         node.id,
-        LANE_TRANSFORM_INPUT_HANDLE_ID,
+        OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
       ).flatMap((edge) =>
         resolveEdge(
           edge,
           node.mode === "broadcast"
-            ? getBroadcastSourceLane({
+            ? getBroadcastSourceOutput({
                 document: params.document,
                 generatorIterationById: params.generatorIterationById,
-                laneIndex: params.laneIndex,
+                outputIndex: params.outputIndex,
                 sourceHandleId: edge.sourceHandle,
                 sourceNodeId: edge.source,
               })
-            : params.laneIndex,
+            : params.outputIndex,
         ),
       );
     case "prompt":
@@ -250,10 +251,10 @@ function resolveSourceLaneDependencies(params: {
         ).flatMap((edge) =>
           resolveEdge(
             edge,
-            getBroadcastSourceLane({
+            getBroadcastSourceOutput({
               document: params.document,
               generatorIterationById: params.generatorIterationById,
-              laneIndex: params.laneIndex,
+              outputIndex: params.outputIndex,
               sourceHandleId: edge.sourceHandle,
               sourceNodeId: edge.source,
             }),
@@ -266,11 +267,11 @@ function resolveSourceLaneDependencies(params: {
   }
 }
 
-export function buildWorkflowLaneDependencyPlan(params: {
+export function buildWorkflowOutputDependencyPlan(params: {
   document: WorkflowDocument;
   generatorIterationById: ReadonlyMap<string, { iterations: number }>;
   targetNodeIds: readonly string[];
-}): WorkflowLaneDependencyPlan {
+}): WorkflowOutputDependencyPlan {
   const incomingByTarget = buildIncomingByTarget(params.document.edges);
   const nodeById = new Map(
     params.document.nodes.map((node) => [node.id, node]),
@@ -284,22 +285,22 @@ export function buildWorkflowLaneDependencyPlan(params: {
       return [];
     }
 
-    return Array.from({ length: iterations }, (_, laneIndex) => ({
-      dependencies: uniqueLanes(
+    return Array.from({ length: iterations }, (_, outputIndex) => ({
+      dependencies: uniqueOutputs(
         getGeneratorInputHandles(params.document, nodeId).flatMap((handle) =>
           getIncomingEdgesForHandle(
             incomingByTarget,
             nodeId,
             handle.id,
           ).flatMap((edge) =>
-            resolveSourceLaneDependencies({
+            resolveSourceOutputDependencies({
               document: params.document,
               generatorIterationById: params.generatorIterationById,
               incomingByTarget,
-              laneIndex: getBroadcastSourceLane({
+              outputIndex: getBroadcastSourceOutput({
                 document: params.document,
                 generatorIterationById: params.generatorIterationById,
-                laneIndex,
+                outputIndex,
                 sourceHandleId: edge.sourceHandle,
                 sourceNodeId: edge.source,
               }),
@@ -312,9 +313,10 @@ export function buildWorkflowLaneDependencyPlan(params: {
           ),
         ),
       ).filter(
-        (dependency) => laneKey(dependency) !== `${nodeId}:${laneIndex}`,
+        (dependency) =>
+          getWorkflowOutputKey(dependency) !== `${nodeId}:${outputIndex}`,
       ),
-      laneIndex,
+      outputIndex,
       nodeId,
     }));
   });
@@ -322,104 +324,106 @@ export function buildWorkflowLaneDependencyPlan(params: {
   return { jobs };
 }
 
-export function getReadyWorkflowLaneJobs(params: {
-  blockedLanes?: ReadonlySet<string>;
-  completedLanes: ReadonlySet<string>;
-  plan: WorkflowLaneDependencyPlan;
+export function getReadyWorkflowOutputJobs(params: {
+  blockedOutputs?: ReadonlySet<string>;
+  completedOutputs: ReadonlySet<string>;
+  plan: WorkflowOutputDependencyPlan;
 }) {
   return params.plan.jobs.filter((job) => {
-    const key = laneKey(job);
+    const key = getWorkflowOutputKey(job);
     return (
-      !params.completedLanes.has(key) &&
-      !params.blockedLanes?.has(key) &&
+      !params.completedOutputs.has(key) &&
+      !params.blockedOutputs?.has(key) &&
       job.dependencies.every((dependency) =>
-        params.completedLanes.has(laneKey(dependency)),
+        params.completedOutputs.has(getWorkflowOutputKey(dependency)),
       )
     );
   });
 }
 
-export function getCompletedWorkflowLaneKeys(artifacts: WorkflowRunArtifacts) {
+export function getCompletedWorkflowOutputKeys(
+  artifacts: WorkflowOutputArtifacts,
+) {
   return new Set(
-    getWorkflowVisibleCompletionOutputs(artifacts).map(getWorkflowLaneKey),
+    getWorkflowVisibleCompletionOutputs(artifacts).map(getWorkflowOutputKey),
   );
 }
 
-export function getFailedWorkflowLaneKeys(artifacts: WorkflowRunArtifacts) {
+export function getFailedWorkflowOutputKeys(
+  artifacts: WorkflowOutputArtifacts,
+) {
   return new Set(
-    getErroredWorkflowLaneResults(artifacts).map(getWorkflowLaneKey),
+    getErroredWorkflowOutputResults(artifacts).map(getWorkflowOutputKey),
   );
 }
 
-export function getFailedWorkflowLaneClosure(params: {
-  failedLanes: ReadonlySet<string>;
-  plan: WorkflowLaneDependencyPlan;
+export function getFailedWorkflowOutputClosure(params: {
+  failedOutputs: ReadonlySet<string>;
+  plan: WorkflowOutputDependencyPlan;
 }) {
-  const failedLanes = new Set(params.failedLanes);
+  const failedOutputs = new Set(params.failedOutputs);
   let changed = true;
 
   while (changed) {
     changed = false;
     for (const job of params.plan.jobs) {
-      const key = laneKey(job);
-      if (failedLanes.has(key)) {
+      const key = getWorkflowOutputKey(job);
+      if (failedOutputs.has(key)) {
         continue;
       }
       if (
         job.dependencies.some((dependency) =>
-          failedLanes.has(laneKey(dependency)),
+          failedOutputs.has(getWorkflowOutputKey(dependency)),
         )
       ) {
-        failedLanes.add(key);
+        failedOutputs.add(key);
         changed = true;
       }
     }
   }
 
-  return failedLanes;
+  return failedOutputs;
 }
 
-export function areWorkflowLaneJobsSettled(params: {
-  completedLanes: ReadonlySet<string>;
-  failedLanes: ReadonlySet<string>;
-  plan: WorkflowLaneDependencyPlan;
+export function areWorkflowOutputJobsSettled(params: {
+  completedOutputs: ReadonlySet<string>;
+  failedOutputs: ReadonlySet<string>;
+  plan: WorkflowOutputDependencyPlan;
 }) {
-  const failedClosure = getFailedWorkflowLaneClosure(params);
+  const failedClosure = getFailedWorkflowOutputClosure(params);
   return params.plan.jobs.every((job) => {
-    const key = laneKey(job);
-    return params.completedLanes.has(key) || failedClosure.has(key);
+    const key = getWorkflowOutputKey(job);
+    return params.completedOutputs.has(key) || failedClosure.has(key);
   });
 }
 
-export function getWorkflowLaneSettlement(params: {
-  artifacts: WorkflowRunArtifacts;
-  blockedLanes?: ReadonlySet<string>;
-  plan: WorkflowLaneDependencyPlan;
+export function getWorkflowOutputSettlement(params: {
+  artifacts: WorkflowOutputArtifacts;
+  blockedOutputs?: ReadonlySet<string>;
+  plan: WorkflowOutputDependencyPlan;
 }) {
-  const completedLanes = getCompletedWorkflowLaneKeys(params.artifacts);
-  const failedLanes = getFailedWorkflowLaneKeys(params.artifacts);
-  const failedClosure = getFailedWorkflowLaneClosure({
-    failedLanes,
+  const completedOutputs = getCompletedWorkflowOutputKeys(params.artifacts);
+  const failedOutputs = getFailedWorkflowOutputKeys(params.artifacts);
+  const failedClosure = getFailedWorkflowOutputClosure({
+    failedOutputs,
     plan: params.plan,
   });
-  const blockedLanes = new Set(params.blockedLanes ?? []);
+  const blockedOutputs = new Set(params.blockedOutputs ?? []);
   for (const key of failedClosure) {
-    blockedLanes.add(key);
+    blockedOutputs.add(key);
   }
 
   return {
-    blockedLanes,
-    completedLanes,
+    blockedOutputs,
+    completedOutputs,
     failedClosure,
-    failedLanes,
+    failedOutputs,
     plan: params.plan,
     settled: params.plan.jobs.every((job) => {
-      const key = laneKey(job);
-      return completedLanes.has(key) || failedClosure.has(key);
+      const key = getWorkflowOutputKey(job);
+      return completedOutputs.has(key) || failedClosure.has(key);
     }),
   };
 }
 
-export function getWorkflowLaneKey(lane: WorkflowLaneIdentity) {
-  return laneKey(lane);
-}
+export { getWorkflowOutputKey } from "~/lib/workflow/execution/types";

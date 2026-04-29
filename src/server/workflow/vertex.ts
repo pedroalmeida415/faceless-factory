@@ -277,7 +277,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
   {
     readonly generateImagesWithNanoBananaPro: (params: {
       ownerUserId: string;
-      projectId?: string | null;
+      projectId: string;
       request: GenerateImageRequest;
     }) => Effect.Effect<
       GenerateImageResponse,
@@ -289,7 +289,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
     >;
     readonly generateTextWithGemini3Flash: (params: {
       ownerUserId: string;
-      projectId?: string | null;
+      projectId: string;
       request: GenerateLlmRequest;
     }) => Effect.Effect<
       GenerateLlmResponse,
@@ -301,7 +301,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
     >;
     readonly generateVideosWithVeo31: (params: {
       ownerUserId: string;
-      projectId?: string | null;
+      projectId: string;
       request: GenerateVideoRequest;
     }) => Effect.Effect<
       GenerateVideoResponse,
@@ -382,7 +382,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
 
       const generateTextWithGemini3Flash = ({
         ownerUserId,
-        projectId: _projectId = null,
+        projectId: _projectId,
         request: {
           idempotencyKey = null,
           model,
@@ -396,7 +396,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
         },
       }: {
         ownerUserId: string;
-        projectId?: string | null;
+        projectId: string;
         request: GenerateLlmRequest;
       }) =>
         Effect.gen(function* () {
@@ -499,7 +499,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
 
       const generateImagesWithNanoBananaPro = ({
         ownerUserId,
-        projectId = null,
+        projectId,
         request: {
           idempotencyKey = null,
           model,
@@ -510,7 +510,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
         },
       }: {
         ownerUserId: string;
-        projectId?: string | null;
+        projectId: string;
         request: GenerateImageRequest;
       }) =>
         Effect.gen(function* () {
@@ -616,7 +616,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
                 fileName: `nano-banana-pro-${index + 1}.png`,
                 model: NANO_BANANA_PRO_MODEL_ID,
                 ownerUserId,
-                projectId,
+                workflowId: projectId,
               });
             },
             { concurrency: "unbounded" },
@@ -630,7 +630,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
 
       const generateVideosWithVeo31 = ({
         ownerUserId,
-        projectId = null,
+        projectId,
         request: {
           idempotencyKey = null,
           model,
@@ -646,7 +646,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
         },
       }: {
         ownerUserId: string;
-        projectId?: string | null;
+        projectId: string;
         request: GenerateVideoRequest;
       }) =>
         Effect.gen(function* () {
@@ -807,7 +807,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
                   fileName: `veo-3-1-${index + 1}.mp4`,
                   model: VEO_31_FAST_MODEL_ID,
                   ownerUserId,
-                  projectId,
+                  workflowId: projectId,
                 });
               }
 
@@ -818,7 +818,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
                   mimeType,
                   model: VEO_31_FAST_MODEL_ID,
                   ownerUserId,
-                  projectId,
+                  workflowId: projectId,
                   source: "generated",
                   url: video.uri,
                 });

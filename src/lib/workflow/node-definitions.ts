@@ -1,11 +1,12 @@
 import type { PromptDisplayMode, WorkflowNodeKind } from "~/lib/workflow/types";
 
 export const PROMPT_INPUT_HANDLE_ID = "prompt";
-export const LANE_REORDER_INPUT_HANDLE_ID = "input";
-export const LANE_REORDER_OUTPUT_HANDLE_ID = "output";
-export const LANE_TRANSFORM_INPUT_HANDLE_ID = "input";
-export const LANE_TRANSFORM_OUTPUT_HANDLE_ID = "output";
-export const getLaneSplitOutputHandleId = (index: number) => `lane-${index}`;
+export const OUTPUT_REORDER_INPUT_HANDLE_ID = "input";
+export const OUTPUT_REORDER_OUTPUT_HANDLE_ID = "output";
+export const OUTPUT_TRANSFORM_INPUT_HANDLE_ID = "input";
+export const OUTPUT_TRANSFORM_OUTPUT_HANDLE_ID = "output";
+export const getOutputSplitOutputHandleId = (index: number) =>
+  `output-${index}`;
 export const PROMPT_VARIABLE_PATTERN =
   /\{\{([a-zA-Z][a-zA-Z0-9]*)(?::[^}]*)?\}\}/g;
 export const PROMPT_VARIABLE_HANDLE_COLOR = "#f59e0b";
@@ -28,16 +29,16 @@ export function formatNodeTitle(kind: WorkflowNodeKind) {
       return "Prompt";
     case "asset":
       return "Asset";
-    case "laneReorder":
-      return "Lane Reorder";
-    case "laneSelect":
-      return "Lane Select";
-    case "laneSplit":
-      return "Lane Split";
-    case "laneMerge":
-      return "Lane Merge";
-    case "laneZipAlign":
-      return "Lane Zip";
+    case "outputReorder":
+      return "Output Reorder";
+    case "outputSelect":
+      return "Output Select";
+    case "outputSplit":
+      return "Output Split";
+    case "outputMerge":
+      return "Output Merge";
+    case "outputZipAlign":
+      return "Output Zip";
     case "imageGenerator":
       return "Image Gen";
     case "videoGenerator":
@@ -55,14 +56,14 @@ export function getNodeOutputHandleId(kind: WorkflowNodeKind) {
       return "text";
     case "asset":
       return "asset";
-    case "laneReorder":
-      return LANE_REORDER_OUTPUT_HANDLE_ID;
-    case "laneSelect":
-    case "laneMerge":
-    case "laneZipAlign":
-      return LANE_TRANSFORM_OUTPUT_HANDLE_ID;
-    case "laneSplit":
-      return getLaneSplitOutputHandleId(0);
+    case "outputReorder":
+      return OUTPUT_REORDER_OUTPUT_HANDLE_ID;
+    case "outputSelect":
+    case "outputMerge":
+    case "outputZipAlign":
+      return OUTPUT_TRANSFORM_OUTPUT_HANDLE_ID;
+    case "outputSplit":
+      return getOutputSplitOutputHandleId(0);
     case "imageGenerator":
       return "images";
     case "videoGenerator":

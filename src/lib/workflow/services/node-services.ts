@@ -1,11 +1,11 @@
 import type {
   ImageGeneratorWorkflowNode,
-  LaneReorderWorkflowNode,
-  LaneSelectWorkflowNode,
-  LaneSplitWorkflowNode,
-  LaneZipAlignWorkflowNode,
   ListWorkflowNode,
   LlmGeneratorWorkflowNode,
+  OutputReorderWorkflowNode,
+  OutputSelectWorkflowNode,
+  OutputSplitWorkflowNode,
+  OutputZipAlignWorkflowNode,
   PromptWorkflowNode,
   VideoGeneratorWorkflowNode,
   WorkflowDocumentNode,
@@ -131,11 +131,11 @@ export const ListNodeService = {
   },
 };
 
-export const LaneReorderNodeService = {
+export const OutputReorderNodeService = {
   setMode(
-    node: LaneReorderWorkflowNode,
-    mode: LaneReorderWorkflowNode["mode"],
-  ): LaneReorderWorkflowNode {
+    node: OutputReorderWorkflowNode,
+    mode: OutputReorderWorkflowNode["mode"],
+  ): OutputReorderWorkflowNode {
     return {
       ...node,
       mode,
@@ -143,9 +143,9 @@ export const LaneReorderNodeService = {
   },
 
   setOrder(
-    node: LaneReorderWorkflowNode,
+    node: OutputReorderWorkflowNode,
     order: number[],
-  ): LaneReorderWorkflowNode {
+  ): OutputReorderWorkflowNode {
     return {
       ...node,
       mode: "manual",
@@ -154,9 +154,9 @@ export const LaneReorderNodeService = {
   },
 
   setShift(
-    node: LaneReorderWorkflowNode,
+    node: OutputReorderWorkflowNode,
     shift: number,
-  ): LaneReorderWorkflowNode {
+  ): OutputReorderWorkflowNode {
     return {
       ...node,
       mode: "shift",
@@ -165,9 +165,9 @@ export const LaneReorderNodeService = {
   },
 
   setValueType(
-    node: LaneReorderWorkflowNode,
+    node: OutputReorderWorkflowNode,
     valueType: WorkflowValueType | null,
-  ): LaneReorderWorkflowNode {
+  ): OutputReorderWorkflowNode {
     return {
       ...node,
       valueType,
@@ -175,27 +175,27 @@ export const LaneReorderNodeService = {
   },
 };
 
-export const LaneSelectNodeService = {
-  setIndices(node: LaneSelectWorkflowNode, indices: number[]) {
-    return { ...node, indices } satisfies LaneSelectWorkflowNode;
+export const OutputSelectNodeService = {
+  setIndices(node: OutputSelectWorkflowNode, indices: number[]) {
+    return { ...node, indices } satisfies OutputSelectWorkflowNode;
   },
 };
 
-export const LaneSplitNodeService = {
-  setSplitCount(node: LaneSplitWorkflowNode, splitCount: number) {
+export const OutputSplitNodeService = {
+  setSplitCount(node: OutputSplitWorkflowNode, splitCount: number) {
     return {
       ...node,
       splitCount: Math.max(1, Math.trunc(splitCount)),
-    } satisfies LaneSplitWorkflowNode;
+    } satisfies OutputSplitWorkflowNode;
   },
 };
 
-export const LaneZipAlignNodeService = {
+export const OutputZipAlignNodeService = {
   setMode(
-    node: LaneZipAlignWorkflowNode,
-    mode: LaneZipAlignWorkflowNode["mode"],
+    node: OutputZipAlignWorkflowNode,
+    mode: OutputZipAlignWorkflowNode["mode"],
   ) {
-    return { ...node, mode } satisfies LaneZipAlignWorkflowNode;
+    return { ...node, mode } satisfies OutputZipAlignWorkflowNode;
   },
 };
 
@@ -235,13 +235,13 @@ export const ImageGeneratorService = {
     node: ImageGeneratorWorkflowNode,
     result: {
       lastPrompt: string;
-      outputLanes: WorkflowAsset[][];
+      outputs: WorkflowAsset[][];
     },
   ): ImageGeneratorWorkflowNode {
     return {
       ...node,
       lastPrompt: result.lastPrompt,
-      outputLanes: result.outputLanes,
+      outputs: result.outputs,
     };
   },
 };
@@ -282,13 +282,13 @@ export const VideoGeneratorService = {
     node: VideoGeneratorWorkflowNode,
     result: {
       lastPrompt: string;
-      outputLanes: WorkflowAsset[][];
+      outputs: WorkflowAsset[][];
     },
   ): VideoGeneratorWorkflowNode {
     return {
       ...node,
       lastPrompt: result.lastPrompt,
-      outputLanes: result.outputLanes,
+      outputs: result.outputs,
     };
   },
 };
@@ -310,14 +310,14 @@ export const LlmGeneratorService = {
     result: {
       lastPrompt: string;
       lastSystemPrompt: string;
-      outputLanes: string[];
+      outputs: string[];
     },
   ): LlmGeneratorWorkflowNode {
     return {
       ...node,
       lastPrompt: result.lastPrompt,
       lastSystemPrompt: result.lastSystemPrompt,
-      outputLanes: result.outputLanes,
+      outputs: result.outputs,
     };
   },
 };

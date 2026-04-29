@@ -2,8 +2,8 @@ import { Layer, ManagedRuntime } from "effect";
 import { WorkflowArtifactStore } from "~/server/workflow/artifact-store";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
 import { WorkflowExecutionService } from "~/server/workflow/execution-service";
+import { WorkflowExecutionStore } from "~/server/workflow/execution-store";
 import { WorkflowProjectStore } from "~/server/workflow/project-store";
-import { WorkflowRunStore } from "~/server/workflow/run-store";
 import { WorkflowStorage } from "~/server/workflow/storage";
 import { VertexAi } from "~/server/workflow/vertex";
 
@@ -12,7 +12,7 @@ const ServerBaseLayer = Layer.mergeAll(
   WorkflowArtifactStore.Live,
   WorkflowProjectStore.Live,
   WorkflowStorage.Live,
-  WorkflowRunStore.Live,
+  WorkflowExecutionStore.Live,
 );
 
 const VertexAiLayer = VertexAi.Live.pipe(Layer.provide(WorkflowStorage.Live));
@@ -23,7 +23,7 @@ const WorkflowExecutionLayer = WorkflowExecutionService.Live.pipe(
       WorkflowCreditsService.Live,
       WorkflowArtifactStore.Live,
       WorkflowProjectStore.Live,
-      WorkflowRunStore.Live,
+      WorkflowExecutionStore.Live,
       VertexAiLayer,
     ),
   ),

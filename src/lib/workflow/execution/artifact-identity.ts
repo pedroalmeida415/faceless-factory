@@ -13,22 +13,23 @@ export function hashWorkflowArtifactInput(value: unknown) {
 
 export function getGeneratorOutputAttempt(
   node: GeneratorWorkflowNode,
-  laneIndex: number,
+  outputIndex: number,
 ) {
   return (
-    node.review.lanes.find((lane) => lane.laneIndex === laneIndex)?.attempt ?? 0
+    node.review.outputs.find((output) => output.outputIndex === outputIndex)
+      ?.attempt ?? 0
   );
 }
 
 export function getGeneratorOutputInputHash(params: {
-  laneIndex: number;
+  outputIndex: number;
   node: GeneratorWorkflowNode;
   promptSnapshot: string | null;
   systemPromptSnapshot?: string | null;
 }) {
   const base = {
     config: params.node.config,
-    laneIndex: params.laneIndex,
+    outputIndex: params.outputIndex,
     mode: params.node.mode,
     model: params.node.model,
     nodeId: params.node.id,
@@ -46,9 +47,9 @@ export function getGeneratorOutputInputHash(params: {
 export function getGeneratorOutputIdempotencyKey(params: {
   attempt: number;
   inputHash: string;
-  laneIndex: number;
+  outputIndex: number;
   node: GeneratorWorkflowNode;
-  runId: string;
+  executionId: string;
 }) {
-  return `${params.runId}:${params.node.id}:${params.laneIndex}:${params.attempt}:${params.node.model}:${params.inputHash}`;
+  return `${params.executionId}:${params.node.id}:${params.outputIndex}:${params.attempt}:${params.node.model}:${params.inputHash}`;
 }

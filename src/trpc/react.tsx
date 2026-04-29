@@ -51,11 +51,9 @@ function summarizeWorkflowDocument(value: unknown) {
     }
 
     const assets = Array.isArray(node.assets) ? node.assets.length : 0;
-    const outputLanes = Array.isArray(node.outputLanes)
-      ? node.outputLanes.length
-      : 0;
+    const outputs = Array.isArray(node.outputs) ? node.outputs.length : 0;
 
-    return total + assets + outputLanes;
+    return total + assets + outputs;
   }, 0);
 
   return {

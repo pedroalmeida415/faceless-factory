@@ -17,13 +17,13 @@ import type {
   AssetNodeFields,
   GeneratorReviewFields,
   ImageGeneratorSettings,
-  LaneMergeNodeFields,
-  LaneReorderNodeFields,
-  LaneSelectNodeFields,
-  LaneSplitNodeFields,
-  LaneZipAlignNodeFields,
   ListNodeFields,
   LlmGeneratorSettings,
+  OutputMergeNodeFields,
+  OutputReorderNodeFields,
+  OutputSelectNodeFields,
+  OutputSplitNodeFields,
+  OutputZipAlignNodeFields,
   PromptDisplayMode,
   PromptNodeFields,
   PromptVariable,
@@ -32,7 +32,7 @@ import type {
   WorkflowGeneratorResult,
   WorkflowLlmResult,
   WorkflowNodeKind,
-  WorkflowReviewLane,
+  WorkflowReviewOutput,
   WorkflowReviewState,
 } from "~/lib/workflow/types";
 
@@ -66,29 +66,29 @@ export type ListWorkflowNode = WorkflowDocumentNodeBase &
     kind: "list";
   };
 
-export type LaneReorderWorkflowNode = WorkflowDocumentNodeBase &
-  LaneReorderNodeFields & {
-    kind: "laneReorder";
+export type OutputReorderWorkflowNode = WorkflowDocumentNodeBase &
+  OutputReorderNodeFields & {
+    kind: "outputReorder";
   };
 
-export type LaneSelectWorkflowNode = WorkflowDocumentNodeBase &
-  LaneSelectNodeFields & {
-    kind: "laneSelect";
+export type OutputSelectWorkflowNode = WorkflowDocumentNodeBase &
+  OutputSelectNodeFields & {
+    kind: "outputSelect";
   };
 
-export type LaneSplitWorkflowNode = WorkflowDocumentNodeBase &
-  LaneSplitNodeFields & {
-    kind: "laneSplit";
+export type OutputSplitWorkflowNode = WorkflowDocumentNodeBase &
+  OutputSplitNodeFields & {
+    kind: "outputSplit";
   };
 
-export type LaneMergeWorkflowNode = WorkflowDocumentNodeBase &
-  LaneMergeNodeFields & {
-    kind: "laneMerge";
+export type OutputMergeWorkflowNode = WorkflowDocumentNodeBase &
+  OutputMergeNodeFields & {
+    kind: "outputMerge";
   };
 
-export type LaneZipAlignWorkflowNode = WorkflowDocumentNodeBase &
-  LaneZipAlignNodeFields & {
-    kind: "laneZipAlign";
+export type OutputZipAlignWorkflowNode = WorkflowDocumentNodeBase &
+  OutputZipAlignNodeFields & {
+    kind: "outputZipAlign";
   };
 
 export type ImageGeneratorWorkflowNode = WorkflowDocumentNodeBase &
@@ -112,18 +112,47 @@ export type LlmGeneratorWorkflowNode = WorkflowDocumentNodeBase &
     kind: "llmGenerator";
   };
 
+export type ImageGeneratorWorkflowDefinitionNode = WorkflowDocumentNodeBase &
+  ImageGeneratorSettings &
+  Pick<GeneratorReviewFields, "reviewEnabled"> & {
+    kind: "imageGenerator";
+  };
+
+export type VideoGeneratorWorkflowDefinitionNode = WorkflowDocumentNodeBase &
+  VideoGeneratorSettings &
+  Pick<GeneratorReviewFields, "reviewEnabled"> & {
+    kind: "videoGenerator";
+  };
+
+export type LlmGeneratorWorkflowDefinitionNode = WorkflowDocumentNodeBase &
+  LlmGeneratorSettings &
+  Pick<GeneratorReviewFields, "reviewEnabled"> & {
+    kind: "llmGenerator";
+  };
+
 export type WorkflowDocumentNode =
   | PromptWorkflowNode
   | ListWorkflowNode
   | AssetWorkflowNode
-  | LaneReorderWorkflowNode
-  | LaneSelectWorkflowNode
-  | LaneSplitWorkflowNode
-  | LaneMergeWorkflowNode
-  | LaneZipAlignWorkflowNode
+  | OutputReorderWorkflowNode
+  | OutputSelectWorkflowNode
+  | OutputSplitWorkflowNode
+  | OutputMergeWorkflowNode
+  | OutputZipAlignWorkflowNode
   | ImageGeneratorWorkflowNode
   | VideoGeneratorWorkflowNode
   | LlmGeneratorWorkflowNode;
+
+export type WorkflowDefinitionDocumentNode =
+  | Exclude<
+      WorkflowDocumentNode,
+      | ImageGeneratorWorkflowNode
+      | VideoGeneratorWorkflowNode
+      | LlmGeneratorWorkflowNode
+    >
+  | ImageGeneratorWorkflowDefinitionNode
+  | VideoGeneratorWorkflowDefinitionNode
+  | LlmGeneratorWorkflowDefinitionNode;
 
 type WorkflowGraphDocumentNode = WorkflowDocumentNode;
 
@@ -144,6 +173,12 @@ export type WorkflowDocument = {
 export type WorkflowGraphDocument = {
   version: typeof WORKFLOW_DOCUMENT_VERSION;
   nodes: WorkflowGraphDocumentNode[];
+  edges: WorkflowDocumentEdge[];
+};
+
+export type WorkflowDefinitionGraphDocument = {
+  version: typeof WORKFLOW_DOCUMENT_VERSION;
+  nodes: WorkflowDefinitionDocumentNode[];
   edges: WorkflowDocumentEdge[];
 };
 
@@ -177,7 +212,7 @@ export function snapWorkflowPositionToGrid(
 function createWorkflowGeneratorResult(): WorkflowGeneratorResult {
   return {
     lastPrompt: "",
-    outputLanes: [],
+    outputs: [],
   };
 }
 
@@ -185,13 +220,13 @@ function createWorkflowLlmResult(): WorkflowLlmResult {
   return {
     lastPrompt: "",
     lastSystemPrompt: "",
-    outputLanes: [],
+    outputs: [],
   };
 }
 
 function createWorkflowReviewState(): WorkflowReviewState {
   return {
-    lanes: [],
+    outputs: [],
     sourceNodeId: null,
     updatedAt: null,
     valueType: null,
@@ -241,7 +276,7 @@ function makeWorkflowNode(
         assetKind: null,
         assets: [],
       };
-    case "laneReorder":
+    case "outputReorder":
       return {
         id,
         kind,
@@ -252,7 +287,7 @@ function makeWorkflowNode(
         shift: 1,
         valueType: null,
       };
-    case "laneSelect":
+    case "outputSelect":
       return {
         id,
         kind,
@@ -261,7 +296,7 @@ function makeWorkflowNode(
         indices: [0],
         valueType: null,
       };
-    case "laneSplit":
+    case "outputSplit":
       return {
         id,
         kind,
@@ -270,7 +305,7 @@ function makeWorkflowNode(
         splitCount: 2,
         valueType: null,
       };
-    case "laneMerge":
+    case "outputMerge":
       return {
         id,
         kind,
@@ -278,7 +313,7 @@ function makeWorkflowNode(
         position,
         valueType: null,
       };
-    case "laneZipAlign":
+    case "outputZipAlign":
       return {
         id,
         kind,
@@ -337,11 +372,11 @@ function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
     value === "list" ||
     value === "prompt" ||
     value === "asset" ||
-    value === "laneReorder" ||
-    value === "laneSelect" ||
-    value === "laneSplit" ||
-    value === "laneMerge" ||
-    value === "laneZipAlign" ||
+    value === "outputReorder" ||
+    value === "outputSelect" ||
+    value === "outputSplit" ||
+    value === "outputMerge" ||
+    value === "outputZipAlign" ||
     value === "imageGenerator" ||
     value === "videoGenerator" ||
     value === "llmGenerator"
@@ -408,21 +443,21 @@ function asWorkflowAssets(value: unknown) {
     .filter((asset): asset is WorkflowAsset => Boolean(asset));
 }
 
-function asMediaOutputLanes(value: unknown) {
+function asMediaOutputs(value: unknown) {
   return Array.isArray(value)
-    ? value.map((lane) => asWorkflowAssets(lane))
+    ? value.map((output) => asWorkflowAssets(output))
     : [];
 }
 
-function asTextOutputLanes(value: unknown) {
+function asTextOutputs(value: unknown) {
   return Array.isArray(value)
-    ? value.map((lane) => (isString(lane) ? lane : ""))
+    ? value.map((output) => (isString(output) ? output : ""))
     : [];
 }
 
-function asReviewLaneStatus(
+function asReviewOutputStatus(
   value: unknown,
-): WorkflowReviewLane["status"] | null {
+): WorkflowReviewOutput["status"] | null {
   return value === "pending" ||
     value === "approved" ||
     value === "rejected" ||
@@ -431,14 +466,14 @@ function asReviewLaneStatus(
     : null;
 }
 
-function asWorkflowReviewLane(value: unknown): WorkflowReviewLane | null {
-  if (!isRecord(value) || !Number.isInteger(value.laneIndex)) {
+function asWorkflowReviewOutput(value: unknown): WorkflowReviewOutput | null {
+  if (!isRecord(value) || !Number.isInteger(value.outputIndex)) {
     return null;
   }
 
-  const laneIndex = value.laneIndex as number;
-  const status = asReviewLaneStatus(value.status);
-  if (laneIndex < 0 || !status) {
+  const outputIndex = value.outputIndex as number;
+  const status = asReviewOutputStatus(value.status);
+  if (outputIndex < 0 || !status) {
     return null;
   }
 
@@ -448,7 +483,8 @@ function asWorkflowReviewLane(value: unknown): WorkflowReviewLane | null {
       Number.isInteger(value.attempt) && (value.attempt as number) >= 0
         ? (value.attempt as number)
         : 0,
-    laneIndex,
+    executionId: asNullableString(value.executionId, null),
+    outputIndex,
     status,
     text: asNullableString(value.text, null),
   };
@@ -461,34 +497,38 @@ function normalizeGeneratorReviewFields(
   return {
     review: review
       ? {
-          lanes: Array.isArray(review.lanes)
-            ? review.lanes
-                .map((lane) => asWorkflowReviewLane(lane))
-                .filter((lane): lane is WorkflowReviewLane => Boolean(lane))
-                .sort((left, right) => left.laneIndex - right.laneIndex)
+          outputs: Array.isArray(review.outputs)
+            ? review.outputs
+                .map((output) => asWorkflowReviewOutput(output))
+                .filter((output): output is WorkflowReviewOutput =>
+                  Boolean(output),
+                )
+                .sort((left, right) => left.outputIndex - right.outputIndex)
             : [],
           sourceNodeId: asNullableString(review.sourceNodeId, null),
           updatedAt: asNullableString(review.updatedAt, null),
-          valueType: asLaneReorderValueType(review.valueType),
+          valueType: asOutputReorderValueType(review.valueType),
         }
       : createWorkflowReviewState(),
     reviewEnabled: value.reviewEnabled === true,
   };
 }
 
-function asLaneReorderMode(value: unknown): LaneReorderNodeFields["mode"] {
+function asOutputReorderMode(value: unknown): OutputReorderNodeFields["mode"] {
   return value === "manual" ? "manual" : "shift";
 }
 
-function asLaneReorderValueType(
+function asOutputReorderValueType(
   value: unknown,
-): LaneReorderNodeFields["valueType"] {
+): OutputReorderNodeFields["valueType"] {
   return value === "text" || value === "image" || value === "video"
     ? value
     : null;
 }
 
-function asLaneZipAlignMode(value: unknown): LaneZipAlignNodeFields["mode"] {
+function asOutputZipAlignMode(
+  value: unknown,
+): OutputZipAlignNodeFields["mode"] {
   return value === "broadcast" ? "broadcast" : "zip";
 }
 
@@ -496,7 +536,7 @@ function asPositiveInteger(value: unknown, fallback: number) {
   return isNumber(value) && value > 0 ? Math.trunc(value) : fallback;
 }
 
-function asLanePermutation(value: unknown) {
+function asOutputPermutation(value: unknown) {
   return Array.isArray(value)
     ? value.flatMap((entry) =>
         Number.isInteger(entry) && entry >= 0 ? [entry as number] : [],
@@ -622,75 +662,75 @@ function normalizeWorkflowNode(
             : assets.filter((asset) => asset.kind === assets[0]?.kind),
       };
     }
-    case "laneReorder": {
+    case "outputReorder": {
       const baseNode = makeWorkflowNode(
         id,
         value.kind,
         position,
-      ) as LaneReorderWorkflowNode;
+      ) as OutputReorderWorkflowNode;
 
       return {
         ...baseNode,
         label: asString(value.label, baseNode.label),
-        mode: asLaneReorderMode(value.mode),
-        order: asLanePermutation(value.order),
+        mode: asOutputReorderMode(value.mode),
+        order: asOutputPermutation(value.order),
         shift: isNumber(value.shift) ? Math.trunc(value.shift) : baseNode.shift,
-        valueType: asLaneReorderValueType(value.valueType),
+        valueType: asOutputReorderValueType(value.valueType),
       };
     }
-    case "laneSelect": {
+    case "outputSelect": {
       const baseNode = makeWorkflowNode(
         id,
         value.kind,
         position,
-      ) as LaneSelectWorkflowNode;
+      ) as OutputSelectWorkflowNode;
 
       return {
         ...baseNode,
         label: asString(value.label, baseNode.label),
-        indices: asLanePermutation(value.indices),
-        valueType: asLaneReorderValueType(value.valueType),
+        indices: asOutputPermutation(value.indices),
+        valueType: asOutputReorderValueType(value.valueType),
       };
     }
-    case "laneSplit": {
+    case "outputSplit": {
       const baseNode = makeWorkflowNode(
         id,
         value.kind,
         position,
-      ) as LaneSplitWorkflowNode;
+      ) as OutputSplitWorkflowNode;
 
       return {
         ...baseNode,
         label: asString(value.label, baseNode.label),
         splitCount: asPositiveInteger(value.splitCount, baseNode.splitCount),
-        valueType: asLaneReorderValueType(value.valueType),
+        valueType: asOutputReorderValueType(value.valueType),
       };
     }
-    case "laneMerge": {
+    case "outputMerge": {
       const baseNode = makeWorkflowNode(
         id,
         value.kind,
         position,
-      ) as LaneMergeWorkflowNode;
+      ) as OutputMergeWorkflowNode;
 
       return {
         ...baseNode,
         label: asString(value.label, baseNode.label),
-        valueType: asLaneReorderValueType(value.valueType),
+        valueType: asOutputReorderValueType(value.valueType),
       };
     }
-    case "laneZipAlign": {
+    case "outputZipAlign": {
       const baseNode = makeWorkflowNode(
         id,
         value.kind,
         position,
-      ) as LaneZipAlignWorkflowNode;
+      ) as OutputZipAlignWorkflowNode;
 
       return {
         ...baseNode,
         label: asString(value.label, baseNode.label),
-        mode: asLaneZipAlignMode(value.mode),
-        valueType: asLaneReorderValueType(value.valueType),
+        mode: asOutputZipAlignMode(value.mode),
+        valueType: asOutputReorderValueType(value.valueType),
       };
     }
     case "imageGenerator": {
@@ -712,7 +752,7 @@ function normalizeWorkflowNode(
         ...settings,
         label: asString(value.label, baseNode.label),
         lastPrompt: asString(value.lastPrompt, baseNode.lastPrompt),
-        outputLanes: asMediaOutputLanes(value.outputLanes),
+        outputs: asMediaOutputs(value.outputs),
         ...normalizeGeneratorReviewFields(value),
       };
     }
@@ -735,7 +775,7 @@ function normalizeWorkflowNode(
         ...settings,
         label: asString(value.label, baseNode.label),
         lastPrompt: asString(value.lastPrompt, baseNode.lastPrompt),
-        outputLanes: asMediaOutputLanes(value.outputLanes),
+        outputs: asMediaOutputs(value.outputs),
         ...normalizeGeneratorReviewFields(value),
       };
     }
@@ -762,7 +802,7 @@ function normalizeWorkflowNode(
           value.lastSystemPrompt,
           baseNode.lastSystemPrompt,
         ),
-        outputLanes: asTextOutputLanes(value.outputLanes),
+        outputs: asTextOutputs(value.outputs),
         ...normalizeGeneratorReviewFields(value),
       };
     }
@@ -835,6 +875,55 @@ export function toWorkflowGraphDocument(
   return document;
 }
 
+export function toWorkflowDefinitionGraphDocument(
+  document: WorkflowDocument | WorkflowGraphDocument,
+): WorkflowDefinitionGraphDocument {
+  const hydrated = hydrateWorkflowGraphDocument(
+    toWorkflowGraphDocument(document),
+  );
+  if (!hydrated) {
+    return toWorkflowGraphDocument(document);
+  }
+
+  return {
+    ...hydrated,
+    nodes: hydrated.nodes.map((node) => {
+      switch (node.kind) {
+        case "imageGenerator": {
+          const { lastPrompt, outputs, review, ...definitionNode } = node;
+          void lastPrompt;
+          void outputs;
+          void review;
+          return definitionNode satisfies ImageGeneratorWorkflowDefinitionNode;
+        }
+        case "videoGenerator": {
+          const { lastPrompt, outputs, review, ...definitionNode } = node;
+          void lastPrompt;
+          void outputs;
+          void review;
+          return definitionNode satisfies VideoGeneratorWorkflowDefinitionNode;
+        }
+        case "llmGenerator": {
+          const {
+            lastPrompt,
+            lastSystemPrompt,
+            outputs,
+            review,
+            ...definitionNode
+          } = node;
+          void lastPrompt;
+          void lastSystemPrompt;
+          void outputs;
+          void review;
+          return definitionNode satisfies LlmGeneratorWorkflowDefinitionNode;
+        }
+        default:
+          return node;
+      }
+    }),
+  } satisfies WorkflowDefinitionGraphDocument;
+}
+
 export function specializeWorkflowNodeForValueType(
   node: WorkflowDocumentNode,
   valueType: WorkflowValueType,
@@ -849,11 +938,11 @@ export function specializeWorkflowNodeForValueType(
     };
   }
 
-  return node.kind === "laneReorder" ||
-    node.kind === "laneSelect" ||
-    node.kind === "laneSplit" ||
-    node.kind === "laneMerge" ||
-    node.kind === "laneZipAlign"
+  return node.kind === "outputReorder" ||
+    node.kind === "outputSelect" ||
+    node.kind === "outputSplit" ||
+    node.kind === "outputMerge" ||
+    node.kind === "outputZipAlign"
     ? {
         ...node,
         valueType,
@@ -886,6 +975,8 @@ export function deserializeStoredWorkflowGraphDocument(raw: unknown) {
   return document ? toWorkflowGraphDocument(document) : null;
 }
 
-export function hydrateWorkflowGraphDocument(document: WorkflowGraphDocument) {
+export function hydrateWorkflowGraphDocument(
+  document: WorkflowDefinitionGraphDocument | WorkflowGraphDocument,
+) {
   return deserializeStoredWorkflowDocument(document);
 }

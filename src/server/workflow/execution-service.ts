@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { and, eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import {
   hydrateWorkflowGraphDocument,
@@ -10,32 +11,31 @@ import {
   getErrorMessage,
   WorkflowAuthorizationError,
   type WorkflowCreditsError,
+  type WorkflowExecutionNotFoundError,
   WorkflowInfrastructureError,
-  type WorkflowRunNotFoundError,
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
 import { getGeneratorOutputAttempt } from "~/lib/workflow/execution/artifact-identity";
 import {
-  buildWorkflowApprovedRunProjection,
-  buildWorkflowRunProjection,
+  buildWorkflowApprovedOutputProjection,
+  buildWorkflowOutputProjection,
   getWorkflowVisibleCompletionOutputs,
 } from "~/lib/workflow/execution/artifact-projection";
 import {
-  estimateGeneratorReviewLaneRegenerationCreditCost,
   executeWorkflow,
-  regenerateGeneratorReviewLane,
+  regenerateGeneratorReviewOutput,
 } from "~/lib/workflow/execution/core";
 import {
-  buildWorkflowLaneDependencyPlan,
-  getCompletedWorkflowLaneKeys,
-  getReadyWorkflowLaneJobs,
-  getWorkflowLaneKey,
-  getWorkflowLaneSettlement,
-} from "~/lib/workflow/execution/lane-dependencies";
+  buildWorkflowOutputDependencyPlan,
+  getCompletedWorkflowOutputKeys,
+  getReadyWorkflowOutputJobs,
+  getWorkflowOutputKey,
+  getWorkflowOutputSettlement,
+} from "~/lib/workflow/execution/output-dependencies";
 import {
-  getGeneratorLaneValueType,
-  selectReusableWorkflowLaneOutputs,
-} from "~/lib/workflow/execution/lane-result-reuse";
+  getGeneratorOutputValueType,
+  selectReusableWorkflowOutputs,
+} from "~/lib/workflow/execution/output-result-reuse";
 import {
   buildWorkflowExecutionStatusResponse,
   createWorkflowExecutionRuntimeState,
@@ -51,35 +51,37 @@ import type {
   WorkflowExecutionPortError,
   WorkflowExecutionRuntimeState,
   WorkflowExecutionStatusResponse,
-  WorkflowRunArtifacts,
+  WorkflowOutputArtifacts,
 } from "~/lib/workflow/execution/types";
 import {
-  getErroredWorkflowLaneResults,
-  getLatestReviewLaneArtifacts,
-  getLatestWorkflowLaneResults,
-  WorkflowLaneDependencyMissing,
+  getErroredWorkflowOutputResults,
+  getLatestOutputReviewArtifacts,
+  getLatestWorkflowOutputResults,
+  WorkflowOutputDependencyMissing,
 } from "~/lib/workflow/execution/types";
 import {
   estimateWorkflowExecution,
   type WorkflowExecutionPriceQuote,
 } from "~/lib/workflow/pricing";
-import { getReviewLaneCount } from "~/lib/workflow/review-state";
+import { getReviewOutputCount } from "~/lib/workflow/review-state";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
+import { db } from "~/server/db";
+import { taskRuns } from "~/server/db/schema";
 import {
-  buildLaneExecutionResultFromDocument,
+  buildOutputExecutionResultFromDocument,
   WorkflowArtifactStore,
 } from "~/server/workflow/artifact-store";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
+import { WorkflowExecutionStore } from "~/server/workflow/execution-store";
 import { WorkflowProjectStore } from "~/server/workflow/project-store";
-import { saveWorkflowProjectExecutionResults } from "~/server/workflow/projects";
+import { enqueueQueuedWorkflowTasks } from "~/server/workflow/task-queue-scanner";
 import {
-  createWorkflowExecutionLaneJobId,
-  createWorkflowReviewRegenerationJobId,
-  enqueueWorkflowExecutionJob,
-  enqueueWorkflowReviewRegenerationJob,
-  getWorkflowExecutionQueue,
-} from "~/server/workflow/queue";
-import { WorkflowRunStore } from "~/server/workflow/run-store";
+  claimQueuedWorkflowTaskRun,
+  createQueuedWorkflowTaskRuns,
+  getTaskRunExecutionDocumentSnapshot,
+  getTaskRunSnapshotOutputValue,
+  toTaskRunExecutionRequest,
+} from "~/server/workflow/task-run-store";
 import { VertexAi } from "~/server/workflow/vertex";
 
 export class WorkflowExecutionService extends Context.Tag(
@@ -87,7 +89,7 @@ export class WorkflowExecutionService extends Context.Tag(
 )<
   WorkflowExecutionService,
   {
-    readonly startRun: (
+    readonly startExecution: (
       userId: string,
       request: StartWorkflowExecutionRequest,
     ) => Effect.Effect<
@@ -98,7 +100,7 @@ export class WorkflowExecutionService extends Context.Tag(
       | WorkflowInfrastructureError
       | WorkflowValidationError
     >;
-    readonly quoteRun: (
+    readonly quoteExecution: (
       userId: string,
       request: Pick<
         StartWorkflowExecutionRequest,
@@ -110,10 +112,10 @@ export class WorkflowExecutionService extends Context.Tag(
       | WorkflowInfrastructureError
       | WorkflowValidationError
     >;
-    readonly approveReviewLane: (params: {
-      laneIndex: number;
+    readonly approveReviewOutput: (params: {
+      outputIndex: number;
       reviewNodeId: string;
-      runId: string;
+      executionId: string;
       userId: string;
     }) => Effect.Effect<
       WorkflowExecutionStatusResponse,
@@ -121,13 +123,13 @@ export class WorkflowExecutionService extends Context.Tag(
       | WorkflowCreditsError
       | WorkflowExecutionPortError
       | WorkflowInfrastructureError
-      | WorkflowRunNotFoundError
+      | WorkflowExecutionNotFoundError
       | WorkflowValidationError
     >;
-    readonly rejectReviewLane: (params: {
-      laneIndex: number;
+    readonly rejectReviewOutput: (params: {
+      outputIndex: number;
       reviewNodeId: string;
-      runId: string;
+      executionId: string;
       userId: string;
     }) => Effect.Effect<
       WorkflowExecutionStatusResponse,
@@ -135,61 +137,58 @@ export class WorkflowExecutionService extends Context.Tag(
       | WorkflowCreditsError
       | WorkflowExecutionPortError
       | WorkflowInfrastructureError
-      | WorkflowRunNotFoundError
+      | WorkflowExecutionNotFoundError
       | WorkflowValidationError
     >;
-    readonly failRun: (params: {
+    readonly failExecution: (params: {
       message: string;
-      runId: string;
+      executionId: string;
       userId: string;
     }) => Effect.Effect<
       WorkflowExecutionStatusResponse,
       | WorkflowAuthorizationError
       | WorkflowCreditsError
       | WorkflowInfrastructureError
-      | WorkflowRunNotFoundError
+      | WorkflowExecutionNotFoundError
       | WorkflowValidationError
     >;
-    readonly settleFailedExecutionLane: (params: {
-      laneIndex: number;
+    readonly settleFailedExecutionOutput: (params: {
+      outputIndex: number;
       message: string;
       nodeId: string;
-      runId: string;
+      executionId: string;
       userId: string;
     }) => Effect.Effect<
       WorkflowExecutionStatusResponse,
       | WorkflowAuthorizationError
       | WorkflowCreditsError
       | WorkflowInfrastructureError
-      | WorkflowRunNotFoundError
+      | WorkflowExecutionNotFoundError
       | WorkflowValidationError
     >;
-    readonly executeReviewLaneRegeneration: (params: {
-      attempt: number;
-      laneIndex: number;
-      reviewNodeId: string;
-      runId: string;
+    readonly settleFailedTaskRun: (params: {
+      message: string;
+      taskRunId: string;
       userId: string;
     }) => Effect.Effect<
       WorkflowExecutionStatusResponse,
       | WorkflowAuthorizationError
       | WorkflowCreditsError
-      | WorkflowExecutionPortError
       | WorkflowInfrastructureError
-      | WorkflowRunNotFoundError
+      | WorkflowExecutionNotFoundError
       | WorkflowValidationError
     >;
-    readonly executeRun: (
-      runId: string,
+    readonly executeTaskRun: (
+      taskRunId: string,
       userId: string,
-      request: StartWorkflowExecutionRequest,
     ) => Effect.Effect<
-      WorkflowExecutionStatusResponse,
+      WorkflowExecutionStatusResponse | null,
       | WorkflowAuthorizationError
       | WorkflowCreditsError
       | WorkflowExecutionPortError
       | WorkflowInfrastructureError
-      | WorkflowRunNotFoundError
+      | WorkflowExecutionNotFoundError
+      | WorkflowValidationError
     >;
   }
 >() {
@@ -199,13 +198,13 @@ export class WorkflowExecutionService extends Context.Tag(
       const vertexAi = yield* VertexAi;
       const workflowCreditsService = yield* WorkflowCreditsService;
       const workflowArtifactStore = yield* WorkflowArtifactStore;
-      const workflowProjectStore = yield* WorkflowProjectStore;
-      const workflowRunStore = yield* WorkflowRunStore;
+      const workflowStore = yield* WorkflowProjectStore;
+      const workflowExecutionStore = yield* WorkflowExecutionStore;
 
       const buildContinuationRequest = (
         run: WorkflowExecutionStatusResponse,
         userId: string,
-        reviewLaneFilter?: StartWorkflowExecutionRequest["reviewLaneFilter"],
+        reviewOutputFilter?: StartWorkflowExecutionRequest["reviewOutputFilter"],
       ) =>
         Effect.gen(function* () {
           const context = run.requestContext;
@@ -213,23 +212,29 @@ export class WorkflowExecutionService extends Context.Tag(
             return yield* Effect.fail(
               new WorkflowValidationError({
                 message:
-                  "Workflow run cannot be resumed without request context.",
+                  "Workflow execution cannot be resumed without request context.",
               }),
             );
           }
 
-          const downstreamTargetNodeIds = reviewLaneFilter
+          const downstreamTargetNodeIds = reviewOutputFilter
             ? collectDownstreamWorkflowGeneratorNodeIds(
                 run.document,
-                reviewLaneFilter.reviewNodeId,
+                reviewOutputFilter.reviewNodeId,
                 new Set(run.targetNodeIds),
               )
             : null;
-          const artifacts = yield* workflowArtifactStore.getRunArtifacts({
-            ownerUserId: userId,
-            runId: run.runId,
-          });
-          const document = buildWorkflowApprovedRunProjection({
+          const projectId = context.projectId?.trim();
+          const artifacts = projectId
+            ? yield* workflowArtifactStore.getProjectArtifacts({
+                ownerUserId: userId,
+                projectId,
+              })
+            : yield* workflowArtifactStore.getOutputArtifacts({
+                ownerUserId: userId,
+                executionId: run.executionId,
+              });
+          const document = buildWorkflowApprovedOutputProjection({
             artifacts,
             document: run.document,
           });
@@ -238,7 +243,7 @@ export class WorkflowExecutionService extends Context.Tag(
             ...context,
             accruedCostCredits: run.accruedCostCredits,
             document,
-            reviewLaneFilter: reviewLaneFilter ?? null,
+            reviewOutputFilter: reviewOutputFilter ?? null,
             selection: downstreamTargetNodeIds
               ? { nodeIds: downstreamTargetNodeIds }
               : context.selection,
@@ -248,7 +253,7 @@ export class WorkflowExecutionService extends Context.Tag(
           } satisfies StartWorkflowExecutionRequest;
         });
 
-      const hasLaneContinuationTargets = (
+      const hasOutputContinuationTargets = (
         run: WorkflowExecutionStatusResponse,
         reviewNodeId: string,
       ) =>
@@ -258,7 +263,7 @@ export class WorkflowExecutionService extends Context.Tag(
           new Set(run.targetNodeIds),
         ).length > 0;
 
-      const getExecutionLaneCount = (
+      const getExecutionOutputCount = (
         document: StartWorkflowExecutionRequest["document"],
         targetNodeIds: string[],
       ) => {
@@ -277,7 +282,7 @@ export class WorkflowExecutionService extends Context.Tag(
         targetNodeIds: readonly string[],
       ) => {
         const plan = buildWorkflowExecutionPlan(document, [...targetNodeIds]);
-        return buildWorkflowLaneDependencyPlan({
+        return buildWorkflowOutputDependencyPlan({
           document,
           generatorIterationById: plan.generatorIterationById,
           targetNodeIds,
@@ -316,9 +321,9 @@ export class WorkflowExecutionService extends Context.Tag(
         return Array.from(artifactNodeIds);
       };
 
-      const getReusablePriorLaneOutputs = (params: {
+      const getReusablePriorOutputs = (params: {
         document: StartWorkflowExecutionRequest["document"];
-        excludeRunId?: string | null;
+        excludeExecutionId?: string | null;
         ownerUserId: string;
         projectId: string;
         requestedTargetNodeIds: readonly string[];
@@ -329,11 +334,11 @@ export class WorkflowExecutionService extends Context.Tag(
             params.document,
             params.targetNodeIds,
           );
-          const plannedLanes = Array.from(
+          const plannedOutputs = Array.from(
             new Map(
               dependencyPlan.jobs
                 .flatMap((job) => [job, ...job.dependencies])
-                .map((lane) => [getWorkflowLaneKey(lane), lane]),
+                .map((output) => [getWorkflowOutputKey(output), output]),
             ).values(),
           );
           const nodeById = new Map(
@@ -341,17 +346,17 @@ export class WorkflowExecutionService extends Context.Tag(
           );
           const requestedTargetNodeIds = new Set(params.requestedTargetNodeIds);
           const priorResultCandidates =
-            yield* workflowArtifactStore.getProjectLaneReuseCandidates({
-              excludeRunId: params.excludeRunId ?? null,
-              lanes: plannedLanes,
+            yield* workflowArtifactStore.getProjectOutputReuseCandidates({
+              excludeExecutionId: params.excludeExecutionId ?? null,
+              items: plannedOutputs,
               ownerUserId: params.ownerUserId,
               projectId: params.projectId,
             });
 
-          return selectReusableWorkflowLaneOutputs({
+          return selectReusableWorkflowOutputs({
             candidates: priorResultCandidates,
-            expectedLanes: plannedLanes.flatMap((job) => {
-              const valueType = getGeneratorLaneValueType(
+            expectedOutputs: plannedOutputs.flatMap((job) => {
+              const valueType = getGeneratorOutputValueType(
                 nodeById.get(job.nodeId),
               );
               const node = nodeById.get(job.nodeId);
@@ -375,7 +380,7 @@ export class WorkflowExecutionService extends Context.Tag(
           });
         });
 
-      const quoteRun = (
+      const quoteExecution = (
         userId: string,
         request: Pick<
           StartWorkflowExecutionRequest,
@@ -404,7 +409,7 @@ export class WorkflowExecutionService extends Context.Tag(
             );
           }
 
-          const project = yield* workflowProjectStore.getProject({
+          const project = yield* workflowStore.getProject({
             ownerUserId: userId,
             projectId,
           });
@@ -450,7 +455,7 @@ export class WorkflowExecutionService extends Context.Tag(
             document,
             artifactNodeIds,
           );
-          const reusableLaneOutputs = yield* getReusablePriorLaneOutputs({
+          const reusableOutputs = yield* getReusablePriorOutputs({
             document,
             ownerUserId: userId,
             projectId,
@@ -468,114 +473,86 @@ export class WorkflowExecutionService extends Context.Tag(
               target: { type: "selected-or-all" as const },
             },
             {
-              completedLaneKeys: new Set(
-                reusableLaneOutputs.map(getWorkflowLaneKey),
+              completedOutputKeys: new Set(
+                reusableOutputs.map(getWorkflowOutputKey),
               ),
             },
           );
         });
 
-      const getMaterializedLaneKeys = (artifacts: WorkflowRunArtifacts) =>
+      const getMaterializedOutputKeys = (artifacts: WorkflowOutputArtifacts) =>
         new Set(
-          getLatestWorkflowLaneResults(artifacts).map((result) =>
-            getWorkflowLaneKey({
-              laneIndex: result.laneIndex,
+          getLatestWorkflowOutputResults(artifacts).map((result) =>
+            getWorkflowOutputKey({
+              outputIndex: result.outputIndex,
               nodeId: result.nodeId,
             }),
           ),
         );
 
-      const getQueuedLaneKeys = (params: { runId: string }) =>
-        Effect.tryPromise({
-          try: async () => {
-            const queuedLaneKeys = new Set<string>();
-            const queue = getWorkflowExecutionQueue();
-            const jobs = await queue.getJobs([
-              "active",
-              "delayed",
-              "prioritized",
-              "waiting",
-              "waiting-children",
-            ]);
-            for (const job of jobs) {
-              const data = job.data;
-              const laneFilter =
-                data.type === "execute-run"
-                  ? data.request.executionLaneFilter
-                  : null;
-              const nodeId =
-                data.type === "execute-run"
-                  ? data.request.selection?.nodeIds?.[0]
-                  : null;
-              if (data.runId === params.runId && laneFilter && nodeId) {
-                queuedLaneKeys.add(
-                  getWorkflowLaneKey({
-                    laneIndex: laneFilter.laneIndex,
-                    nodeId,
-                  }),
-                );
-              }
-            }
+      const getQueuedOutputKeys = (params: { executionId: string }) =>
+        workflowArtifactStore
+          .getActiveOutputKeys(params)
+          .pipe(Effect.map((keys) => new Set(keys)));
 
-            return queuedLaneKeys;
-          },
-          catch: toPersistenceError,
-        });
-
-      const getBlockedLaneKeys = (params: {
-        artifacts: WorkflowRunArtifacts;
-        runId: string;
+      const getBlockedOutputKeys = (params: {
+        artifacts: WorkflowOutputArtifacts;
+        executionId: string;
       }) =>
         Effect.gen(function* () {
-          const completedLanes = getCompletedWorkflowLaneKeys(params.artifacts);
-          const blockedLanes = new Set(
-            Array.from(getMaterializedLaneKeys(params.artifacts)).filter(
-              (key) => !completedLanes.has(key),
+          const completedOutputs = getCompletedWorkflowOutputKeys(
+            params.artifacts,
+          );
+          const blockedOutputs = new Set(
+            Array.from(getMaterializedOutputKeys(params.artifacts)).filter(
+              (key) => !completedOutputs.has(key),
             ),
           );
-          for (const key of yield* getQueuedLaneKeys({ runId: params.runId })) {
-            blockedLanes.add(key);
+          for (const key of yield* getQueuedOutputKeys({
+            executionId: params.executionId,
+          })) {
+            blockedOutputs.add(key);
           }
 
-          return blockedLanes;
+          return blockedOutputs;
         });
 
-      const getReadyLaneJobs = (params: {
-        artifacts: WorkflowRunArtifacts;
-        blockedLanes?: ReadonlySet<string>;
+      const getReadyOutputJobs = (params: {
+        artifacts: WorkflowOutputArtifacts;
+        blockedOutputs?: ReadonlySet<string>;
         document: StartWorkflowExecutionRequest["document"];
         targetNodeIds: readonly string[];
       }) => {
-        const settlement = getWorkflowLaneSettlement({
+        const settlement = getWorkflowOutputSettlement({
           artifacts: params.artifacts,
-          blockedLanes: params.blockedLanes,
+          blockedOutputs: params.blockedOutputs,
           plan: getExecutionDependencyPlan(
             params.document,
             params.targetNodeIds,
           ),
         });
 
-        return getReadyWorkflowLaneJobs({
-          blockedLanes: settlement.blockedLanes,
-          completedLanes: settlement.completedLanes,
+        return getReadyWorkflowOutputJobs({
+          blockedOutputs: settlement.blockedOutputs,
+          completedOutputs: settlement.completedOutputs,
           plan: settlement.plan,
         });
       };
 
-      const getSchedulableReadyLaneJobs = (params: {
-        artifacts: WorkflowRunArtifacts;
+      const getSchedulableReadyOutputJobs = (params: {
+        artifacts: WorkflowOutputArtifacts;
         request: StartWorkflowExecutionRequest;
-        runId: string;
+        executionId: string;
         targetNodeIds: readonly string[];
       }) =>
         Effect.gen(function* () {
-          const blockedLanes = yield* getBlockedLaneKeys({
+          const blockedOutputs = yield* getBlockedOutputKeys({
             artifacts: params.artifacts,
-            runId: params.runId,
+            executionId: params.executionId,
           });
-          const readyJobs = getReadyLaneJobs({
+          const readyJobs = getReadyOutputJobs({
             artifacts: params.artifacts,
-            blockedLanes,
+            blockedOutputs,
             document: params.request.document,
             targetNodeIds: params.targetNodeIds,
           });
@@ -583,81 +560,71 @@ export class WorkflowExecutionService extends Context.Tag(
           return readyJobs;
         });
 
-      const enqueueLaneJobs = (params: {
-        jobs: ReturnType<typeof getReadyWorkflowLaneJobs>;
-        laneCount: number;
+      const createQueuedTaskRows = (params: {
+        artifacts: WorkflowOutputArtifacts;
+        jobs: ReturnType<typeof getReadyWorkflowOutputJobs>;
+        outputCount: number;
         request: StartWorkflowExecutionRequest;
-        runId: string;
+        executionId: string;
         userId: string;
+        versionOverride?: number | null;
       }) =>
         Effect.gen(function* () {
-          if (!params.jobs.length) {
-            return 0;
+          const projectId = params.request.projectId?.trim();
+          if (!projectId) {
+            return yield* Effect.fail(
+              new WorkflowInfrastructureError({
+                message: "Workflow project is missing from execution context.",
+              }),
+            );
           }
 
-          yield* Effect.tryPromise({
-            try: async () => {
-              // BullMQ job IDs are stable per {runId,nodeId,laneIndex}; combined
-              // with blocked active jobs, duplicate lane scheduling is bounded.
-              await Promise.all(
-                params.jobs.map((job) =>
-                  enqueueWorkflowExecutionJob(
-                    {
-                      request: {
-                        ...params.request,
-                        executionLaneFilter: {
-                          laneCount: params.laneCount,
-                          laneIndex: job.laneIndex,
-                        },
-                        reviewLaneFilter: null,
-                        selection: { nodeIds: [job.nodeId] },
-                        target: { type: "selected-or-all" as const },
-                      },
-                      runId: params.runId,
-                      type: "execute-run",
-                      userId: params.userId,
-                    },
-                    {
-                      jobId: createWorkflowExecutionLaneJobId({
-                        laneIndex: job.laneIndex,
-                        nodeId: job.nodeId,
-                        runId: params.runId,
-                      }),
-                    },
-                  ),
-                ),
-              );
-            },
-            catch: toPersistenceError,
+          const taskRows = yield* createQueuedWorkflowTaskRuns({
+            artifacts: params.artifacts,
+            executionId: params.executionId,
+            jobs: params.jobs,
+            outputCount: params.outputCount,
+            ownerUserId: params.userId,
+            projectId,
+            request: params.request,
+            versionOverride: params.versionOverride,
           });
+          if (taskRows.length) {
+            yield* enqueueQueuedWorkflowTasks({
+              taskRunIds: taskRows.map((row) => row.taskRunId),
+            });
+          }
 
-          return params.jobs.length;
+          return taskRows.length;
         });
 
-      const enqueueReadyLaneJobs = (params: {
-        artifacts: WorkflowRunArtifacts;
-        laneCount: number;
+      const enqueueOutputJobs = createQueuedTaskRows;
+
+      const enqueueReadyOutputJobs = (params: {
+        artifacts: WorkflowOutputArtifacts;
+        outputCount: number;
         request: StartWorkflowExecutionRequest;
-        runId: string;
+        executionId: string;
         run?: WorkflowExecutionStatusResponse;
         targetNodeIds: string[];
         userId: string;
       }) =>
         Effect.gen(function* () {
-          const jobs = yield* getSchedulableReadyLaneJobs(params);
-          return yield* enqueueLaneJobs({
+          const jobs = yield* getSchedulableReadyOutputJobs(params);
+          return yield* enqueueOutputJobs({
+            artifacts: params.artifacts,
             jobs,
-            laneCount: params.laneCount,
+            outputCount: params.outputCount,
             request: params.request,
-            runId: params.runId,
+            executionId: params.executionId,
             userId: params.userId,
           });
         });
 
-      const isExecutionLaneComplete = (
+      const isExecutionOutputComplete = (
         run: WorkflowExecutionStatusResponse,
-        laneIndex: number,
-        artifacts: WorkflowRunArtifacts,
+        outputIndex: number,
+        artifacts: WorkflowOutputArtifacts,
       ) => {
         const plan = buildWorkflowExecutionPlan(
           run.document,
@@ -666,29 +633,32 @@ export class WorkflowExecutionService extends Context.Tag(
         const expectedNodeIds = run.targetNodeIds.filter(
           (nodeId) =>
             (plan.generatorIterationById.get(nodeId)?.iterations ?? 1) >
-            laneIndex,
+            outputIndex,
         );
         const visibleOutputs = getWorkflowVisibleCompletionOutputs(artifacts);
         return expectedNodeIds.every((nodeId) =>
           visibleOutputs.some(
             (output) =>
-              output.nodeId === nodeId && output.laneIndex === laneIndex,
+              output.nodeId === nodeId && output.outputIndex === outputIndex,
           ),
         );
       };
 
-      const areExecutionLanesComplete = (
+      const areExecutionOutputsComplete = (
         run: WorkflowExecutionStatusResponse,
-        laneCount: number,
-        artifacts: WorkflowRunArtifacts,
+        outputCount: number,
+        artifacts: WorkflowOutputArtifacts,
       ) =>
-        Array.from({ length: laneCount }, (_, laneIndex) => laneIndex).every(
-          (laneIndex) => isExecutionLaneComplete(run, laneIndex, artifacts),
+        Array.from(
+          { length: outputCount },
+          (_, outputIndex) => outputIndex,
+        ).every((outputIndex) =>
+          isExecutionOutputComplete(run, outputIndex, artifacts),
         );
 
-      const hasLaneOutput = (
+      const hasOutput = (
         run: WorkflowExecutionStatusResponse,
-        laneIndex: number,
+        outputIndex: number,
       ) =>
         run.targetNodeIds.some((nodeId) => {
           const node = run.document.nodes.find(
@@ -698,123 +668,126 @@ export class WorkflowExecutionService extends Context.Tag(
             node?.kind === "imageGenerator" ||
             node?.kind === "videoGenerator"
           ) {
-            return (node.outputLanes[laneIndex]?.length ?? 0) > 0;
+            return (node.outputs[outputIndex]?.length ?? 0) > 0;
           }
           if (node?.kind === "llmGenerator") {
-            return Boolean(node.outputLanes[laneIndex]?.trim());
+            return Boolean(node.outputs[outputIndex]?.trim());
           }
           return false;
         });
 
-      const canDecideReviewLane = (run: WorkflowExecutionStatusResponse) =>
+      const canDecideReviewOutput = (run: WorkflowExecutionStatusResponse) =>
         run.status === "running" || run.status === "waiting_for_review";
 
-      const getExpectedReviewLaneCount = (
+      const getExpectedReviewOutputCount = (
         run: WorkflowExecutionStatusResponse,
         reviewNodeId: string,
-        artifacts: WorkflowRunArtifacts,
+        artifacts: WorkflowOutputArtifacts,
       ) => {
         const reviewNode = run.document.nodes.find(
           (node) => node.id === reviewNodeId,
         );
-        const plannedLaneCount =
+        const plannedOutputCount =
           buildWorkflowExecutionPlan(
             run.document,
             run.targetNodeIds,
           ).generatorIterationById.get(reviewNodeId)?.iterations ?? 0;
-        const artifactLaneCount = getLatestReviewLaneArtifacts(artifacts)
-          .filter((lane) => lane.nodeId === reviewNodeId)
-          .reduce((count, lane) => Math.max(count, lane.laneIndex + 1), 0);
-        const projectedLaneCount =
+        const artifactOutputCount = getLatestOutputReviewArtifacts(artifacts)
+          .filter((output) => output.nodeId === reviewNodeId)
+          .reduce(
+            (count, output) => Math.max(count, output.outputIndex + 1),
+            0,
+          );
+        const projectedOutputCount =
           reviewNode &&
           (reviewNode.kind === "imageGenerator" ||
             reviewNode.kind === "videoGenerator" ||
             reviewNode.kind === "llmGenerator")
             ? Math.max(
-                reviewNode.outputLanes.length,
-                getReviewLaneCount(reviewNode),
+                reviewNode.outputs.length,
+                getReviewOutputCount(reviewNode),
               )
             : 0;
 
         return Math.max(
-          plannedLaneCount,
-          artifactLaneCount,
-          projectedLaneCount,
+          plannedOutputCount,
+          artifactOutputCount,
+          projectedOutputCount,
         );
       };
 
-      const getLatestReviewLaneArtifact = (
-        artifacts: WorkflowRunArtifacts,
-        params: { laneIndex: number; reviewNodeId: string },
+      const getLatestOutputReviewArtifact = (
+        artifacts: WorkflowOutputArtifacts,
+        params: { outputIndex: number; reviewNodeId: string },
       ) => {
         let latest:
-          | ReturnType<typeof getLatestReviewLaneArtifacts>[number]
+          | ReturnType<typeof getLatestOutputReviewArtifacts>[number]
           | null = null;
-        for (const lane of getLatestReviewLaneArtifacts(artifacts)) {
+        for (const output of getLatestOutputReviewArtifacts(artifacts)) {
           if (
-            lane.nodeId !== params.reviewNodeId ||
-            lane.laneIndex !== params.laneIndex
+            output.nodeId !== params.reviewNodeId ||
+            output.outputIndex !== params.outputIndex
           ) {
             continue;
           }
-          if (!latest || latest.attempt < lane.attempt) {
-            latest = lane;
+          if (!latest || latest.attempt < output.attempt) {
+            latest = output;
           }
         }
         return latest;
       };
 
-      const hasApprovedReviewLanes = (
+      const hasApprovedReviewOutputs = (
         run: WorkflowExecutionStatusResponse,
         reviewNodeId: string,
         userId: string,
       ) =>
         workflowArtifactStore
-          .getRunArtifacts({
+          .getOutputArtifacts({
             ownerUserId: userId,
-            runId: run.runId,
+            executionId: run.executionId,
           })
           .pipe(
             Effect.map((artifacts) => {
-              const latestByLane = new Map(
-                getLatestReviewLaneArtifacts(artifacts)
-                  .filter((lane) => lane.nodeId === reviewNodeId)
-                  .map((lane) => [lane.laneIndex, lane] as const),
+              const latestByOutput = new Map(
+                getLatestOutputReviewArtifacts(artifacts)
+                  .filter((output) => output.nodeId === reviewNodeId)
+                  .map((output) => [output.outputIndex, output] as const),
               );
-              for (const lane of getLatestReviewLaneArtifacts(artifacts).filter(
-                (lane) => lane.nodeId === reviewNodeId,
-              )) {
-                const existing = latestByLane.get(lane.laneIndex);
-                if (!existing || existing.attempt < lane.attempt) {
-                  latestByLane.set(lane.laneIndex, lane);
+              for (const output of getLatestOutputReviewArtifacts(
+                artifacts,
+              ).filter((output) => output.nodeId === reviewNodeId)) {
+                const existing = latestByOutput.get(output.outputIndex);
+                if (!existing || existing.attempt < output.attempt) {
+                  latestByOutput.set(output.outputIndex, output);
                 }
               }
-              const expectedLaneCount = getExpectedReviewLaneCount(
+              const expectedOutputCount = getExpectedReviewOutputCount(
                 run,
                 reviewNodeId,
                 artifacts,
               );
               return (
-                expectedLaneCount > 0 &&
-                Array.from({ length: expectedLaneCount }, (_, laneIndex) =>
-                  latestByLane.get(laneIndex),
-                ).every((lane) => lane?.status === "approved")
+                expectedOutputCount > 0 &&
+                Array.from({ length: expectedOutputCount }, (_, outputIndex) =>
+                  latestByOutput.get(outputIndex),
+                ).every((output) => output?.status === "approved")
               );
             }),
           );
 
-      const getReviewLaneForDecision = (params: {
+      const getReviewOutputForDecision = (params: {
         decision: "approve" | "regenerate";
-        laneIndex: number;
+        outputIndex: number;
         ownerUserId: string;
         reviewNodeId: string;
         run: WorkflowExecutionStatusResponse;
       }) =>
         Effect.gen(function* () {
-          if (!canDecideReviewLane(params.run)) {
+          if (!canDecideReviewOutput(params.run)) {
             return yield* Effect.fail(
               new WorkflowValidationError({
-                message: "Workflow run has no active human review.",
+                message: "Workflow execution has no active human review.",
               }),
             );
           }
@@ -835,63 +808,63 @@ export class WorkflowExecutionService extends Context.Tag(
             );
           }
 
-          const artifacts = yield* workflowArtifactStore.getRunArtifacts({
+          const artifacts = yield* workflowArtifactStore.getOutputArtifacts({
             ownerUserId: params.ownerUserId,
-            runId: params.run.runId,
+            executionId: params.run.executionId,
           });
-          const lane = getLatestReviewLaneArtifacts(artifacts)
+          const output = getLatestOutputReviewArtifacts(artifacts)
             .filter(
               (candidate) =>
                 candidate.nodeId === params.reviewNodeId &&
-                candidate.laneIndex === params.laneIndex,
+                candidate.outputIndex === params.outputIndex,
             )
             .sort((left, right) => right.attempt - left.attempt)[0];
 
-          if (!lane) {
+          if (!output) {
             return yield* Effect.fail(
               new WorkflowValidationError({
-                message: `Review lane ${params.laneIndex + 1} does not exist.`,
+                message: `Review output ${params.outputIndex + 1} does not exist.`,
               }),
             );
           }
 
-          const projectedLane = reviewNode.review.lanes.find(
+          const projectedOutput = reviewNode.review.outputs.find(
             (candidate) =>
-              candidate.laneIndex === lane.laneIndex &&
-              candidate.attempt === lane.attempt,
+              candidate.outputIndex === output.outputIndex &&
+              candidate.attempt === output.attempt,
           );
 
           if (
             params.decision === "approve" &&
-            lane.status !== "pending" &&
-            lane.status !== "approved"
+            output.status !== "pending" &&
+            output.status !== "approved"
           ) {
             return yield* Effect.fail(
               new WorkflowValidationError({
-                message: `Review lane ${params.laneIndex + 1} is not pending approval.`,
+                message: `Review output ${params.outputIndex + 1} is not pending approval.`,
               }),
             );
           }
 
           if (
             params.decision === "regenerate" &&
-            lane.status !== "pending" &&
-            lane.status !== "regenerating"
+            output.status !== "pending" &&
+            output.status !== "regenerating"
           ) {
             return yield* Effect.fail(
               new WorkflowValidationError({
-                message: `Review lane ${params.laneIndex + 1} is not pending regeneration.`,
+                message: `Review output ${params.outputIndex + 1} is not pending regeneration.`,
               }),
             );
           }
 
           return {
-            lane: {
-              assets: projectedLane?.assets ?? [],
-              attempt: lane.attempt,
-              laneIndex: lane.laneIndex,
-              status: lane.status,
-              text: projectedLane?.text ?? null,
+            output: {
+              assets: projectedOutput?.assets ?? [],
+              attempt: output.attempt,
+              outputIndex: output.outputIndex,
+              status: output.status,
+              text: projectedOutput?.text ?? null,
             },
             reviewNode,
           };
@@ -921,10 +894,11 @@ export class WorkflowExecutionService extends Context.Tag(
           : null,
       });
 
-      const persistRunArtifacts = (
+      const persistOutputArtifacts = (
         run: WorkflowExecutionStatusResponse,
         userId: string,
-        laneIndex?: number | null,
+        outputIndex?: number | null,
+        costCreditsByOutputKey?: ReadonlyMap<string, number>,
       ) =>
         Effect.gen(function* () {
           const projectId = run.requestContext?.projectId?.trim();
@@ -936,52 +910,30 @@ export class WorkflowExecutionService extends Context.Tag(
             );
           }
 
-          yield* workflowArtifactStore.upsertLaneExecutionResult(
-            buildLaneExecutionResultFromDocument({
+          yield* workflowArtifactStore.upsertOutputExecutionResult(
+            buildOutputExecutionResultFromDocument({
               costCredits: run.accruedCostCredits,
+              costCreditsByOutputKey,
               document: run.document,
               documentRevision:
                 run.projectDocumentRevision ??
                 run.requestContext?.documentRevision ??
                 null,
-              laneIndex: laneIndex ?? null,
+              outputIndex: outputIndex ?? null,
               ownerUserId: userId,
               projectId,
-              runId: run.runId,
+              executionId: run.executionId,
               status: run.status === "queued" ? "running" : run.status,
               targetNodeIds: run.targetNodeIds,
             }),
           );
 
-          const result = yield* Effect.tryPromise({
-            try: () =>
-              saveWorkflowProjectExecutionResults({
-                document: run.document,
-                ownerUserId: userId,
-                projectId,
-              }),
-            catch: toPersistenceError,
-          });
-
-          return result.documentRevision;
-        });
-
-      const hydrateExecutionRequest = (
-        runId: string,
-        userId: string,
-        request: StartWorkflowExecutionRequest,
-      ) =>
-        workflowArtifactStore
-          .getRunArtifacts({ ownerUserId: userId, runId })
-          .pipe(
-            Effect.map((artifacts) => ({
-              ...request,
-              document: buildWorkflowRunProjection({
-                artifacts,
-                document: request.document,
-              }),
-            })),
+          return (
+            run.projectDocumentRevision ??
+            run.requestContext?.documentRevision ??
+            null
           );
+        });
 
       const getFilteredContinuationCostDelta = (
         state: WorkflowExecutionStatusResponse,
@@ -992,36 +944,36 @@ export class WorkflowExecutionService extends Context.Tag(
           state.accruedCostCredits - (request.accruedCostCredits ?? 0),
         );
 
-      const mergeLaneScopedExecutionState = (params: {
+      const mergeOutputScopedExecutionState = (params: {
         accruedCostCredits: number;
-        currentRun: WorkflowExecutionStatusResponse;
-        laneIndex: number;
+        currentExecution: WorkflowExecutionStatusResponse;
+        outputIndex: number;
         state: WorkflowExecutionStatusResponse;
       }) => ({
         ...params.state,
         accruedCostCredits: params.accruedCostCredits,
-        document: mergeLaneScopedDocument({
-          currentDocument: params.currentRun.document,
-          laneIndex: params.laneIndex,
+        document: mergeOutputScopedDocument({
+          currentDocument: params.currentExecution.document,
+          outputIndex: params.outputIndex,
           stateDocument: params.state.document,
         }),
         projectDocumentRevision:
-          params.currentRun.projectDocumentRevision ??
+          params.currentExecution.projectDocumentRevision ??
           params.state.projectDocumentRevision,
         requestContext: params.state.requestContext
           ? {
               ...params.state.requestContext,
               accruedCostCredits: params.accruedCostCredits,
               documentRevision:
-                params.currentRun.requestContext?.documentRevision ??
+                params.currentExecution.requestContext?.documentRevision ??
                 params.state.requestContext.documentRevision,
             }
           : null,
         runtime: mergeRuntimeState({
-          currentRuntime: params.currentRun.runtime,
+          currentRuntime: params.currentExecution.runtime,
           stateRuntime: params.state.runtime,
         }),
-        targetNodeIds: params.currentRun.targetNodeIds,
+        targetNodeIds: params.currentExecution.targetNodeIds,
       });
 
       const mergeRuntimeState = (params: {
@@ -1056,9 +1008,9 @@ export class WorkflowExecutionService extends Context.Tag(
           params.currentRuntime.startedAt ?? params.stateRuntime.startedAt,
       });
 
-      const mergeLaneScopedDocument = (params: {
+      const mergeOutputScopedDocument = (params: {
         currentDocument: WorkflowDocument;
-        laneIndex: number;
+        outputIndex: number;
         stateDocument: WorkflowDocument;
       }) => {
         const stateNodeById = new Map(
@@ -1079,15 +1031,15 @@ export class WorkflowExecutionService extends Context.Tag(
             ) {
               return {
                 ...stateNode,
-                outputLanes: mergeLaneValue(
-                  currentNode.outputLanes,
-                  stateNode.outputLanes,
-                  params.laneIndex,
+                outputs: mergeOutputValue(
+                  currentNode.outputs,
+                  stateNode.outputs,
+                  params.outputIndex,
                 ),
-                review: mergeReviewLane(
+                review: mergeReviewOutput(
                   currentNode.review,
                   stateNode.review,
-                  params.laneIndex,
+                  params.outputIndex,
                 ),
               };
             }
@@ -1098,15 +1050,15 @@ export class WorkflowExecutionService extends Context.Tag(
             ) {
               return {
                 ...stateNode,
-                outputLanes: mergeLaneValue(
-                  currentNode.outputLanes,
-                  stateNode.outputLanes,
-                  params.laneIndex,
+                outputs: mergeOutputValue(
+                  currentNode.outputs,
+                  stateNode.outputs,
+                  params.outputIndex,
                 ),
-                review: mergeReviewLane(
+                review: mergeReviewOutput(
                   currentNode.review,
                   stateNode.review,
-                  params.laneIndex,
+                  params.outputIndex,
                 ),
               };
             }
@@ -1117,15 +1069,15 @@ export class WorkflowExecutionService extends Context.Tag(
             ) {
               return {
                 ...stateNode,
-                outputLanes: mergeLaneValue(
-                  currentNode.outputLanes,
-                  stateNode.outputLanes,
-                  params.laneIndex,
+                outputs: mergeOutputValue(
+                  currentNode.outputs,
+                  stateNode.outputs,
+                  params.outputIndex,
                 ),
-                review: mergeReviewLane(
+                review: mergeReviewOutput(
                   currentNode.review,
                   stateNode.review,
-                  params.laneIndex,
+                  params.outputIndex,
                 ),
               };
             }
@@ -1135,48 +1087,50 @@ export class WorkflowExecutionService extends Context.Tag(
         } satisfies WorkflowDocument;
       };
 
-      const mergeLaneValue = <Value>(
+      const mergeOutputValue = <Value>(
         currentValues: readonly Value[],
         stateValues: readonly Value[],
-        laneIndex: number,
+        outputIndex: number,
       ) => {
-        if (!Object.hasOwn(stateValues, laneIndex)) {
+        if (!Object.hasOwn(stateValues, outputIndex)) {
           return [...currentValues];
         }
 
         const values = [...currentValues];
-        values[laneIndex] = stateValues[laneIndex] as Value;
+        values[outputIndex] = stateValues[outputIndex] as Value;
         return values;
       };
 
-      const mergeReviewLane = <
+      const mergeReviewOutput = <
         Review extends WorkflowDocument["nodes"][number],
       >(
         currentReview: Extract<Review, { review: unknown }>["review"],
         stateReview: Extract<Review, { review: unknown }>["review"],
-        laneIndex: number,
+        outputIndex: number,
       ) => {
-        const stateLane = stateReview.lanes.find(
-          (lane) => lane.laneIndex === laneIndex,
+        const stateOutput = stateReview.outputs.find(
+          (output) => output.outputIndex === outputIndex,
         );
-        if (!stateLane) {
+        if (!stateOutput) {
           return currentReview;
         }
 
-        const lanes = currentReview.lanes.some(
-          (lane) => lane.laneIndex === laneIndex,
+        const outputs = currentReview.outputs.some(
+          (output) => output.outputIndex === outputIndex,
         )
-          ? currentReview.lanes.map((lane) =>
-              lane.laneIndex === laneIndex ? stateLane : lane,
+          ? currentReview.outputs.map((output) =>
+              output.outputIndex === outputIndex ? stateOutput : output,
             )
-          : [...currentReview.lanes, stateLane];
+          : [...currentReview.outputs, stateOutput];
 
         return {
           ...currentReview,
           sourceNodeId: stateReview.sourceNodeId,
           updatedAt: stateReview.updatedAt ?? currentReview.updatedAt,
           valueType: stateReview.valueType,
-          lanes: lanes.sort((left, right) => left.laneIndex - right.laneIndex),
+          outputs: outputs.sort(
+            (left, right) => left.outputIndex - right.outputIndex,
+          ),
         };
       };
 
@@ -1190,50 +1144,75 @@ export class WorkflowExecutionService extends Context.Tag(
             return run.document;
           }
 
-          const project = yield* workflowProjectStore.getProject({
+          const project = yield* workflowStore.getProject({
             ownerUserId: userId,
             projectId,
           });
 
-          const artifacts = yield* workflowArtifactStore.getRunArtifacts({
+          const artifacts = yield* workflowArtifactStore.getProjectArtifacts({
             ownerUserId: userId,
-            runId: run.runId,
+            projectId,
           });
 
-          return buildWorkflowRunProjection({
+          return buildWorkflowOutputProjection({
             artifacts,
             document: project.document,
           });
         });
 
-      const settleRunCost = (params: {
-        reason: string;
-        run: WorkflowExecutionStatusResponse;
-        targetCost?: number;
+      const getExecutionCredits = (params: {
+        executionId: string;
         userId: string;
-      }) =>
-        workflowCreditsService.alignExecutionCost({
-          executionId: params.run.runId,
-          reason: params.reason,
-          targetCost: params.targetCost ?? params.run.accruedCostCredits,
-          userId: params.userId,
-        });
+      }) => workflowCreditsService.getExecutionSummary(params);
 
-      const getRunRequest = (run: WorkflowExecutionStatusResponse) =>
+      const chargeOutputCost = (params: {
+        amount: number;
+        attempt: number;
+        executionId: string;
+        idempotencyKey: string;
+        inputHash: string;
+        nodeId: string;
+        outputIndex: number;
+        projectId: string | null;
+        taskRunId?: string | null;
+        userId: string;
+      }) => {
+        const outputKey = `${params.projectId ?? ""}:${params.nodeId}:${params.outputIndex}`;
+        return workflowCreditsService
+          .debitExecutionOutput({
+            amount: params.amount,
+            executionId: params.executionId,
+            reason: "Workflow output executed.",
+            sourceKey: params.taskRunId
+              ? ["workflow-task-run", params.taskRunId, params.nodeId].join(":")
+              : [
+                  "workflow-output",
+                  params.executionId,
+                  outputKey,
+                  params.attempt,
+                  params.idempotencyKey,
+                  params.inputHash,
+                ].join(":"),
+            userId: params.userId,
+          })
+          .pipe(Effect.as({ amount: params.amount, outputKey }));
+      };
+
+      const getExecutionRequest = (run: WorkflowExecutionStatusResponse) =>
         run.requestContext
           ? ({
               ...run.requestContext,
               document: run.document,
-              executionLaneFilter: null,
-              reviewLaneFilter: null,
+              executionOutputFilter: null,
+              reviewOutputFilter: null,
             } satisfies StartWorkflowExecutionRequest)
           : null;
 
-      const getLaneFailureMessage = (artifacts: WorkflowRunArtifacts) =>
-        getErroredWorkflowLaneResults(artifacts)[0]?.error ??
+      const getOutputFailureMessage = (artifacts: WorkflowOutputArtifacts) =>
+        getErroredWorkflowOutputResults(artifacts)[0]?.error ??
         "Workflow execution failed.";
 
-      const markRuntimeLaneFailed = (params: {
+      const markRuntimeOutputFailed = (params: {
         message: string;
         nodeId: string;
         runtime: WorkflowExecutionRuntimeState;
@@ -1250,15 +1229,15 @@ export class WorkflowExecutionService extends Context.Tag(
         },
       });
 
-      const areLaneJobsSettledByCompletionOrFailure = (params: {
-        artifacts: WorkflowRunArtifacts;
+      const areOutputJobsSettledByCompletionOrFailure = (params: {
+        artifacts: WorkflowOutputArtifacts;
         run: WorkflowExecutionStatusResponse;
       }) => {
-        const request = getRunRequest(params.run);
+        const request = getExecutionRequest(params.run);
         return Boolean(
           request &&
-            getErroredWorkflowLaneResults(params.artifacts).length &&
-            getWorkflowLaneSettlement({
+            getErroredWorkflowOutputResults(params.artifacts).length &&
+            getWorkflowOutputSettlement({
               artifacts: params.artifacts,
               plan: getExecutionDependencyPlan(
                 request.document,
@@ -1268,12 +1247,12 @@ export class WorkflowExecutionService extends Context.Tag(
         );
       };
 
-      const settleFailedLaneRun = (params: {
-        artifacts: WorkflowRunArtifacts;
+      const settleFailedOutputRun = (params: {
+        artifacts: WorkflowOutputArtifacts;
         credits: WorkflowExecutionStatusResponse["credits"];
         run: WorkflowExecutionStatusResponse;
       }) => {
-        const message = getLaneFailureMessage(params.artifacts);
+        const message = getOutputFailureMessage(params.artifacts);
         return {
           ...params.run,
           activity: message,
@@ -1290,75 +1269,45 @@ export class WorkflowExecutionService extends Context.Tag(
         } satisfies WorkflowExecutionStatusResponse;
       };
 
-      const getRequestLaneIndex = (request: StartWorkflowExecutionRequest) =>
-        request.reviewLaneFilter?.laneIndex ??
-        request.executionLaneFilter?.laneIndex ??
+      const getRequestOutputIndex = (request: StartWorkflowExecutionRequest) =>
+        request.reviewOutputFilter?.outputIndex ??
+        request.executionOutputFilter?.outputIndex ??
         null;
 
-      const reserveContinuationCredits = (params: {
-        run: WorkflowExecutionStatusResponse;
-        userId: string;
-        reviewLaneFilter?: StartWorkflowExecutionRequest["reviewLaneFilter"];
-      }) =>
-        Effect.gen(function* () {
-          const request = yield* buildContinuationRequest(
-            params.run,
-            params.userId,
-            params.reviewLaneFilter,
-          );
-          const quote = yield* Effect.try({
-            try: () => estimateWorkflowExecution(request),
-            catch: (cause) =>
-              cause instanceof WorkflowValidationError
-                ? cause
-                : new WorkflowInfrastructureError({
-                    message: getErrorMessage(cause),
-                    cause,
-                  }),
-          });
-
-          return yield* settleRunCost({
-            reason: "Workflow review continuation reserved.",
-            run: params.run,
-            targetCost: params.run.accruedCostCredits + quote.totalCost,
-            userId: params.userId,
-          });
-        });
-
-      const approveReviewLane = (params: {
-        laneIndex: number;
+      const approveReviewOutput = (params: {
+        outputIndex: number;
         reviewNodeId: string;
-        runId: string;
+        executionId: string;
         userId: string;
       }) =>
         Effect.gen(function* () {
           const {
             result: { shouldResume },
             run: waitingRun,
-          } = yield* workflowRunStore.updateRunWith({
-            runId: params.runId,
+          } = yield* workflowExecutionStore.updateExecutionWith({
+            executionId: params.executionId,
             userId: params.userId,
-            update: (currentRun) =>
+            update: (currentExecution) =>
               Effect.gen(function* () {
-                const { lane } = yield* getReviewLaneForDecision({
+                const { output } = yield* getReviewOutputForDecision({
                   decision: "approve",
-                  laneIndex: params.laneIndex,
+                  outputIndex: params.outputIndex,
                   ownerUserId: params.userId,
                   reviewNodeId: params.reviewNodeId,
-                  run: currentRun,
+                  run: currentExecution,
                 });
-                yield* workflowArtifactStore.setReviewLaneStatus({
-                  attempt: lane.attempt,
-                  laneIndex: params.laneIndex,
+                yield* workflowArtifactStore.setReviewOutputStatus({
+                  attempt: output.attempt,
+                  outputIndex: params.outputIndex,
                   nodeId: params.reviewNodeId,
                   ownerUserId: params.userId,
-                  runId: params.runId,
+                  executionId: params.executionId,
                   status: "approved",
                 });
 
                 const now = new Date().toISOString();
                 const document = updateWorkflowDocumentNode(
-                  currentRun.document,
+                  currentExecution.document,
                   params.reviewNodeId,
                   (node) => {
                     if (
@@ -1373,30 +1322,30 @@ export class WorkflowExecutionService extends Context.Tag(
                       ...node,
                       review: {
                         ...node.review,
-                        lanes: node.review.lanes.map((lane) =>
-                          lane.laneIndex === params.laneIndex
-                            ? { ...lane, status: "approved" }
-                            : lane,
+                        outputs: node.review.outputs.map((output) =>
+                          output.outputIndex === params.outputIndex
+                            ? { ...output, status: "approved" }
+                            : output,
                         ),
                         updatedAt: now,
                       },
                     };
                   },
                 );
-                const isFullyApproved = yield* hasApprovedReviewLanes(
-                  { ...currentRun, document },
+                const isFullyApproved = yield* hasApprovedReviewOutputs(
+                  { ...currentExecution, document },
                   params.reviewNodeId,
                   params.userId,
                 );
                 const nextRunBase = {
-                  ...currentRun,
+                  ...currentExecution,
                   activity: "Human review updated.",
                   document,
                   runtime: {
-                    ...currentRun.runtime,
+                    ...currentExecution.runtime,
                     activity: "Human review updated.",
                     nodeStateById: {
-                      ...currentRun.runtime.nodeStateById,
+                      ...currentExecution.runtime.nodeStateById,
                       [params.reviewNodeId]: {
                         error: null,
                         status: isFullyApproved ? "success" : "waiting",
@@ -1404,27 +1353,27 @@ export class WorkflowExecutionService extends Context.Tag(
                     },
                   },
                   status:
-                    currentRun.status === "running"
+                    currentExecution.status === "running"
                       ? ("running" as const)
                       : ("waiting_for_review" as const),
                 } satisfies WorkflowExecutionStatusResponse;
-                const documentRevision = yield* persistRunArtifacts(
+                const documentRevision = yield* persistOutputArtifacts(
                   nextRunBase,
                   params.userId,
-                  params.laneIndex,
+                  params.outputIndex,
                 );
                 const persistedRunBase = withProjectDocumentRevision(
                   nextRunBase,
                   documentRevision,
                 );
-                const shouldResume = yield* hasApprovedReviewLanes(
+                const shouldResume = yield* hasApprovedReviewOutputs(
                   persistedRunBase,
                   params.reviewNodeId,
                   params.userId,
                 );
                 const activity = shouldResume
                   ? "Human review approved. Queueing workflow resume..."
-                  : `Lane ${params.laneIndex + 1} approved. Continuing that lane...`;
+                  : `Output ${params.outputIndex + 1} approved. Continuing that output...`;
 
                 return {
                   result: { shouldResume },
@@ -1441,28 +1390,29 @@ export class WorkflowExecutionService extends Context.Tag(
           });
 
           if (shouldResume) {
-            if (!hasLaneContinuationTargets(waitingRun, params.reviewNodeId)) {
-              const credits = yield* settleRunCost({
-                reason: "Workflow review approved.",
-                run: waitingRun,
+            if (
+              !hasOutputContinuationTargets(waitingRun, params.reviewNodeId)
+            ) {
+              const credits = yield* getExecutionCredits({
+                executionId: waitingRun.executionId,
                 userId: params.userId,
               });
 
-              return yield* workflowRunStore
-                .updateRunWith({
-                  runId: params.runId,
+              return yield* workflowExecutionStore
+                .updateExecutionWith({
+                  executionId: params.executionId,
                   userId: params.userId,
-                  update: (currentRun) =>
+                  update: (currentExecution) =>
                     Effect.succeed({
                       result: null,
                       run: {
-                        ...currentRun,
-                        activity: "Workflow run finished.",
+                        ...currentExecution,
+                        activity: "Workflow execution finished.",
                         credits,
-                        finalCostCredits: currentRun.accruedCostCredits,
+                        finalCostCredits: currentExecution.accruedCostCredits,
                         runtime: {
-                          ...currentRun.runtime,
-                          activity: "Workflow run finished.",
+                          ...currentExecution.runtime,
+                          activity: "Workflow execution finished.",
                           error: null,
                           finishedAt: new Date().toISOString(),
                         },
@@ -1477,31 +1427,31 @@ export class WorkflowExecutionService extends Context.Tag(
               waitingRun,
               params.userId,
             );
-            const artifacts = yield* workflowArtifactStore.getRunArtifacts({
+            const artifacts = yield* workflowArtifactStore.getOutputArtifacts({
               ownerUserId: params.userId,
-              runId: params.runId,
+              executionId: params.executionId,
             });
-            const readyJobs = yield* getSchedulableReadyLaneJobs({
+            const readyJobs = yield* getSchedulableReadyOutputJobs({
               artifacts,
               request,
-              runId: params.runId,
+              executionId: params.executionId,
               targetNodeIds: waitingRun.targetNodeIds,
             });
             if (!readyJobs.length) {
               const activity =
-                "Human review approved. Waiting for dependent lanes...";
-              return yield* workflowRunStore
-                .updateRunWith({
-                  runId: params.runId,
+                "Human review approved. Waiting for dependent outputs...";
+              return yield* workflowExecutionStore
+                .updateExecutionWith({
+                  executionId: params.executionId,
                   userId: params.userId,
-                  update: (currentRun) =>
+                  update: (currentExecution) =>
                     Effect.succeed({
                       result: null,
                       run: {
-                        ...currentRun,
+                        ...currentExecution,
                         activity,
                         runtime: {
-                          ...currentRun.runtime,
+                          ...currentExecution.runtime,
                           activity,
                         },
                         status: "running" as const,
@@ -1511,105 +1461,77 @@ export class WorkflowExecutionService extends Context.Tag(
                 .pipe(Effect.map(({ run }) => run));
             }
 
-            let reservationFailureRun: WorkflowExecutionStatusResponse | null =
-              null;
-            const reservedCredits = yield* reserveContinuationCredits({
-              run: waitingRun,
+            const currentCredits = yield* getExecutionCredits({
+              executionId: params.executionId,
               userId: params.userId,
-            }).pipe(
-              Effect.catchAll((error) =>
-                Effect.gen(function* () {
-                  const { run } = yield* workflowRunStore.updateRunWith({
-                    runId: params.runId,
-                    userId: params.userId,
-                    update: (currentRun) =>
-                      Effect.succeed({
-                        result: null,
-                        run: {
-                          ...currentRun,
-                          activity: getErrorMessage(error),
-                          runtime: {
-                            ...currentRun.runtime,
-                            activity: getErrorMessage(error),
-                          },
-                        },
-                      }),
-                  });
-                  reservationFailureRun = run;
-                  return null;
-                }),
-              ),
-            );
-            if (!reservedCredits) {
-              return reservationFailureRun ?? waitingRun;
-            }
+            });
             let schedulingFailureRun: WorkflowExecutionStatusResponse | null =
               null;
-            const queuedLaneCount = yield* enqueueLaneJobs({
+            const queuedOutputCount = yield* enqueueOutputJobs({
+              artifacts,
               jobs: readyJobs,
-              laneCount: getExecutionLaneCount(
+              outputCount: getExecutionOutputCount(
                 request.document,
                 waitingRun.targetNodeIds,
               ),
               request,
-              runId: params.runId,
+              executionId: params.executionId,
               userId: params.userId,
             }).pipe(
               Effect.catchAll((error) =>
                 Effect.gen(function* () {
-                  const credits = yield* settleRunCost({
-                    reason: getErrorMessage(error),
-                    run: waitingRun,
-                    targetCost: waitingRun.accruedCostCredits,
+                  const credits = yield* getExecutionCredits({
+                    executionId: params.executionId,
                     userId: params.userId,
                   }).pipe(
-                    Effect.catchAll(() => Effect.succeed(reservedCredits)),
+                    Effect.catchAll(() => Effect.succeed(currentCredits)),
                   );
-                  const { run } = yield* workflowRunStore.updateRunWith({
-                    runId: params.runId,
-                    userId: params.userId,
-                    update: (currentRun) =>
-                      Effect.succeed({
-                        result: null,
-                        run: {
-                          ...currentRun,
-                          activity: getErrorMessage(error),
-                          credits,
-                          runtime: {
-                            ...currentRun.runtime,
+                  const { run } =
+                    yield* workflowExecutionStore.updateExecutionWith({
+                      executionId: params.executionId,
+                      userId: params.userId,
+                      update: (currentExecution) =>
+                        Effect.succeed({
+                          result: null,
+                          run: {
+                            ...currentExecution,
                             activity: getErrorMessage(error),
+                            credits,
+                            runtime: {
+                              ...currentExecution.runtime,
+                              activity: getErrorMessage(error),
+                            },
                           },
-                        },
-                      }),
-                  });
+                        }),
+                    });
                   schedulingFailureRun = run;
                   return -1;
                 }),
               ),
             );
-            if (queuedLaneCount < 0) {
+            if (queuedOutputCount < 0) {
               return schedulingFailureRun ?? waitingRun;
             }
 
-            const activity = queuedLaneCount
+            const activity = queuedOutputCount
               ? "Human review approved. Resuming workflow..."
-              : "Human review approved. Waiting for dependent lanes...";
-            return yield* workflowRunStore
-              .updateRunWith({
-                runId: params.runId,
+              : "Human review approved. Waiting for dependent outputs...";
+            return yield* workflowExecutionStore
+              .updateExecutionWith({
+                executionId: params.executionId,
                 userId: params.userId,
-                update: (currentRun) =>
+                update: (currentExecution) =>
                   Effect.succeed({
                     result: null,
                     run: {
-                      ...currentRun,
+                      ...currentExecution,
                       activity,
-                      credits: reservedCredits,
+                      credits: currentCredits,
                       runtime: {
-                        ...currentRun.runtime,
+                        ...currentExecution.runtime,
                         activity,
                       },
-                      status: queuedLaneCount
+                      status: queuedOutputCount
                         ? ("queued" as const)
                         : ("running" as const),
                     },
@@ -1618,7 +1540,7 @@ export class WorkflowExecutionService extends Context.Tag(
               .pipe(Effect.map(({ run }) => run));
           }
 
-          if (!hasLaneContinuationTargets(waitingRun, params.reviewNodeId)) {
+          if (!hasOutputContinuationTargets(waitingRun, params.reviewNodeId)) {
             return waitingRun;
           }
 
@@ -1626,38 +1548,38 @@ export class WorkflowExecutionService extends Context.Tag(
             waitingRun,
             params.userId,
             {
-              laneIndex: params.laneIndex,
+              outputIndex: params.outputIndex,
               reviewNodeId: params.reviewNodeId,
             },
           );
-          const artifacts = yield* workflowArtifactStore.getRunArtifacts({
+          const artifacts = yield* workflowArtifactStore.getOutputArtifacts({
             ownerUserId: params.userId,
-            runId: params.runId,
+            executionId: params.executionId,
           });
-          const readyJobs = yield* getSchedulableReadyLaneJobs({
+          const readyJobs = yield* getSchedulableReadyOutputJobs({
             artifacts,
             request,
-            runId: params.runId,
+            executionId: params.executionId,
             targetNodeIds: waitingRun.targetNodeIds,
           });
           if (!readyJobs.length) {
-            const activity = `Lane ${params.laneIndex + 1} approved. Waiting for dependent lanes...`;
-            return yield* workflowRunStore
-              .updateRunWith({
-                runId: params.runId,
+            const activity = `Output ${params.outputIndex + 1} approved. Waiting for dependent outputs...`;
+            return yield* workflowExecutionStore
+              .updateExecutionWith({
+                executionId: params.executionId,
                 userId: params.userId,
-                update: (currentRun) =>
+                update: (currentExecution) =>
                   Effect.succeed({
                     result: null,
                     run: {
-                      ...currentRun,
+                      ...currentExecution,
                       activity,
                       runtime: {
-                        ...currentRun.runtime,
+                        ...currentExecution.runtime,
                         activity,
                       },
                       status:
-                        currentRun.status === "running"
+                        currentExecution.status === "running"
                           ? ("running" as const)
                           : ("waiting_for_review" as const),
                     },
@@ -1666,110 +1588,78 @@ export class WorkflowExecutionService extends Context.Tag(
               .pipe(Effect.map(({ run }) => run));
           }
 
-          let reservationFailureRun: WorkflowExecutionStatusResponse | null =
-            null;
-          const reservedCredits = yield* reserveContinuationCredits({
-            reviewLaneFilter: {
-              laneIndex: params.laneIndex,
-              reviewNodeId: params.reviewNodeId,
-            },
-            run: waitingRun,
+          const currentCredits = yield* getExecutionCredits({
+            executionId: params.executionId,
             userId: params.userId,
-          }).pipe(
-            Effect.catchAll((error) =>
-              Effect.gen(function* () {
-                const { run } = yield* workflowRunStore.updateRunWith({
-                  runId: params.runId,
-                  userId: params.userId,
-                  update: (currentRun) =>
-                    Effect.succeed({
-                      result: null,
-                      run: {
-                        ...currentRun,
-                        activity: getErrorMessage(error),
-                        runtime: {
-                          ...currentRun.runtime,
-                          activity: getErrorMessage(error),
-                        },
-                      },
-                    }),
-                });
-                reservationFailureRun = run;
-                return null;
-              }),
-            ),
-          );
-          if (!reservedCredits) {
-            return reservationFailureRun ?? waitingRun;
-          }
+          });
 
           let schedulingFailureRun: WorkflowExecutionStatusResponse | null =
             null;
-          const queuedLaneCount = yield* enqueueLaneJobs({
+          const queuedOutputCount = yield* enqueueOutputJobs({
+            artifacts,
             jobs: readyJobs,
-            laneCount: getExecutionLaneCount(
+            outputCount: getExecutionOutputCount(
               request.document,
               waitingRun.targetNodeIds,
             ),
             request,
-            runId: params.runId,
+            executionId: params.executionId,
             userId: params.userId,
           }).pipe(
             Effect.catchAll((error) =>
               Effect.gen(function* () {
-                const credits = yield* settleRunCost({
-                  reason: getErrorMessage(error),
-                  run: waitingRun,
-                  targetCost: waitingRun.accruedCostCredits,
+                const credits = yield* getExecutionCredits({
+                  executionId: params.executionId,
                   userId: params.userId,
-                }).pipe(Effect.catchAll(() => Effect.succeed(reservedCredits)));
-                const { run } = yield* workflowRunStore.updateRunWith({
-                  runId: params.runId,
-                  userId: params.userId,
-                  update: (currentRun) =>
-                    Effect.succeed({
-                      result: null,
-                      run: {
-                        ...currentRun,
-                        activity: getErrorMessage(error),
-                        credits,
-                        runtime: {
-                          ...currentRun.runtime,
+                }).pipe(Effect.catchAll(() => Effect.succeed(currentCredits)));
+                const { run } =
+                  yield* workflowExecutionStore.updateExecutionWith({
+                    executionId: params.executionId,
+                    userId: params.userId,
+                    update: (currentExecution) =>
+                      Effect.succeed({
+                        result: null,
+                        run: {
+                          ...currentExecution,
                           activity: getErrorMessage(error),
+                          credits,
+                          runtime: {
+                            ...currentExecution.runtime,
+                            activity: getErrorMessage(error),
+                          },
                         },
-                      },
-                    }),
-                });
+                      }),
+                  });
                 schedulingFailureRun = run;
                 return -1;
               }),
             ),
           );
-          if (queuedLaneCount < 0) {
+          if (queuedOutputCount < 0) {
             return schedulingFailureRun ?? waitingRun;
           }
 
-          const activity = queuedLaneCount
-            ? `Lane ${params.laneIndex + 1} approved. Queued ready workflow lanes.`
-            : `Lane ${params.laneIndex + 1} approved. Waiting for dependent lanes...`;
-          return yield* workflowRunStore
-            .updateRunWith({
-              runId: params.runId,
+          const activity = queuedOutputCount
+            ? `Output ${params.outputIndex + 1} approved. Queued ready workflow outputs.`
+            : `Output ${params.outputIndex + 1} approved. Waiting for dependent outputs...`;
+          return yield* workflowExecutionStore
+            .updateExecutionWith({
+              executionId: params.executionId,
               userId: params.userId,
-              update: (currentRun) =>
+              update: (currentExecution) =>
                 Effect.succeed({
                   result: null,
                   run: {
-                    ...currentRun,
+                    ...currentExecution,
                     activity,
-                    credits: reservedCredits,
+                    credits: currentCredits,
                     runtime: {
-                      ...currentRun.runtime,
+                      ...currentExecution.runtime,
                       activity,
                     },
-                    status: queuedLaneCount
+                    status: queuedOutputCount
                       ? ("queued" as const)
-                      : currentRun.status === "running"
+                      : currentExecution.status === "running"
                         ? ("running" as const)
                         : ("waiting_for_review" as const),
                   },
@@ -1778,62 +1668,54 @@ export class WorkflowExecutionService extends Context.Tag(
             .pipe(Effect.map(({ run }) => run));
         });
 
-      const rejectReviewLane = (params: {
-        laneIndex: number;
+      const rejectReviewOutput = (params: {
+        outputIndex: number;
         reviewNodeId: string;
-        runId: string;
+        executionId: string;
         userId: string;
       }) =>
         Effect.gen(function* () {
           const {
             result: { nextAttempt, shouldQueueRegeneration },
-            run: regeneratingRun,
-          } = yield* workflowRunStore.updateRunWith({
-            runId: params.runId,
+            run: regeneratingExecution,
+          } = yield* workflowExecutionStore.updateExecutionWith({
+            executionId: params.executionId,
             userId: params.userId,
-            update: (currentRun) =>
+            update: (currentExecution) =>
               Effect.gen(function* () {
-                const { lane } = yield* getReviewLaneForDecision({
+                const { output } = yield* getReviewOutputForDecision({
                   decision: "regenerate",
-                  laneIndex: params.laneIndex,
+                  outputIndex: params.outputIndex,
                   ownerUserId: params.userId,
                   reviewNodeId: params.reviewNodeId,
-                  run: currentRun,
+                  run: currentExecution,
                 });
 
-                if (lane.status === "regenerating") {
+                if (output.status === "regenerating") {
                   return {
                     result: {
-                      nextAttempt: lane.attempt + 1,
+                      nextAttempt: output.attempt + 1,
                       shouldQueueRegeneration: false,
                     },
-                    run: currentRun,
+                    run: currentExecution,
                   };
                 }
 
-                const regenerationCostEstimate =
-                  yield* estimateGeneratorReviewLaneRegenerationCreditCost({
-                    document: currentRun.document,
-                    generatorNodeId: params.reviewNodeId,
-                  });
-                const reservedCredits = yield* settleRunCost({
-                  reason: "Workflow review lane regeneration reserved.",
-                  run: currentRun,
-                  targetCost:
-                    currentRun.accruedCostCredits + regenerationCostEstimate,
+                const credits = yield* getExecutionCredits({
+                  executionId: params.executionId,
                   userId: params.userId,
                 });
                 const nextAttempt =
                   yield* workflowArtifactStore.createNextAttempt({
-                    laneIndex: params.laneIndex,
+                    outputIndex: params.outputIndex,
                     nodeId: params.reviewNodeId,
                     ownerUserId: params.userId,
-                    runId: params.runId,
+                    executionId: params.executionId,
                   });
 
                 const now = new Date().toISOString();
                 const regeneratingDocument = updateWorkflowDocumentNode(
-                  currentRun.document,
+                  currentExecution.document,
                   params.reviewNodeId,
                   (node) =>
                     node.kind === "imageGenerator" ||
@@ -1843,14 +1725,14 @@ export class WorkflowExecutionService extends Context.Tag(
                           ...node,
                           review: {
                             ...node.review,
-                            lanes: node.review.lanes.map((lane) =>
-                              lane.laneIndex === params.laneIndex
+                            outputs: node.review.outputs.map((output) =>
+                              output.outputIndex === params.outputIndex
                                 ? {
-                                    ...lane,
-                                    attempt: nextAttempt - 1,
+                                    ...output,
+                                    attempt: nextAttempt,
                                     status: "regenerating",
                                   }
-                                : lane,
+                                : output,
                             ),
                             updatedAt: now,
                           },
@@ -1861,15 +1743,15 @@ export class WorkflowExecutionService extends Context.Tag(
                 return {
                   result: { nextAttempt, shouldQueueRegeneration: true },
                   run: {
-                    ...currentRun,
-                    credits: reservedCredits,
+                    ...currentExecution,
+                    credits,
                     document: regeneratingDocument,
                     runtime: {
-                      ...currentRun.runtime,
-                      activity: `Regenerating lane ${params.laneIndex + 1} for review...`,
+                      ...currentExecution.runtime,
+                      activity: `Regenerating output ${params.outputIndex + 1} for review...`,
                     },
                     status:
-                      currentRun.status === "running"
+                      currentExecution.status === "running"
                         ? ("running" as const)
                         : ("waiting_for_review" as const),
                   },
@@ -1878,155 +1760,189 @@ export class WorkflowExecutionService extends Context.Tag(
           });
 
           if (!shouldQueueRegeneration) {
-            return regeneratingRun;
+            return regeneratingExecution;
           }
 
-          yield* Effect.tryPromise({
-            try: () => {
-              const reviewNode = regeneratingRun.document.nodes.find(
-                (node) => node.id === params.reviewNodeId,
-              );
-              const regenerationKey =
-                reviewNode &&
-                (reviewNode.kind === "imageGenerator" ||
-                  reviewNode.kind === "videoGenerator" ||
-                  reviewNode.kind === "llmGenerator")
-                  ? (reviewNode.review.updatedAt ?? "pending")
-                  : "pending";
-              return enqueueWorkflowReviewRegenerationJob(
-                {
-                  attempt: nextAttempt,
-                  laneIndex: params.laneIndex,
-                  reviewNodeId: params.reviewNodeId,
-                  runId: params.runId,
-                  type: "regenerate-review-lane",
-                  userId: params.userId,
-                },
-                {
-                  jobId: createWorkflowReviewRegenerationJobId({
-                    attempt: nextAttempt,
-                    laneIndex: params.laneIndex,
-                    regenerationKey,
-                    reviewNodeId: params.reviewNodeId,
-                    runId: params.runId,
-                  }),
-                },
-              );
-            },
-            catch: (cause) =>
-              new WorkflowInfrastructureError({
-                message: getErrorMessage(cause),
-                cause,
+          const artifacts = yield* workflowArtifactStore.getOutputArtifacts({
+            ownerUserId: params.userId,
+            executionId: params.executionId,
+          });
+          const plan = getExecutionDependencyPlan(
+            regeneratingExecution.document,
+            [params.reviewNodeId],
+          );
+          const job = plan.jobs.find(
+            (candidate) =>
+              candidate.nodeId === params.reviewNodeId &&
+              candidate.outputIndex === params.outputIndex,
+          );
+          if (!job) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Review regeneration output is not executable.",
               }),
+            );
+          }
+          const projectId =
+            regeneratingExecution.requestContext?.projectId?.trim();
+          if (!projectId) {
+            return yield* Effect.fail(
+              new WorkflowInfrastructureError({
+                message: "Workflow project is missing from execution context.",
+              }),
+            );
+          }
+          const outputCount = getExecutionOutputCount(
+            regeneratingExecution.document,
+            [params.reviewNodeId],
+          );
+          yield* enqueueOutputJobs({
+            artifacts,
+            jobs: [job],
+            outputCount,
+            request: {
+              ...(regeneratingExecution.requestContext ?? {}),
+              document: regeneratingExecution.document,
+              documentRevision:
+                regeneratingExecution.requestContext?.documentRevision ?? null,
+              executionOutputFilter: null,
+              projectId,
+              reviewOutputFilter: null,
+              selection: { nodeIds: [params.reviewNodeId] },
+              target: { type: "selected-or-all" },
+            },
+            executionId: params.executionId,
+            userId: params.userId,
+            versionOverride: nextAttempt,
           });
 
-          return regeneratingRun;
+          return regeneratingExecution;
         });
 
-      const executeReviewLaneRegeneration = (params: {
+      const _executeReviewOutputRegeneration = (params: {
         attempt: number;
-        laneIndex: number;
+        outputIndex: number;
         reviewNodeId: string;
-        runId: string;
+        executionId: string;
         userId: string;
       }) =>
         Effect.gen(function* () {
-          const regeneratingRun = yield* workflowRunStore.getRun({
-            runId: params.runId,
-            userId: params.userId,
-          });
-          const regenerationArtifacts =
-            yield* workflowArtifactStore.getRunArtifacts({
-              ownerUserId: params.userId,
-              runId: params.runId,
+          const regeneratingExecution =
+            yield* workflowExecutionStore.getExecution({
+              executionId: params.executionId,
+              userId: params.userId,
             });
-          const latestRegenerationLane = getLatestReviewLaneArtifact(
+          const regenerationArtifacts =
+            yield* workflowArtifactStore.getOutputArtifacts({
+              ownerUserId: params.userId,
+              executionId: params.executionId,
+            });
+          const latestRegenerationOutput = getLatestOutputReviewArtifact(
             regenerationArtifacts,
             {
-              laneIndex: params.laneIndex,
+              outputIndex: params.outputIndex,
               reviewNodeId: params.reviewNodeId,
             },
           );
           if (
-            !latestRegenerationLane ||
-            latestRegenerationLane.attempt >= params.attempt ||
-            latestRegenerationLane.attempt !== params.attempt - 1 ||
-            latestRegenerationLane.status !== "regenerating"
+            !latestRegenerationOutput ||
+            latestRegenerationOutput.attempt >= params.attempt ||
+            latestRegenerationOutput.attempt !== params.attempt - 1 ||
+            latestRegenerationOutput.status !== "regenerating"
           ) {
-            return regeneratingRun;
+            return regeneratingExecution;
           }
 
           const regenerationDocument = yield* hydrateRunDocumentFromProject(
-            regeneratingRun,
+            regeneratingExecution,
             params.userId,
           );
-          const result = yield* regenerateGeneratorReviewLane({
+          const projectId =
+            regeneratingExecution.requestContext?.projectId?.trim();
+          if (!projectId) {
+            return yield* Effect.fail(
+              new WorkflowInfrastructureError({
+                message: "Workflow project is missing from execution context.",
+              }),
+            );
+          }
+          const chargedOutputCosts = new Map<string, number>();
+          const result = yield* regenerateGeneratorReviewOutput({
             attempt: params.attempt,
             document: regenerationDocument,
-            laneIndex: params.laneIndex,
+            outputIndex: params.outputIndex,
             ports: {
               generateImage: (imageRequest) =>
                 vertexAi.generateImagesWithNanoBananaPro({
                   ownerUserId: params.userId,
-                  projectId: regeneratingRun.requestContext?.projectId ?? null,
+                  projectId,
                   request: imageRequest,
                 }),
               generateLlm: (llmRequest) =>
                 vertexAi.generateTextWithGemini3Flash({
                   ownerUserId: params.userId,
-                  projectId: regeneratingRun.requestContext?.projectId ?? null,
+                  projectId,
                   request: llmRequest,
                 }),
               generateVideo: (videoRequest) =>
                 vertexAi.generateVideosWithVeo31({
                   ownerUserId: params.userId,
-                  projectId: regeneratingRun.requestContext?.projectId ?? null,
+                  projectId,
                   request: videoRequest,
                 }),
-              getNodeLaneOutput: (query) =>
-                workflowArtifactStore.getNodeLaneOutput({
-                  ...query,
-                  ownerUserId: params.userId,
-                }),
+              getNodeOutput: () => Effect.succeed(null),
+              onOutputCost: (cost) =>
+                chargeOutputCost({
+                  ...cost,
+                  executionId: params.executionId,
+                  projectId:
+                    regeneratingExecution.requestContext?.projectId ?? null,
+                  userId: params.userId,
+                }).pipe(
+                  Effect.map(({ amount, outputKey }) => {
+                    chargedOutputCosts.set(outputKey, amount);
+                    return amount;
+                  }),
+                ),
             },
             generatorNodeId: params.reviewNodeId,
-            runId: params.runId,
+            executionId: params.executionId,
           }).pipe(
             Effect.catchAll((error) =>
               Effect.gen(function* () {
                 yield* workflowArtifactStore
-                  .setReviewLaneStatus({
+                  .setReviewOutputStatus({
                     attempt: params.attempt - 1,
-                    laneIndex: params.laneIndex,
+                    outputIndex: params.outputIndex,
                     nodeId: params.reviewNodeId,
                     ownerUserId: params.userId,
-                    runId: params.runId,
+                    projectId:
+                      regeneratingExecution.requestContext?.projectId ?? null,
+                    executionId: params.executionId,
                     status: "pending",
                   })
                   .pipe(Effect.catchAll(() => Effect.void));
-                yield* workflowRunStore.updateRunWith({
-                  runId: params.runId,
+                yield* workflowExecutionStore.updateExecutionWith({
+                  executionId: params.executionId,
                   userId: params.userId,
-                  update: (currentRun) =>
+                  update: (currentExecution) =>
                     Effect.gen(function* () {
-                      const credits = yield* settleRunCost({
-                        reason: "Workflow review lane regeneration failed.",
-                        run: currentRun,
-                        targetCost: currentRun.accruedCostCredits,
+                      const credits = yield* getExecutionCredits({
+                        executionId: params.executionId,
                         userId: params.userId,
                       }).pipe(
                         Effect.catchAll(() =>
-                          Effect.succeed(currentRun.credits),
+                          Effect.succeed(currentExecution.credits),
                         ),
                       );
 
                       return {
                         result: null,
                         run: {
-                          ...currentRun,
+                          ...currentExecution,
                           credits,
                           document: updateWorkflowDocumentNode(
-                            currentRun.document,
+                            currentExecution.document,
                             params.reviewNodeId,
                             (node) =>
                               node.kind === "imageGenerator" ||
@@ -2036,10 +1952,12 @@ export class WorkflowExecutionService extends Context.Tag(
                                     ...node,
                                     review: {
                                       ...node.review,
-                                      lanes: node.review.lanes.map((lane) =>
-                                        lane.laneIndex === params.laneIndex
-                                          ? { ...lane, status: "pending" }
-                                          : lane,
+                                      outputs: node.review.outputs.map(
+                                        (output) =>
+                                          output.outputIndex ===
+                                          params.outputIndex
+                                            ? { ...output, status: "pending" }
+                                            : output,
                                       ),
                                       updatedAt: new Date().toISOString(),
                                     },
@@ -2047,7 +1965,7 @@ export class WorkflowExecutionService extends Context.Tag(
                                 : node,
                           ),
                           runtime: {
-                            ...currentRun.runtime,
+                            ...currentExecution.runtime,
                             activity: getErrorMessage(error),
                           },
                         },
@@ -2060,61 +1978,60 @@ export class WorkflowExecutionService extends Context.Tag(
             ),
           );
 
-          return yield* workflowRunStore
-            .updateRunWith({
-              runId: params.runId,
+          return yield* workflowExecutionStore
+            .updateExecutionWith({
+              executionId: params.executionId,
               userId: params.userId,
-              update: (currentRun) =>
+              update: (currentExecution) =>
                 Effect.gen(function* () {
                   const currentArtifacts =
-                    yield* workflowArtifactStore.getRunArtifacts({
+                    yield* workflowArtifactStore.getOutputArtifacts({
                       ownerUserId: params.userId,
-                      runId: params.runId,
+                      executionId: params.executionId,
                     });
-                  const latestLane = getLatestReviewLaneArtifact(
+                  const latestOutput = getLatestOutputReviewArtifact(
                     currentArtifacts,
                     {
-                      laneIndex: params.laneIndex,
+                      outputIndex: params.outputIndex,
                       reviewNodeId: params.reviewNodeId,
                     },
                   );
-                  if (latestLane?.attempt !== params.attempt - 1) {
-                    return { result: null, run: currentRun };
+                  if (latestOutput?.attempt !== params.attempt - 1) {
+                    return { result: null, run: currentExecution };
                   }
-                  if (latestLane.status !== "regenerating") {
-                    return { result: null, run: currentRun };
+                  if (latestOutput.status !== "regenerating") {
+                    return { result: null, run: currentExecution };
                   }
 
                   const nextAccruedCostCredits =
-                    currentRun.accruedCostCredits + result.costCredits;
-                  const credits = yield* settleRunCost({
-                    reason: "Workflow review lane regenerated.",
-                    run: currentRun,
-                    targetCost: nextAccruedCostCredits,
+                    currentExecution.accruedCostCredits + result.costCredits;
+                  const credits = yield* getExecutionCredits({
+                    executionId: params.executionId,
                     userId: params.userId,
                   });
                   const nextRunBase = {
-                    ...currentRun,
+                    ...currentExecution,
                     accruedCostCredits: nextAccruedCostCredits,
                     credits,
-                    document: mergeLaneScopedDocument({
-                      currentDocument: currentRun.document,
-                      laneIndex: params.laneIndex,
+                    document: mergeOutputScopedDocument({
+                      currentDocument: currentExecution.document,
+                      outputIndex: params.outputIndex,
                       stateDocument: result.document,
                     }),
                     runtime: {
-                      ...currentRun.runtime,
-                      activity: `Lane ${params.laneIndex + 1} regenerated. Review it again.`,
+                      ...currentExecution.runtime,
+                      activity: `Output ${params.outputIndex + 1} regenerated. Review it again.`,
                     },
                     status:
-                      currentRun.status === "running"
+                      currentExecution.status === "running"
                         ? ("running" as const)
                         : ("waiting_for_review" as const),
                   } satisfies WorkflowExecutionStatusResponse;
-                  const documentRevision = yield* persistRunArtifacts(
+                  const documentRevision = yield* persistOutputArtifacts(
                     nextRunBase,
                     params.userId,
-                    params.laneIndex,
+                    params.outputIndex,
+                    chargedOutputCosts,
                   );
 
                   return {
@@ -2129,78 +2046,69 @@ export class WorkflowExecutionService extends Context.Tag(
             .pipe(Effect.map(({ run }) => run));
         });
 
-      const failRun = (params: {
+      const failExecution = (params: {
         message: string;
-        runId: string;
+        executionId: string;
         userId: string;
       }) =>
         Effect.gen(function* () {
-          const currentRun = yield* workflowRunStore.getRun({
-            runId: params.runId,
+          const currentExecution = yield* workflowExecutionStore.getExecution({
+            executionId: params.executionId,
             userId: params.userId,
           });
 
           if (
-            currentRun.status === "error" ||
-            currentRun.status === "success"
+            currentExecution.status === "error" ||
+            currentExecution.status === "success"
           ) {
-            return currentRun;
+            return currentExecution;
           }
 
-          const settleFailureCost =
-            currentRun.status === "waiting_for_review"
-              ? settleRunCost({
-                  reason: params.message,
-                  run: currentRun,
-                  targetCost: currentRun.accruedCostCredits,
-                  userId: params.userId,
-                })
-              : workflowCreditsService.refundExecution({
-                  executionId: params.runId,
-                  reason: params.message,
-                  userId: params.userId,
-                });
-          const credits = yield* settleFailureCost;
+          const credits = yield* getExecutionCredits({
+            executionId: params.executionId,
+            userId: params.userId,
+          });
 
-          return yield* workflowRunStore.updateRun({
-            ...currentRun,
+          return yield* workflowExecutionStore.updateExecution({
+            ...currentExecution,
             activity: params.message,
             credits,
             runtime: {
-              ...currentRun.runtime,
+              ...currentExecution.runtime,
               activity: params.message,
               error: params.message,
               finishedAt:
-                currentRun.runtime.finishedAt ?? new Date().toISOString(),
+                currentExecution.runtime.finishedAt ?? new Date().toISOString(),
             },
             status:
-              currentRun.status === "waiting_for_review"
+              currentExecution.status === "waiting_for_review"
                 ? "waiting_for_review"
                 : "error",
           });
         });
 
-      const settleFailedExecutionLane = (params: {
-        laneIndex: number;
+      const settleFailedExecutionOutput = (params: {
+        outputIndex: number;
         message: string;
         nodeId: string;
-        runId: string;
+        executionId: string;
         userId: string;
       }) =>
-        workflowRunStore
-          .updateRunWith({
-            runId: params.runId,
+        workflowExecutionStore
+          .updateExecutionWith({
+            executionId: params.executionId,
             userId: params.userId,
-            update: (currentRun) =>
+            update: (currentExecution) =>
               Effect.gen(function* () {
                 if (
-                  currentRun.status !== "queued" &&
-                  currentRun.status !== "running"
+                  currentExecution.status !== "queued" &&
+                  currentExecution.status !== "running"
                 ) {
-                  return { result: null, run: currentRun };
+                  return { result: null, run: currentExecution };
                 }
 
-                const projectId = currentRun.requestContext?.projectId?.trim();
+                const projectId =
+                  currentExecution.requestContext?.projectId?.trim();
                 if (!projectId) {
                   return yield* Effect.fail(
                     new WorkflowInfrastructureError({
@@ -2210,7 +2118,7 @@ export class WorkflowExecutionService extends Context.Tag(
                   );
                 }
 
-                const node = currentRun.document.nodes.find(
+                const node = currentExecution.document.nodes.find(
                   (candidate) => candidate.id === params.nodeId,
                 );
                 if (
@@ -2221,58 +2129,49 @@ export class WorkflowExecutionService extends Context.Tag(
                 ) {
                   return yield* Effect.fail(
                     new WorkflowInfrastructureError({
-                      message: `Workflow lane failure references non-generator node ${params.nodeId}.`,
+                      message: `Workflow output failure references non-generator node ${params.nodeId}.`,
                     }),
                   );
                 }
 
-                yield* workflowArtifactStore.upsertLaneError({
-                  attempt: getGeneratorOutputAttempt(node, params.laneIndex),
+                yield* workflowArtifactStore.upsertOutputError({
+                  attempt: getGeneratorOutputAttempt(node, params.outputIndex),
                   error: params.message,
                   failedAt: new Date().toISOString(),
-                  laneIndex: params.laneIndex,
+                  outputIndex: params.outputIndex,
                   nodeId: params.nodeId,
                   ownerUserId: params.userId,
                   projectId,
-                  runId: params.runId,
+                  executionId: params.executionId,
                 });
 
                 const failedRun = {
-                  ...currentRun,
+                  ...currentExecution,
                   activity: params.message,
-                  runtime: markRuntimeLaneFailed({
+                  runtime: markRuntimeOutputFailed({
                     message: params.message,
                     nodeId: params.nodeId,
-                    runtime: currentRun.runtime,
+                    runtime: currentExecution.runtime,
                   }),
                   status: "running" as const,
                 } satisfies WorkflowExecutionStatusResponse;
-                const artifacts = yield* workflowArtifactStore.getRunArtifacts({
-                  ownerUserId: params.userId,
-                  runId: params.runId,
+                const artifacts =
+                  yield* workflowArtifactStore.getOutputArtifacts({
+                    ownerUserId: params.userId,
+                    executionId: params.executionId,
+                  });
+                const credits = yield* getExecutionCredits({
+                  executionId: params.executionId,
+                  userId: params.userId,
                 });
-                const credits = areLaneJobsSettledByCompletionOrFailure({
-                  artifacts,
-                  run: failedRun,
-                })
-                  ? yield* settleRunCost({
-                      reason: params.message,
-                      run: failedRun,
-                      targetCost: failedRun.accruedCostCredits,
-                      userId: params.userId,
-                    })
-                  : yield* workflowCreditsService.getRunSummary({
-                      runId: params.runId,
-                      userId: params.userId,
-                    });
 
                 return {
                   result: null,
-                  run: areLaneJobsSettledByCompletionOrFailure({
+                  run: areOutputJobsSettledByCompletionOrFailure({
                     artifacts,
                     run: failedRun,
                   })
-                    ? settleFailedLaneRun({
+                    ? settleFailedOutputRun({
                         artifacts,
                         credits,
                         run: failedRun,
@@ -2283,7 +2182,7 @@ export class WorkflowExecutionService extends Context.Tag(
           })
           .pipe(Effect.map(({ run }) => run));
 
-      const startRun = (
+      const startExecution = (
         userId: string,
         request: StartWorkflowExecutionRequest,
       ) =>
@@ -2309,7 +2208,7 @@ export class WorkflowExecutionService extends Context.Tag(
             );
           }
 
-          const project = yield* workflowProjectStore.getProject({
+          const project = yield* workflowStore.getProject({
             ownerUserId: userId,
             projectId,
           });
@@ -2334,7 +2233,7 @@ export class WorkflowExecutionService extends Context.Tag(
             );
           }
 
-          const runId = randomUUID();
+          const executionId = randomUUID();
           const targetNodeIds = resolveWorkflowExecutionTargets(
             projectDocument,
             request.selection?.nodeIds ?? [],
@@ -2363,44 +2262,34 @@ export class WorkflowExecutionService extends Context.Tag(
             submittedRequest.document,
             artifactNodeIds,
           );
-          const reusableLaneOutputs = yield* getReusablePriorLaneOutputs({
+          const reusableOutputs = yield* getReusablePriorOutputs({
             document: submittedRequest.document,
-            excludeRunId: runId,
+            excludeExecutionId: executionId,
             ownerUserId: userId,
             projectId,
             requestedTargetNodeIds: targetNodeIds,
             targetNodeIds: artifactNodeIds,
           });
-          const reusableLaneKeys = new Set(
-            reusableLaneOutputs.map(getWorkflowLaneKey),
-          );
           const executionRequest = {
             ...submittedRequest,
             selection: { nodeIds: executionPlan.executableNodeIds },
             target: { type: "selected-or-all" as const },
           } satisfies StartWorkflowExecutionRequest;
-          const priceQuote = estimateWorkflowExecution(executionRequest, {
-            completedLaneKeys: reusableLaneKeys,
-          });
-          const credits = yield* workflowCreditsService.debitExecution({
-            amount: priceQuote.totalCost,
-            executionId: runId,
-            reason: "Workflow execution started.",
-            userId,
-          });
-          const initialRun = buildWorkflowExecutionStatusResponse({
-            runId,
+          const credits =
+            yield* workflowCreditsService.getBalanceSummary(userId);
+          const initialExecution = buildWorkflowExecutionStatusResponse({
+            executionId,
             targetNodeIds: artifactNodeIds,
             accruedCostCredits: 0,
             projectDocumentRevision: project.documentRevision,
             document: submittedRequest.document,
             runtime: createWorkflowExecutionRuntimeState(
               submittedRequest.document,
-              "Queued workflow run.",
+              "Queued workflow execution.",
             ),
             requestContext: {
               accruedCostCredits: 0,
-              clientRunId: submittedRequest.clientRunId ?? null,
+              clientExecutionId: submittedRequest.clientExecutionId ?? null,
               documentRevision: submittedRequest.documentRevision ?? null,
               idempotencyKey: submittedRequest.idempotencyKey ?? null,
               projectId,
@@ -2411,51 +2300,30 @@ export class WorkflowExecutionService extends Context.Tag(
             status: "queued",
           });
 
-          let run = yield* workflowRunStore
-            .createRun({
-              ownerUserId: userId,
-              projectId,
-              run: initialRun,
-            })
-            .pipe(
-              Effect.catchAll((error) =>
-                workflowCreditsService
-                  .refundExecution({
-                    executionId: runId,
-                    reason: "Workflow execution failed before queueing.",
-                    userId,
-                  })
-                  .pipe(
-                    Effect.catchAll((cleanupError) => {
-                      console.error(
-                        "Failed to refund credits after run creation failure",
-                        cleanupError,
-                      );
-                      return Effect.void;
-                    }),
-                    Effect.zipRight(Effect.fail(error)),
-                  ),
-              ),
-            );
+          let run = yield* workflowExecutionStore.createExecution({
+            ownerUserId: userId,
+            projectId,
+            run: initialExecution,
+          });
 
-          if (reusableLaneOutputs.length) {
+          if (reusableOutputs.length) {
             yield* workflowArtifactStore
-              .copyReusableLaneOutputs({
-                outputs: reusableLaneOutputs,
+              .copyReusableOutputs({
+                outputs: reusableOutputs,
                 ownerUserId: userId,
                 projectId,
-                runId,
+                executionId,
               })
               .pipe(
                 Effect.catchAll((error) =>
-                  failRun({
-                    message: "Failed to seed reusable workflow lane outputs.",
-                    runId,
+                  failExecution({
+                    message: "Failed to seed reusable workflow output outputs.",
+                    executionId,
                     userId,
                   }).pipe(
                     Effect.catchAll((cleanupError) => {
                       console.error(
-                        "Failed to mark workflow run as errored after lane reuse failure",
+                        "Failed to mark workflow execution as errored after output reuse failure",
                         cleanupError,
                       );
                       return Effect.void;
@@ -2465,14 +2333,14 @@ export class WorkflowExecutionService extends Context.Tag(
                 ),
               );
             const seededArtifacts =
-              yield* workflowArtifactStore.getRunArtifacts({
+              yield* workflowArtifactStore.getOutputArtifacts({
                 ownerUserId: userId,
-                runId,
+                executionId,
               });
-            run = yield* workflowRunStore
-              .updateRun({
+            run = yield* workflowExecutionStore
+              .updateExecution({
                 ...run,
-                document: buildWorkflowRunProjection({
+                document: buildWorkflowOutputProjection({
                   artifacts: seededArtifacts,
                   document: run.document,
                 }),
@@ -2480,137 +2348,86 @@ export class WorkflowExecutionService extends Context.Tag(
               .pipe(Effect.mapError(toPersistenceError));
           }
 
-          const laneCount = getExecutionLaneCount(
+          const outputCount = getExecutionOutputCount(
             submittedRequest.document,
             artifactNodeIds,
           );
-          const plannedLaneCount = getExecutionDependencyPlan(
+          const plannedOutputCount = getExecutionDependencyPlan(
             submittedRequest.document,
             artifactNodeIds,
           ).jobs.length;
-          const shouldSplitLanes = laneCount > 1;
-          const shouldUseLaneScheduler =
-            shouldSplitLanes || reusableLaneOutputs.length > 0;
-
-          if (shouldUseLaneScheduler) {
-            const artifacts = yield* workflowArtifactStore.getRunArtifacts({
-              ownerUserId: userId,
-              runId,
-            });
-            const readyJobs = yield* getSchedulableReadyLaneJobs({
-              artifacts,
-              request: submittedRequest,
-              runId,
-              targetNodeIds: artifactNodeIds,
-            });
-
-            console.info("Workflow start lane reuse plan", {
-              projectId,
-              quoteTotal: priceQuote.totalCost,
-              reusableLaneCount: reusableLaneOutputs.length,
-              runId,
-              scheduledLaneCount: readyJobs.length,
-              totalPlannedLaneCount: plannedLaneCount,
-            });
-
-            if (!readyJobs.length) {
-              const settlement = getWorkflowLaneSettlement({
-                artifacts,
-                plan: buildWorkflowLaneDependencyPlan({
-                  document: submittedRequest.document,
-                  generatorIterationById: executionPlan.generatorIterationById,
-                  targetNodeIds: artifactNodeIds,
-                }),
-              });
-              if (settlement.settled && !settlement.failedLanes.size) {
-                const settledRun = {
-                  ...run,
-                  activity: "Workflow run finished.",
-                  finalCostCredits: 0,
-                  runtime: {
-                    ...run.runtime,
-                    activity: "Workflow run finished.",
-                    error: null,
-                    finishedAt: new Date().toISOString(),
-                  },
-                  status: "success" as const,
-                } satisfies WorkflowExecutionStatusResponse;
-                const settledCredits = yield* settleRunCost({
-                  reason: "Workflow execution settled.",
-                  run: settledRun,
-                  targetCost: 0,
-                  userId,
-                });
-
-                return yield* workflowRunStore
-                  .updateRun({
-                    ...settledRun,
-                    credits: settledCredits,
-                  })
-                  .pipe(Effect.mapError(toPersistenceError));
-              }
-            }
-
-            yield* enqueueLaneJobs({
-              jobs: readyJobs,
-              laneCount,
-              request: executionRequest,
-              runId,
-              userId,
-            }).pipe(
-              Effect.catchAll((error) =>
-                failRun({
-                  message: "Failed to queue workflow run.",
-                  runId,
-                  userId,
-                }).pipe(
-                  Effect.catchAll((cleanupError) => {
-                    console.error(
-                      "Failed to mark workflow run as errored after queue failure",
-                      cleanupError,
-                    );
-                    return Effect.void;
-                  }),
-                  Effect.zipRight(Effect.fail(error)),
-                ),
-              ),
-            );
-
-            return run;
-          }
-
-          console.info("Workflow start lane reuse plan", {
-            projectId,
-            quoteTotal: priceQuote.totalCost,
-            reusableLaneCount: reusableLaneOutputs.length,
-            runId,
-            scheduledLaneCount: 1,
-            totalPlannedLaneCount: plannedLaneCount,
+          const artifacts = yield* workflowArtifactStore.getOutputArtifacts({
+            ownerUserId: userId,
+            executionId,
+          });
+          const readyJobs = yield* getSchedulableReadyOutputJobs({
+            artifacts,
+            request: submittedRequest,
+            executionId,
+            targetNodeIds: artifactNodeIds,
           });
 
-          yield* Effect.tryPromise({
-            try: () =>
-              enqueueWorkflowExecutionJob({
-                request: executionRequest,
-                runId,
-                type: "execute-run",
+          console.info("Workflow start output reuse plan", {
+            projectId,
+            reusableOutputCount: reusableOutputs.length,
+            executionId,
+            scheduledOutputCount: readyJobs.length,
+            totalPlannedOutputCount: plannedOutputCount,
+          });
+
+          if (!readyJobs.length) {
+            const settlement = getWorkflowOutputSettlement({
+              artifacts,
+              plan: buildWorkflowOutputDependencyPlan({
+                document: submittedRequest.document,
+                generatorIterationById: executionPlan.generatorIterationById,
+                targetNodeIds: artifactNodeIds,
+              }),
+            });
+            if (settlement.settled && !settlement.failedOutputs.size) {
+              const settledRun = {
+                ...run,
+                activity: "Workflow execution finished.",
+                finalCostCredits: 0,
+                runtime: {
+                  ...run.runtime,
+                  activity: "Workflow execution finished.",
+                  error: null,
+                  finishedAt: new Date().toISOString(),
+                },
+                status: "success" as const,
+              } satisfies WorkflowExecutionStatusResponse;
+              const settledCredits = yield* getExecutionCredits({
+                executionId,
                 userId,
-              }),
-            catch: (cause) =>
-              new WorkflowInfrastructureError({
-                message: getErrorMessage(cause),
-                cause,
-              }),
+              });
+
+              return yield* workflowExecutionStore
+                .updateExecution({
+                  ...settledRun,
+                  credits: settledCredits,
+                })
+                .pipe(Effect.mapError(toPersistenceError));
+            }
+          }
+
+          yield* enqueueOutputJobs({
+            artifacts,
+            jobs: readyJobs,
+            outputCount,
+            request: executionRequest,
+            executionId,
+            userId,
           }).pipe(
             Effect.catchAll((error) =>
-              failRun({
-                message: "Failed to queue workflow run.",
-                runId,
+              failExecution({
+                message: "Failed to queue workflow execution.",
+                executionId,
                 userId,
               }).pipe(
                 Effect.catchAll((cleanupError) => {
                   console.error(
-                    "Failed to mark workflow run as errored after queue failure",
+                    "Failed to mark workflow execution as errored after queue failure",
                     cleanupError,
                   );
                   return Effect.void;
@@ -2623,86 +2440,70 @@ export class WorkflowExecutionService extends Context.Tag(
           return run;
         });
 
-      const executeRun = (
-        runId: string,
+      const executeExecution = (
+        executionId: string,
         userId: string,
         submittedRequest: StartWorkflowExecutionRequest,
+        taskInputSnapshot: NonNullable<
+          ReturnType<typeof getTaskRunExecutionDocumentSnapshot>
+        >,
       ) =>
         Effect.gen(function* () {
-          const request = yield* hydrateExecutionRequest(
-            runId,
-            userId,
-            submittedRequest,
-          );
+          const request = submittedRequest;
+          const workflowId = request.projectId?.trim();
+          if (!workflowId) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: "Workflow execution requires a workflow project.",
+              }),
+            );
+          }
+          const chargedOutputCosts = new Map<string, number>();
 
           return yield* executeWorkflow({
             request,
-            runId,
+            executionId,
             ports: {
               generateImage: (imageRequest) =>
                 vertexAi.generateImagesWithNanoBananaPro({
                   ownerUserId: userId,
-                  projectId: request.projectId ?? null,
+                  projectId: workflowId,
                   request: imageRequest,
                 }),
               generateVideo: (videoRequest) =>
                 vertexAi.generateVideosWithVeo31({
                   ownerUserId: userId,
-                  projectId: request.projectId ?? null,
+                  projectId: workflowId,
                   request: videoRequest,
                 }),
               generateLlm: (llmRequest) =>
                 vertexAi.generateTextWithGemini3Flash({
                   ownerUserId: userId,
-                  projectId: request.projectId ?? null,
+                  projectId: workflowId,
                   request: llmRequest,
                 }),
-              getNodeLaneOutput: (query) =>
-                workflowArtifactStore.getNodeLaneOutput({
-                  ...query,
-                  ownerUserId: userId,
-                }),
-              getNodeLaneValue: (query) =>
-                workflowArtifactStore
-                  .getRunArtifacts({ ownerUserId: userId, runId })
-                  .pipe(
-                    Effect.map((artifacts) => {
-                      const document = buildWorkflowRunProjection({
-                        artifacts,
-                        document: request.document,
-                      });
-                      const node = document.nodes.find(
-                        (candidate) => candidate.id === query.nodeId,
-                      );
-
-                      if (node?.kind === "llmGenerator") {
-                        const text = node.outputLanes[query.laneIndex]?.trim();
-                        return text ? { type: "text", lanes: [text] } : null;
-                      }
-
-                      if (
-                        node?.kind === "imageGenerator" ||
-                        node?.kind === "videoGenerator"
-                      ) {
-                        const assets = node.outputLanes[query.laneIndex] ?? [];
-                        return assets.length
-                          ? {
-                              type:
-                                node.kind === "imageGenerator"
-                                  ? "image"
-                                  : "video",
-                              lanes: [assets],
-                            }
-                          : null;
-                      }
-
-                      return null;
-                    }),
-                  ),
+              getNodeOutput: () => Effect.succeed(null),
+              onOutputCost: (cost) =>
+                chargeOutputCost({
+                  ...cost,
+                  executionId,
+                  projectId: request.projectId ?? null,
+                  taskRunId: taskInputSnapshot.taskRunId,
+                  userId,
+                }).pipe(
+                  Effect.map(({ amount, outputKey }) => {
+                    chargedOutputCosts.set(outputKey, amount);
+                    return amount;
+                  }),
+                ),
+              getNodeOutputValue: (query) =>
+                Effect.succeed(
+                  getTaskRunSnapshotOutputValue(taskInputSnapshot, query),
+                ),
               onCompleted: ({ document, finalCostCredits, targetNodeIds }) =>
                 Effect.gen(function* () {
                   const run = buildWorkflowExecutionStatusResponse({
-                    runId,
+                    executionId,
                     targetNodeIds,
                     accruedCostCredits: finalCostCredits,
                     projectDocumentRevision: request.documentRevision ?? null,
@@ -2710,11 +2511,11 @@ export class WorkflowExecutionService extends Context.Tag(
                     document,
                     runtime: createWorkflowExecutionRuntimeState(
                       document,
-                      "Workflow run finished.",
+                      "Workflow execution finished.",
                     ),
                     requestContext: {
                       accruedCostCredits: finalCostCredits,
-                      clientRunId: request.clientRunId ?? null,
+                      clientExecutionId: request.clientExecutionId ?? null,
                       documentRevision: request.documentRevision ?? null,
                       idempotencyKey: request.idempotencyKey ?? null,
                       projectId: request.projectId ?? null,
@@ -2724,22 +2525,24 @@ export class WorkflowExecutionService extends Context.Tag(
                     status: "success",
                   });
 
-                  return yield* persistRunArtifacts(
+                  return yield* persistOutputArtifacts(
                     run,
                     userId,
-                    getRequestLaneIndex(request),
+                    getRequestOutputIndex(request),
+                    chargedOutputCosts,
                   );
                 }),
               onStateChange: (state) =>
                 Effect.gen(function* () {
-                  const credits = yield* workflowCreditsService.getRunSummary({
-                    runId,
-                    userId,
-                  });
-                  const laneIndex = getRequestLaneIndex(request);
-                  if (laneIndex === null) {
-                    yield* workflowRunStore
-                      .updateRun({
+                  const credits =
+                    yield* workflowCreditsService.getExecutionSummary({
+                      executionId,
+                      userId,
+                    });
+                  const outputIndex = getRequestOutputIndex(request);
+                  if (outputIndex === null) {
+                    yield* workflowExecutionStore
+                      .updateExecution({
                         ...state,
                         credits,
                       })
@@ -2747,72 +2550,72 @@ export class WorkflowExecutionService extends Context.Tag(
                     return;
                   }
 
-                  if (!hasLaneOutput(state, laneIndex)) {
-                    yield* workflowRunStore
-                      .updateRunWith({
-                        runId,
+                  if (!hasOutput(state, outputIndex)) {
+                    yield* workflowExecutionStore
+                      .updateExecutionWith({
+                        executionId,
                         userId,
-                        update: (currentRun) =>
+                        update: (currentExecution) =>
                           Effect.succeed({
                             result: null,
                             run:
-                              currentRun.status === "queued" ||
-                              currentRun.status === "running" ||
-                              currentRun.status === "waiting_for_review"
+                              currentExecution.status === "queued" ||
+                              currentExecution.status === "running" ||
+                              currentExecution.status === "waiting_for_review"
                                 ? {
-                                    ...currentRun,
+                                    ...currentExecution,
                                     activity: state.runtime.activity,
                                     credits,
                                     runtime: mergeRuntimeState({
-                                      currentRuntime: currentRun.runtime,
+                                      currentRuntime: currentExecution.runtime,
                                       stateRuntime: state.runtime,
                                     }),
                                     status:
-                                      currentRun.status === "queued"
+                                      currentExecution.status === "queued"
                                         ? ("running" as const)
-                                        : currentRun.status,
+                                        : currentExecution.status,
                                   }
-                                : currentRun,
+                                : currentExecution,
                           }),
                       })
                       .pipe(Effect.orDie, Effect.asVoid);
                     return;
                   }
 
-                  yield* workflowRunStore
-                    .updateRunWith({
-                      runId,
+                  yield* workflowExecutionStore
+                    .updateExecutionWith({
+                      executionId,
                       userId,
-                      update: (currentRun) =>
+                      update: (currentExecution) =>
                         Effect.try({
                           try: () => ({
                             result: null,
                             run:
-                              currentRun.status === "waiting_for_review"
+                              currentExecution.status === "waiting_for_review"
                                 ? {
-                                    ...mergeLaneScopedExecutionState({
+                                    ...mergeOutputScopedExecutionState({
                                       accruedCostCredits:
-                                        currentRun.accruedCostCredits,
-                                      currentRun,
-                                      laneIndex,
+                                        currentExecution.accruedCostCredits,
+                                      currentExecution,
+                                      outputIndex,
                                       state,
                                     }),
                                     credits,
                                   }
-                                : currentRun.status === "queued" ||
-                                    currentRun.status === "running"
+                                : currentExecution.status === "queued" ||
+                                    currentExecution.status === "running"
                                   ? {
-                                      ...mergeLaneScopedExecutionState({
+                                      ...mergeOutputScopedExecutionState({
                                         accruedCostCredits:
-                                          currentRun.accruedCostCredits,
-                                        currentRun,
-                                        laneIndex,
+                                          currentExecution.accruedCostCredits,
+                                        currentExecution,
+                                        outputIndex,
                                         state,
                                       }),
                                       credits,
                                       status: "running" as const,
                                     }
-                                  : currentRun,
+                                  : currentExecution,
                           }),
                           catch: toPersistenceError,
                         }),
@@ -2823,65 +2626,66 @@ export class WorkflowExecutionService extends Context.Tag(
           }).pipe(
             Effect.tap((state) =>
               Effect.gen(function* () {
-                const executionLaneFilter = request.executionLaneFilter;
-                if (state.status === "success" && executionLaneFilter) {
-                  return yield* workflowRunStore
-                    .updateRunWith({
-                      runId,
+                const executionOutputFilter = request.executionOutputFilter;
+                if (state.status === "success" && executionOutputFilter) {
+                  return yield* workflowExecutionStore
+                    .updateExecutionWith({
+                      executionId,
                       userId,
-                      update: (currentRun) =>
+                      update: (currentExecution) =>
                         Effect.gen(function* () {
                           if (
-                            currentRun.status !== "queued" &&
-                            currentRun.status !== "running"
+                            currentExecution.status !== "queued" &&
+                            currentExecution.status !== "running"
                           ) {
-                            return { result: null, run: currentRun };
+                            return { result: null, run: currentExecution };
                           }
 
                           const nextState = yield* Effect.try({
                             try: () =>
-                              mergeLaneScopedExecutionState({
+                              mergeOutputScopedExecutionState({
                                 accruedCostCredits:
-                                  currentRun.accruedCostCredits +
+                                  currentExecution.accruedCostCredits +
                                   getFilteredContinuationCostDelta(
                                     state,
                                     request,
                                   ),
-                                currentRun,
-                                laneIndex: executionLaneFilter.laneIndex,
+                                currentExecution,
+                                outputIndex: executionOutputFilter.outputIndex,
                                 state,
                               }),
                             catch: toPersistenceError,
                           });
-                          yield* persistRunArtifacts(
+                          yield* persistOutputArtifacts(
                             nextState,
                             userId,
-                            executionLaneFilter.laneIndex,
+                            executionOutputFilter.outputIndex,
+                            chargedOutputCosts,
                           );
                           const artifacts =
-                            yield* workflowArtifactStore.getRunArtifacts({
+                            yield* workflowArtifactStore.getOutputArtifacts({
                               ownerUserId: userId,
-                              runId,
+                              executionId,
                             });
-                          const isComplete = areExecutionLanesComplete(
+                          const isComplete = areExecutionOutputsComplete(
                             nextState,
-                            executionLaneFilter.laneCount,
+                            executionOutputFilter.outputCount,
                             artifacts,
                           );
                           if (!isComplete) {
-                            yield* enqueueReadyLaneJobs({
+                            yield* enqueueReadyOutputJobs({
                               artifacts,
-                              laneCount: executionLaneFilter.laneCount,
+                              outputCount: executionOutputFilter.outputCount,
                               request,
-                              runId,
+                              executionId,
                               run: nextState,
-                              targetNodeIds: currentRun.targetNodeIds,
+                              targetNodeIds: currentExecution.targetNodeIds,
                               userId,
                             });
                           }
                           const isSettledByFailure =
                             !isComplete &&
-                            areLaneJobsSettledByCompletionOrFailure({
+                            areOutputJobsSettledByCompletionOrFailure({
                               artifacts,
                               run: nextState,
                             });
@@ -2891,7 +2695,7 @@ export class WorkflowExecutionService extends Context.Tag(
                                 finalCostCredits: nextState.accruedCostCredits,
                                 runtime: {
                                   ...nextState.runtime,
-                                  activity: "Workflow run finished.",
+                                  activity: "Workflow execution finished.",
                                   error: null,
                                   finishedAt: new Date().toISOString(),
                                 },
@@ -2904,8 +2708,9 @@ export class WorkflowExecutionService extends Context.Tag(
                                     nextState.accruedCostCredits,
                                   runtime: {
                                     ...nextState.runtime,
-                                    activity: getLaneFailureMessage(artifacts),
-                                    error: getLaneFailureMessage(artifacts),
+                                    activity:
+                                      getOutputFailureMessage(artifacts),
+                                    error: getOutputFailureMessage(artifacts),
                                     finishedAt: new Date().toISOString(),
                                   },
                                   status: "error" as const,
@@ -2915,7 +2720,7 @@ export class WorkflowExecutionService extends Context.Tag(
                                   finalCostCredits: null,
                                   runtime: {
                                     ...nextState.runtime,
-                                    activity: `Lane ${executionLaneFilter.laneIndex + 1} completed. Waiting for remaining lanes...`,
+                                    activity: `Output ${executionOutputFilter.outputIndex + 1} completed. Waiting for remaining outputs...`,
                                     finishedAt: null,
                                   },
                                   status: "running" as const,
@@ -2924,21 +2729,10 @@ export class WorkflowExecutionService extends Context.Tag(
                             settledRun,
                             settledRun.projectDocumentRevision,
                           );
-                          const credits =
-                            isComplete || isSettledByFailure
-                              ? yield* settleRunCost({
-                                  reason: isComplete
-                                    ? "Workflow execution settled."
-                                    : getLaneFailureMessage(artifacts),
-                                  run: runWithRevision,
-                                  targetCost:
-                                    runWithRevision.accruedCostCredits,
-                                  userId,
-                                })
-                              : yield* workflowCreditsService.getRunSummary({
-                                  runId,
-                                  userId,
-                                });
+                          const credits = yield* getExecutionCredits({
+                            executionId,
+                            userId,
+                          });
 
                           return {
                             result: null,
@@ -2952,77 +2746,79 @@ export class WorkflowExecutionService extends Context.Tag(
                     .pipe(Effect.map(({ run }) => run));
                 }
 
-                if (state.status === "running" && executionLaneFilter) {
-                  return yield* workflowRunStore
-                    .updateRunWith({
-                      runId,
+                if (state.status === "running" && executionOutputFilter) {
+                  return yield* workflowExecutionStore
+                    .updateExecutionWith({
+                      executionId,
                       userId,
-                      update: (currentRun) =>
+                      update: (currentExecution) =>
                         Effect.succeed({
                           result: null,
                           run:
-                            currentRun.status === "queued" ||
-                            currentRun.status === "running"
+                            currentExecution.status === "queued" ||
+                            currentExecution.status === "running"
                               ? {
-                                  ...currentRun,
+                                  ...currentExecution,
                                   runtime: {
-                                    ...currentRun.runtime,
+                                    ...currentExecution.runtime,
                                     activity: state.runtime.activity,
                                     error: null,
                                     finishedAt: null,
                                   },
                                   status: "running" as const,
                                 }
-                              : currentRun,
+                              : currentExecution,
                         }),
                     })
                     .pipe(Effect.map(({ run }) => run));
                 }
 
-                const reviewLaneFilter = request.reviewLaneFilter;
-                if (state.status === "success" && reviewLaneFilter) {
-                  return yield* workflowRunStore
-                    .updateRunWith({
-                      runId,
+                const reviewOutputFilter = request.reviewOutputFilter;
+                if (state.status === "success" && reviewOutputFilter) {
+                  return yield* workflowExecutionStore
+                    .updateExecutionWith({
+                      executionId,
                       userId,
-                      update: (currentRun) =>
+                      update: (currentExecution) =>
                         Effect.gen(function* () {
                           if (
-                            currentRun.status !== "queued" &&
-                            !canDecideReviewLane(currentRun)
+                            currentExecution.status !== "queued" &&
+                            !canDecideReviewOutput(currentExecution)
                           ) {
-                            return { result: null, run: currentRun };
+                            return { result: null, run: currentExecution };
                           }
 
                           const nextState = yield* Effect.try({
                             try: () =>
-                              mergeLaneScopedExecutionState({
+                              mergeOutputScopedExecutionState({
                                 accruedCostCredits:
-                                  currentRun.accruedCostCredits +
+                                  currentExecution.accruedCostCredits +
                                   getFilteredContinuationCostDelta(
                                     state,
                                     request,
                                   ),
-                                currentRun,
-                                laneIndex: reviewLaneFilter.laneIndex,
+                                currentExecution,
+                                outputIndex: reviewOutputFilter.outputIndex,
                                 state,
                               }),
                             catch: toPersistenceError,
                           });
-                          const documentRevision = yield* persistRunArtifacts(
-                            nextState,
-                            userId,
-                            reviewLaneFilter.laneIndex,
-                          );
+                          const documentRevision =
+                            yield* persistOutputArtifacts(
+                              nextState,
+                              userId,
+                              reviewOutputFilter.outputIndex,
+                              chargedOutputCosts,
+                            );
                           const credits =
-                            yield* workflowCreditsService.getRunSummary({
-                              runId,
+                            yield* workflowCreditsService.getExecutionSummary({
+                              executionId,
                               userId,
                             });
                           const status =
-                            currentRun.status === "queued"
+                            currentExecution.status === "queued"
                               ? ("queued" as const)
-                              : currentRun.status === "running"
+                              : currentExecution.status === "running"
                                 ? ("running" as const)
                                 : ("waiting_for_review" as const);
 
@@ -3039,7 +2835,7 @@ export class WorkflowExecutionService extends Context.Tag(
                                 ...nextState.runtime,
                                 activity:
                                   status === "queued"
-                                    ? currentRun.runtime.activity
+                                    ? currentExecution.runtime.activity
                                     : nextState.runtime.activity,
                                 finishedAt: null,
                               },
@@ -3052,66 +2848,66 @@ export class WorkflowExecutionService extends Context.Tag(
                 }
 
                 if (state.status === "success") {
-                  const credits = yield* settleRunCost({
-                    reason: "Workflow execution settled.",
-                    run: state,
-                    targetCost: state.finalCostCredits ?? 0,
+                  const credits = yield* getExecutionCredits({
+                    executionId,
                     userId,
                   });
-                  return yield* workflowRunStore.updateRun({
+                  return yield* workflowExecutionStore.updateExecution({
                     ...state,
                     credits,
                   });
                 }
 
                 if (state.status === "waiting_for_review") {
-                  const executionLaneFilter = request.executionLaneFilter;
-                  if (executionLaneFilter) {
-                    return yield* workflowRunStore
-                      .updateRunWith({
-                        runId,
+                  const executionOutputFilter = request.executionOutputFilter;
+                  if (executionOutputFilter) {
+                    return yield* workflowExecutionStore
+                      .updateExecutionWith({
+                        executionId,
                         userId,
-                        update: (currentRun) =>
+                        update: (currentExecution) =>
                           Effect.gen(function* () {
                             if (
-                              currentRun.status !== "queued" &&
-                              currentRun.status !== "running" &&
-                              currentRun.status !== "waiting_for_review"
+                              currentExecution.status !== "queued" &&
+                              currentExecution.status !== "running" &&
+                              currentExecution.status !== "waiting_for_review"
                             ) {
                               return {
                                 result: null,
-                                run: currentRun,
+                                run: currentExecution,
                               };
                             }
 
                             const nextState = yield* Effect.try({
                               try: () =>
-                                mergeLaneScopedExecutionState({
+                                mergeOutputScopedExecutionState({
                                   accruedCostCredits:
-                                    currentRun.accruedCostCredits +
+                                    currentExecution.accruedCostCredits +
                                     getFilteredContinuationCostDelta(
                                       state,
                                       request,
                                     ),
-                                  currentRun,
-                                  laneIndex: executionLaneFilter.laneIndex,
+                                  currentExecution,
+                                  outputIndex:
+                                    executionOutputFilter.outputIndex,
                                   state,
                                 }),
                               catch: toPersistenceError,
                             });
-                            yield* persistRunArtifacts(
+                            yield* persistOutputArtifacts(
                               nextState,
                               userId,
-                              executionLaneFilter.laneIndex,
+                              executionOutputFilter.outputIndex,
+                              chargedOutputCosts,
                             );
                             const artifacts =
-                              yield* workflowArtifactStore.getRunArtifacts({
+                              yield* workflowArtifactStore.getOutputArtifacts({
                                 ownerUserId: userId,
-                                runId,
+                                executionId,
                               });
-                            const isComplete = areExecutionLanesComplete(
+                            const isComplete = areExecutionOutputsComplete(
                               nextState,
-                              executionLaneFilter.laneCount,
+                              executionOutputFilter.outputCount,
                               artifacts,
                             );
                             const settledRun = isComplete
@@ -3131,7 +2927,7 @@ export class WorkflowExecutionService extends Context.Tag(
                                   finalCostCredits: null,
                                   runtime: {
                                     ...nextState.runtime,
-                                    activity: `Lane ${executionLaneFilter.laneIndex + 1} reached review. Waiting for remaining lanes...`,
+                                    activity: `Output ${executionOutputFilter.outputIndex + 1} reached review. Waiting for remaining outputs...`,
                                     finishedAt: null,
                                   },
                                   status: "running" as const,
@@ -3140,17 +2936,10 @@ export class WorkflowExecutionService extends Context.Tag(
                               settledRun,
                               settledRun.projectDocumentRevision,
                             );
-                            const credits = isComplete
-                              ? yield* settleRunCost({
-                                  reason:
-                                    "Workflow execution paused for human review.",
-                                  run: runWithRevision,
-                                  userId,
-                                })
-                              : yield* workflowCreditsService.getRunSummary({
-                                  runId,
-                                  userId,
-                                });
+                            const credits = yield* getExecutionCredits({
+                              executionId,
+                              userId,
+                            });
 
                             return {
                               result: null,
@@ -3164,46 +2953,46 @@ export class WorkflowExecutionService extends Context.Tag(
                       .pipe(Effect.map(({ run }) => run));
                   }
 
-                  if (reviewLaneFilter) {
-                    return yield* workflowRunStore
-                      .updateRunWith({
-                        runId,
+                  if (reviewOutputFilter) {
+                    return yield* workflowExecutionStore
+                      .updateExecutionWith({
+                        executionId,
                         userId,
-                        update: (currentRun) =>
+                        update: (currentExecution) =>
                           Effect.gen(function* () {
-                            if (!canDecideReviewLane(currentRun)) {
+                            if (!canDecideReviewOutput(currentExecution)) {
                               return {
                                 result: null,
-                                run: currentRun,
+                                run: currentExecution,
                               };
                             }
 
                             const nextState = yield* Effect.try({
                               try: () =>
-                                mergeLaneScopedExecutionState({
+                                mergeOutputScopedExecutionState({
                                   accruedCostCredits:
-                                    currentRun.accruedCostCredits +
+                                    currentExecution.accruedCostCredits +
                                     getFilteredContinuationCostDelta(
                                       state,
                                       request,
                                     ),
-                                  currentRun,
-                                  laneIndex: reviewLaneFilter.laneIndex,
+                                  currentExecution,
+                                  outputIndex: reviewOutputFilter.outputIndex,
                                   state,
                                 }),
                               catch: toPersistenceError,
                             });
-                            const credits = yield* settleRunCost({
-                              reason:
-                                "Workflow execution paused for human review.",
-                              run: nextState,
+                            const credits = yield* getExecutionCredits({
+                              executionId,
                               userId,
                             });
-                            const documentRevision = yield* persistRunArtifacts(
-                              nextState,
-                              userId,
-                              reviewLaneFilter.laneIndex,
-                            );
+                            const documentRevision =
+                              yield* persistOutputArtifacts(
+                                nextState,
+                                userId,
+                                reviewOutputFilter.outputIndex,
+                                chargedOutputCosts,
+                              );
 
                             return {
                               result: null,
@@ -3214,7 +3003,7 @@ export class WorkflowExecutionService extends Context.Tag(
                                 ),
                                 credits,
                                 status:
-                                  currentRun.status === "running"
+                                  currentExecution.status === "running"
                                     ? ("running" as const)
                                     : ("waiting_for_review" as const),
                               },
@@ -3225,16 +3014,17 @@ export class WorkflowExecutionService extends Context.Tag(
                   }
 
                   const nextState = state;
-                  const credits = yield* settleRunCost({
-                    reason: "Workflow execution paused for human review.",
-                    run: nextState,
+                  const credits = yield* getExecutionCredits({
+                    executionId,
                     userId,
                   });
-                  const documentRevision = yield* persistRunArtifacts(
+                  const documentRevision = yield* persistOutputArtifacts(
                     nextState,
                     userId,
+                    null,
+                    chargedOutputCosts,
                   );
-                  return yield* workflowRunStore.updateRun({
+                  return yield* workflowExecutionStore.updateExecution({
                     ...withProjectDocumentRevision(nextState, documentRevision),
                     credits,
                   });
@@ -3243,67 +3033,60 @@ export class WorkflowExecutionService extends Context.Tag(
             ),
             Effect.catchAll((error) =>
               Effect.gen(function* () {
-                const currentRun = yield* workflowRunStore.getRun({
-                  runId,
-                  userId,
-                });
+                const currentExecution =
+                  yield* workflowExecutionStore.getExecution({
+                    executionId,
+                    userId,
+                  });
 
-                if (currentRun.status === "success") {
+                if (currentExecution.status === "success") {
                   const credits = yield* workflowCreditsService
-                    .getRunSummary({
-                      runId,
+                    .getExecutionSummary({
+                      executionId,
                       userId,
                     })
                     .pipe(
-                      Effect.catchAll(() => Effect.succeed(currentRun.credits)),
+                      Effect.catchAll(() =>
+                        Effect.succeed(currentExecution.credits),
+                      ),
                     );
-                  const nextRun = {
-                    ...currentRun,
+                  const nextExecution = {
+                    ...currentExecution,
                     credits,
                   };
 
-                  return yield* workflowRunStore
-                    .updateRun(nextRun)
-                    .pipe(Effect.catchAll(() => Effect.succeed(nextRun)));
+                  return yield* workflowExecutionStore
+                    .updateExecution(nextExecution)
+                    .pipe(Effect.catchAll(() => Effect.succeed(nextExecution)));
                 }
 
-                const settleFailureCost =
-                  request.reviewLaneFilter || request.executionLaneFilter
-                    ? settleRunCost({
-                        reason: getErrorMessage(error),
-                        run: currentRun,
-                        targetCost: currentRun.accruedCostCredits,
-                        userId,
-                      })
-                    : workflowCreditsService.refundExecution({
-                        executionId: runId,
-                        reason: getErrorMessage(error),
-                        userId,
-                      });
-                const credits = yield* settleFailureCost;
+                const credits = yield* getExecutionCredits({
+                  executionId,
+                  userId,
+                });
                 const failureMessage = getErrorMessage(error);
-                yield* workflowRunStore.updateRun({
-                  ...currentRun,
+                yield* workflowExecutionStore.updateExecution({
+                  ...currentExecution,
                   activity:
-                    request.executionLaneFilter || request.reviewLaneFilter
+                    request.executionOutputFilter || request.reviewOutputFilter
                       ? failureMessage
-                      : currentRun.activity,
+                      : currentExecution.activity,
                   credits,
                   runtime:
-                    request.executionLaneFilter || request.reviewLaneFilter
+                    request.executionOutputFilter || request.reviewOutputFilter
                       ? {
-                          ...currentRun.runtime,
+                          ...currentExecution.runtime,
                           activity: failureMessage,
                           error: failureMessage,
                         }
-                      : currentRun.runtime,
+                      : currentExecution.runtime,
                   status:
-                    error instanceof WorkflowLaneDependencyMissing
+                    error instanceof WorkflowOutputDependencyMissing
                       ? "error"
-                      : request.executionLaneFilter &&
-                          currentRun.status === "queued"
+                      : request.executionOutputFilter &&
+                          currentExecution.status === "queued"
                         ? "running"
-                        : currentRun.status,
+                        : currentExecution.status,
                 });
                 return yield* Effect.fail(error);
               }),
@@ -3311,15 +3094,106 @@ export class WorkflowExecutionService extends Context.Tag(
           );
         });
 
+      const executeTaskRun = (taskRunId: string, userId: string) =>
+        Effect.gen(function* () {
+          const claim = yield* claimQueuedWorkflowTaskRun({
+            taskRunId,
+            userId,
+          });
+          const taskRun = claim.row;
+
+          if (!taskRun) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: `Task run ${taskRunId} was not found.`,
+              }),
+            );
+          }
+
+          if (!claim.claimed || taskRun.status !== "running") {
+            return null;
+          }
+
+          const snapshot = getTaskRunExecutionDocumentSnapshot(taskRun);
+          if (!snapshot) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: `Task run ${taskRunId} is missing its input snapshot.`,
+              }),
+            );
+          }
+
+          return yield* executeExecution(
+            taskRun.executionId,
+            userId,
+            toTaskRunExecutionRequest(snapshot),
+            snapshot,
+          );
+        });
+
+      const settleFailedTaskRun = (params: {
+        message: string;
+        taskRunId: string;
+        userId: string;
+      }) =>
+        Effect.gen(function* () {
+          const taskRun = yield* Effect.tryPromise({
+            try: () =>
+              db
+                .select()
+                .from(taskRuns)
+                .where(
+                  and(
+                    eq(taskRuns.id, params.taskRunId),
+                    eq(taskRuns.ownerUserId, params.userId),
+                  ),
+                )
+                .limit(1)
+                .then((rows) => rows[0] ?? null),
+            catch: toPersistenceError,
+          });
+
+          if (!taskRun) {
+            return yield* Effect.fail(
+              new WorkflowValidationError({
+                message: `Task run ${params.taskRunId} was not found.`,
+              }),
+            );
+          }
+
+          yield* Effect.tryPromise({
+            try: () =>
+              db
+                .update(taskRuns)
+                .set({
+                  error: params.message,
+                  failedAt: new Date(),
+                  finishedAt: new Date(),
+                  status: "error",
+                  updatedAt: new Date(),
+                })
+                .where(eq(taskRuns.id, taskRun.id)),
+            catch: toPersistenceError,
+          });
+
+          return yield* settleFailedExecutionOutput({
+            executionId: taskRun.executionId,
+            message: params.message,
+            nodeId: taskRun.nodeId,
+            outputIndex: taskRun.outputIndex,
+            userId: params.userId,
+          });
+        });
+
       return WorkflowExecutionService.of({
-        approveReviewLane,
-        executeReviewLaneRegeneration,
-        executeRun,
-        failRun,
-        quoteRun,
-        rejectReviewLane,
-        settleFailedExecutionLane,
-        startRun,
+        approveReviewOutput,
+        executeTaskRun,
+        failExecution,
+        quoteExecution,
+        rejectReviewOutput,
+        settleFailedExecutionOutput,
+        settleFailedTaskRun,
+        startExecution,
       });
     }),
   );

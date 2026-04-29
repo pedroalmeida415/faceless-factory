@@ -5,30 +5,15 @@ import { getErrorMessage } from "~/lib/workflow/errors";
 import { WorkflowExecutionService } from "~/server/workflow/execution-service";
 import { createWorkflowExecutionWorker } from "~/server/workflow/queue";
 
-async function failWorkflowRun(params: {
+async function settleFailedTaskRun(params: {
   message: string;
-  runId: string;
+  taskRunId: string;
   userId: string;
 }) {
   await ServerRuntime.runPromise(
     Effect.gen(function* () {
       const workflowExecutionService = yield* WorkflowExecutionService;
-      yield* workflowExecutionService.failRun(params);
-    }),
-  );
-}
-
-async function settleFailedExecutionLane(params: {
-  laneIndex: number;
-  message: string;
-  nodeId: string;
-  runId: string;
-  userId: string;
-}) {
-  await ServerRuntime.runPromise(
-    Effect.gen(function* () {
-      const workflowExecutionService = yield* WorkflowExecutionService;
-      yield* workflowExecutionService.settleFailedExecutionLane(params);
+      yield* workflowExecutionService.settleFailedTaskRun(params);
     }),
   );
 }
@@ -38,21 +23,9 @@ async function main() {
     await ServerRuntime.runPromise(
       Effect.gen(function* () {
         const workflowExecutionService = yield* WorkflowExecutionService;
-        if (job.data.type === "regenerate-review-lane") {
-          yield* workflowExecutionService.executeReviewLaneRegeneration({
-            attempt: job.data.attempt,
-            laneIndex: job.data.laneIndex,
-            reviewNodeId: job.data.reviewNodeId,
-            runId: job.data.runId,
-            userId: job.data.userId,
-          });
-          return;
-        }
-
-        yield* workflowExecutionService.executeRun(
-          job.data.runId,
+        yield* workflowExecutionService.executeTaskRun(
+          job.data.taskRunId,
           job.data.userId,
-          job.data.request,
         );
       }),
     );
@@ -69,27 +42,9 @@ async function main() {
         return;
       }
 
-      if (
-        job.data.type === "execute-run" &&
-        job.data.request.executionLaneFilter
-      ) {
-        const nodeId = job.data.request.selection?.nodeIds?.[0];
-        if (nodeId) {
-          await settleFailedExecutionLane({
-            laneIndex: job.data.request.executionLaneFilter.laneIndex,
-            message:
-              getErrorMessage(error) || "Workflow execution lane failed.",
-            nodeId,
-            runId: job.data.runId,
-            userId: job.data.userId,
-          });
-        }
-        return;
-      }
-
-      await failWorkflowRun({
-        message: getErrorMessage(error) || "Workflow execution job failed.",
-        runId: job.data.runId,
+      await settleFailedTaskRun({
+        message: getErrorMessage(error) || "Workflow task run failed.",
+        taskRunId: job.data.taskRunId,
         userId: job.data.userId,
       });
     } catch (error) {

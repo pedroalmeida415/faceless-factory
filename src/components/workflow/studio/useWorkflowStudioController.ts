@@ -30,23 +30,23 @@ export function useWorkflowStudioController() {
   const setImageGeneratorModel = useWorkflowStudioStore(
     (state) => state.setImageGeneratorModel,
   );
-  const setLaneReorderMode = useWorkflowStudioStore(
-    (state) => state.setLaneReorderMode,
+  const setOutputReorderMode = useWorkflowStudioStore(
+    (state) => state.setOutputReorderMode,
   );
-  const setLaneReorderOrder = useWorkflowStudioStore(
-    (state) => state.setLaneReorderOrder,
+  const setOutputReorderOrder = useWorkflowStudioStore(
+    (state) => state.setOutputReorderOrder,
   );
-  const setLaneReorderShift = useWorkflowStudioStore(
-    (state) => state.setLaneReorderShift,
+  const setOutputReorderShift = useWorkflowStudioStore(
+    (state) => state.setOutputReorderShift,
   );
-  const setLaneSelectIndices = useWorkflowStudioStore(
-    (state) => state.setLaneSelectIndices,
+  const setOutputSelectIndices = useWorkflowStudioStore(
+    (state) => state.setOutputSelectIndices,
   );
-  const setLaneSplitCount = useWorkflowStudioStore(
-    (state) => state.setLaneSplitCount,
+  const setOutputSplitCount = useWorkflowStudioStore(
+    (state) => state.setOutputSplitCount,
   );
-  const setLaneZipAlignMode = useWorkflowStudioStore(
-    (state) => state.setLaneZipAlignMode,
+  const setOutputZipAlignMode = useWorkflowStudioStore(
+    (state) => state.setOutputZipAlignMode,
   );
   const setVideoGeneratorModel = useWorkflowStudioStore(
     (state) => state.setVideoGeneratorModel,
@@ -95,7 +95,7 @@ export function useWorkflowStudioController() {
 
   const runNode = useCallback(async (nodeId: string) => {
     await ClientRuntime.runPromise(
-      WorkflowExecutionService.run({ type: "node", nodeId }),
+      WorkflowExecutionService.start({ type: "node", nodeId }),
     );
   }, []);
 
@@ -109,12 +109,12 @@ export function useWorkflowStudioController() {
       clearNodeAssets,
       getGeneratorInputs,
       getGeneratorIterationInfo,
-      setLaneReorderMode,
-      setLaneReorderOrder,
-      setLaneReorderShift,
-      setLaneSelectIndices,
-      setLaneSplitCount,
-      setLaneZipAlignMode,
+      setOutputReorderMode,
+      setOutputReorderOrder,
+      setOutputReorderShift,
+      setOutputSelectIndices,
+      setOutputSplitCount,
+      setOutputZipAlignMode,
       setImageGeneratorModel,
       setVideoGeneratorModel,
       setImageGeneratorMode,
@@ -130,12 +130,12 @@ export function useWorkflowStudioController() {
       clearNodeAssets,
       getGeneratorInputs,
       getGeneratorIterationInfo,
-      setLaneReorderMode,
-      setLaneReorderOrder,
-      setLaneReorderShift,
-      setLaneSelectIndices,
-      setLaneSplitCount,
-      setLaneZipAlignMode,
+      setOutputReorderMode,
+      setOutputReorderOrder,
+      setOutputReorderShift,
+      setOutputSelectIndices,
+      setOutputSplitCount,
+      setOutputZipAlignMode,
       runNode,
       setGeneratorReviewEnabled,
       setImageGeneratorConfigValue,

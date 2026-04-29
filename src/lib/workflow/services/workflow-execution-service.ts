@@ -2,7 +2,7 @@ import { Effect } from "effect";
 
 import { getErrorMessage, WorkflowRequestError } from "~/lib/workflow/errors";
 import {
-  isWorkflowRunActiveStatus,
+  isWorkflowExecutionActiveStatus,
   type WorkflowExecutionTarget,
 } from "~/lib/workflow/execution/types";
 import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
@@ -10,7 +10,7 @@ import { WorkflowPersistenceService } from "~/lib/workflow/services/workflow-per
 import { WorkflowStudioStoreService } from "~/lib/workflow/services/workflow-studio-store-service";
 
 export const WorkflowExecutionService = {
-  run(target: WorkflowExecutionTarget) {
+  start(target: WorkflowExecutionTarget) {
     return Effect.gen(function* () {
       const workflowStudioStore = yield* WorkflowStudioStoreService;
       yield* Effect.tryPromise({
@@ -34,7 +34,7 @@ export const WorkflowExecutionService = {
       yield* workflowStudioStore.setExecutionStreaming(true);
 
       const executionState = yield* WorkflowClientService.startExecution({
-        clientRunId: crypto.randomUUID(),
+        clientExecutionId: crypto.randomUUID(),
         document: snapshot.document,
         documentRevision: snapshot.documentRevision,
         projectId: snapshot.projectId,
@@ -44,11 +44,13 @@ export const WorkflowExecutionService = {
         target,
       });
 
-      yield* workflowStudioStore.setActiveRunId(executionState.runId);
+      yield* workflowStudioStore.setActiveExecutionId(
+        executionState.executionId,
+      );
       yield* workflowStudioStore.applyServerExecutionState(executionState);
 
-      if (!isWorkflowRunActiveStatus(executionState.status)) {
-        yield* workflowStudioStore.clearActiveRunId();
+      if (!isWorkflowExecutionActiveStatus(executionState.status)) {
+        yield* workflowStudioStore.clearActiveExecutionId();
         return;
       }
 
@@ -56,7 +58,7 @@ export const WorkflowExecutionService = {
         let settled = false;
 
         const subscription = WorkflowClientService.openExecutionEvents(
-          executionState.runId,
+          executionState.executionId,
           {
             onExecutionState: (nextExecutionState) => {
               void Effect.runPromise(
@@ -66,7 +68,9 @@ export const WorkflowExecutionService = {
               )
                 .then(() => {
                   if (
-                    isWorkflowRunActiveStatus(nextExecutionState.status) ||
+                    isWorkflowExecutionActiveStatus(
+                      nextExecutionState.status,
+                    ) ||
                     settled
                   ) {
                     return;
@@ -76,7 +80,7 @@ export const WorkflowExecutionService = {
                   subscription.unsubscribe();
 
                   void Effect.runPromise(
-                    workflowStudioStore.clearActiveRunId(),
+                    workflowStudioStore.clearActiveExecutionId(),
                   ).finally(() => {
                     resume(Effect.void);
                   });
@@ -118,7 +122,7 @@ export const WorkflowExecutionService = {
       Effect.catchAll((error) =>
         Effect.gen(function* () {
           const workflowStudioStore = yield* WorkflowStudioStoreService;
-          yield* workflowStudioStore.clearActiveRunId();
+          yield* workflowStudioStore.clearActiveExecutionId();
           yield* workflowStudioStore.setExecutionStreaming(false);
           yield* workflowStudioStore.setActivity(getErrorMessage(error));
         }),

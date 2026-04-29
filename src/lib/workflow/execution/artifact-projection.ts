@@ -5,16 +5,18 @@ import {
   type WorkflowGraphDocument,
 } from "~/lib/workflow/document";
 import {
-  replaceMediaOutputLane,
-  replaceTextOutputLane,
-} from "~/lib/workflow/execution/output-lanes";
+  replaceMediaOutputOutput,
+  replaceTextOutputOutput,
+} from "~/lib/workflow/execution/node-outputs";
 import type {
-  NodeLaneOutputArtifact,
-  WorkflowRunArtifacts,
+  NodeOutputArtifact,
+  WorkflowOutputArtifacts,
 } from "~/lib/workflow/execution/types";
 import {
-  getLatestReviewLaneArtifacts,
-  getSuccessfulWorkflowLaneOutputs,
+  buildCurrentWorkflowOutputProjection,
+  getLatestOutputReviewArtifacts,
+  getMaterializedWorkflowOutputs,
+  getWorkflowOutputKey,
 } from "~/lib/workflow/execution/types";
 import {
   ImageGeneratorService,
@@ -23,22 +25,10 @@ import {
 } from "~/lib/workflow/services/node-services";
 import type { WorkflowReviewState } from "~/lib/workflow/types";
 
-function latestLaneOutputKey(output: NodeLaneOutputArtifact) {
-  return `${output.runId}:${output.nodeId}:${output.laneIndex}`;
-}
-
-function reviewLaneKey(lane: {
-  laneIndex: number;
-  nodeId: string;
-  runId: string;
-}) {
-  return `${lane.runId}:${lane.nodeId}:${lane.laneIndex}`;
-}
-
-function getLatestOutputs(outputs: readonly NodeLaneOutputArtifact[]) {
-  const latest = new Map<string, NodeLaneOutputArtifact>();
+function getLatestOutputs(outputs: readonly NodeOutputArtifact[]) {
+  const latest = new Map<string, NodeOutputArtifact>();
   for (const output of outputs) {
-    const key = latestLaneOutputKey(output);
+    const key = getWorkflowOutputKey(output);
     const existing = latest.get(key);
     if (!existing || existing.attempt < output.attempt) {
       latest.set(key, output);
@@ -47,16 +37,16 @@ function getLatestOutputs(outputs: readonly NodeLaneOutputArtifact[]) {
   return latest;
 }
 
-function getVisibleLatestOutputs(artifacts: WorkflowRunArtifacts) {
-  return Array.from(
-    getLatestOutputs(getSuccessfulWorkflowLaneOutputs(artifacts)).values(),
-  ).filter(
-    (output) => !output.reviewStatus || output.reviewStatus === "approved",
-  );
+function getVisibleLatestOutputs(artifacts: WorkflowOutputArtifacts) {
+  return Array.from(buildCurrentWorkflowOutputProjection(artifacts).values())
+    .flatMap((slot) => slot.committedOutput ?? [])
+    .filter(
+      (output) => !output.reviewStatus || output.reviewStatus === "approved",
+    );
 }
 
 export function getWorkflowVisibleCompletionOutputs(
-  artifacts: WorkflowRunArtifacts,
+  artifacts: WorkflowOutputArtifacts,
 ) {
   return getVisibleLatestOutputs(artifacts);
 }
@@ -71,15 +61,15 @@ function groupByNodeId<Value extends { nodeId: string }>(
   return grouped;
 }
 
-export function buildWorkflowRunProjection(params: {
-  artifacts: WorkflowRunArtifacts;
+export function buildWorkflowOutputProjection(params: {
+  artifacts: WorkflowOutputArtifacts;
   document: WorkflowDocument | WorkflowGraphDocument;
 }) {
   return buildWorkflowArtifactProjection(params);
 }
 
-export function buildWorkflowApprovedRunProjection(params: {
-  artifacts: WorkflowRunArtifacts;
+export function buildWorkflowApprovedOutputProjection(params: {
+  artifacts: WorkflowOutputArtifacts;
   document: WorkflowDocument | WorkflowGraphDocument;
 }) {
   const document =
@@ -95,7 +85,7 @@ export function buildWorkflowApprovedRunProjection(params: {
           node.kind === "videoGenerator" ||
           node.kind === "llmGenerator") &&
         node.reviewEnabled
-          ? { ...node, outputLanes: [] }
+          ? { ...node, outputs: [] }
           : node,
       ),
     },
@@ -103,7 +93,7 @@ export function buildWorkflowApprovedRunProjection(params: {
 }
 
 function buildWorkflowArtifactProjection(params: {
-  artifacts: WorkflowRunArtifacts;
+  artifacts: WorkflowOutputArtifacts;
   document: WorkflowDocument | WorkflowGraphDocument;
 }) {
   const document =
@@ -112,55 +102,59 @@ function buildWorkflowArtifactProjection(params: {
   const outputByNodeId = groupByNodeId(
     getVisibleLatestOutputs(params.artifacts),
   );
-  const latestOutputByLane = getLatestOutputs(
-    getSuccessfulWorkflowLaneOutputs(params.artifacts),
+  const latestOutputByOutput = getLatestOutputs(
+    getMaterializedWorkflowOutputs(params.artifacts),
   );
   const reviewByNodeId = groupByNodeId(
-    getLatestReviewLaneArtifacts(params.artifacts),
+    getLatestOutputReviewArtifacts(params.artifacts),
   );
 
   return {
     ...document,
     nodes: document.nodes.map((node) => {
-      const outputs = outputByNodeId.get(node.id) ?? [];
-      const reviewLanes = reviewByNodeId.get(node.id) ?? [];
+      const artifactOutputs = outputByNodeId.get(node.id) ?? [];
+      const reviewOutputs = reviewByNodeId.get(node.id) ?? [];
 
       if (node.kind === "imageGenerator" || node.kind === "videoGenerator") {
         const valueType = node.kind === "imageGenerator" ? "image" : "video";
-        const outputLanes = outputs.reduce(
-          (lanes, output) =>
+        const outputs = artifactOutputs.reduce(
+          (outputs, output) =>
             output.value.type === valueType
-              ? replaceMediaOutputLane(
-                  lanes,
-                  output.laneIndex,
-                  output.value.lanes[0] ?? [],
+              ? replaceMediaOutputOutput(
+                  outputs,
+                  output.outputIndex,
+                  output.value.items[0] ?? [],
                 )
-              : lanes,
-          node.outputLanes,
+              : outputs,
+          node.outputs,
         );
-        const review = reviewLanes.length
+        const review = reviewOutputs.length
           ? ({
-              lanes: reviewLanes
-                .map((lane) => {
+              outputs: reviewOutputs
+                .map((reviewOutput) => {
                   const output =
-                    outputs.find(
+                    artifactOutputs.find(
                       (candidate) =>
-                        candidate.laneIndex === lane.laneIndex &&
-                        candidate.attempt === lane.attempt,
-                    ) ?? latestOutputByLane.get(reviewLaneKey(lane));
+                        candidate.outputIndex === reviewOutput.outputIndex &&
+                        candidate.attempt === reviewOutput.attempt,
+                    ) ??
+                    latestOutputByOutput.get(
+                      getWorkflowOutputKey(reviewOutput),
+                    );
                   return {
                     assets:
                       output?.value.type === "image" ||
                       output?.value.type === "video"
-                        ? (output.value.lanes[0] ?? [])
+                        ? (output.value.items[0] ?? [])
                         : [],
-                    attempt: lane.attempt,
-                    laneIndex: lane.laneIndex,
-                    status: lane.status,
+                    attempt: reviewOutput.attempt,
+                    executionId: reviewOutput.executionId,
+                    outputIndex: reviewOutput.outputIndex,
+                    status: reviewOutput.status,
                     text: null,
                   };
                 })
-                .sort((left, right) => left.laneIndex - right.laneIndex),
+                .sort((left, right) => left.outputIndex - right.outputIndex),
               sourceNodeId: node.id,
               updatedAt: null,
               valueType,
@@ -171,53 +165,57 @@ function buildWorkflowArtifactProjection(params: {
           ? {
               ...ImageGeneratorService.setExecutionResult(node, {
                 lastPrompt: node.lastPrompt,
-                outputLanes,
+                outputs,
               }),
               review,
             }
           : {
               ...VideoGeneratorService.setExecutionResult(node, {
                 lastPrompt: node.lastPrompt,
-                outputLanes,
+                outputs,
               }),
               review,
             };
       }
 
       if (node.kind === "llmGenerator") {
-        const outputLanes = outputs.reduce(
-          (lanes, output) =>
+        const outputs = artifactOutputs.reduce(
+          (outputs, output) =>
             output.value.type === "text"
-              ? replaceTextOutputLane(
-                  lanes,
-                  output.laneIndex,
-                  output.value.lanes[0] ?? "",
+              ? replaceTextOutputOutput(
+                  outputs,
+                  output.outputIndex,
+                  output.value.items[0] ?? "",
                 )
-              : lanes,
-          node.outputLanes,
+              : outputs,
+          node.outputs,
         );
-        const review = reviewLanes.length
+        const review = reviewOutputs.length
           ? ({
-              lanes: reviewLanes
-                .map((lane) => {
+              outputs: reviewOutputs
+                .map((reviewOutput) => {
                   const output =
-                    outputs.find(
+                    artifactOutputs.find(
                       (candidate) =>
-                        candidate.laneIndex === lane.laneIndex &&
-                        candidate.attempt === lane.attempt,
-                    ) ?? latestOutputByLane.get(reviewLaneKey(lane));
+                        candidate.outputIndex === reviewOutput.outputIndex &&
+                        candidate.attempt === reviewOutput.attempt,
+                    ) ??
+                    latestOutputByOutput.get(
+                      getWorkflowOutputKey(reviewOutput),
+                    );
                   return {
                     assets: [],
-                    attempt: lane.attempt,
-                    laneIndex: lane.laneIndex,
-                    status: lane.status,
+                    attempt: reviewOutput.attempt,
+                    executionId: reviewOutput.executionId,
+                    outputIndex: reviewOutput.outputIndex,
+                    status: reviewOutput.status,
                     text:
                       output?.value.type === "text"
-                        ? (output.value.lanes[0] ?? null)
+                        ? (output.value.items[0] ?? null)
                         : null,
                   };
                 })
-                .sort((left, right) => left.laneIndex - right.laneIndex),
+                .sort((left, right) => left.outputIndex - right.outputIndex),
               sourceNodeId: node.id,
               updatedAt: null,
               valueType: "text",
@@ -228,7 +226,7 @@ function buildWorkflowArtifactProjection(params: {
           ...LlmGeneratorService.setExecutionResult(node, {
             lastPrompt: node.lastPrompt,
             lastSystemPrompt: node.lastSystemPrompt,
-            outputLanes,
+            outputs,
           }),
           review,
         };

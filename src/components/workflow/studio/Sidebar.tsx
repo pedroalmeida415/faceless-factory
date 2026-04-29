@@ -75,11 +75,11 @@ const NODE_ACTION_GROUPS: Array<{
   {
     label: "Transforms",
     actions: [
-      { kind: "laneReorder", label: "Lane Reorder", icon: RiShuffleLine },
-      { kind: "laneSelect", label: "Lane Select", icon: RiScissorsCutLine },
-      { kind: "laneSplit", label: "Lane Split", icon: RiStackLine },
-      { kind: "laneMerge", label: "Lane Merge", icon: RiGitMergeLine },
-      { kind: "laneZipAlign", label: "Lane Zip", icon: RiShuffleLine },
+      { kind: "outputReorder", label: "Output Reorder", icon: RiShuffleLine },
+      { kind: "outputSelect", label: "Output Select", icon: RiScissorsCutLine },
+      { kind: "outputSplit", label: "Output Split", icon: RiStackLine },
+      { kind: "outputMerge", label: "Output Merge", icon: RiGitMergeLine },
+      { kind: "outputZipAlign", label: "Output Zip", icon: RiShuffleLine },
     ],
   },
   {

@@ -45,7 +45,7 @@ export async function POST(request: Request) {
           file,
           kind,
           ownerUserId: session.user.id,
-          projectId: projectId.trim(),
+          workflowId: projectId.trim(),
           source: "upload",
         });
       }),

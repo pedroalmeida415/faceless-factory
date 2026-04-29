@@ -8,22 +8,22 @@ import {
   type WorkflowDocument,
   type WorkflowGraphDocument,
 } from "~/lib/workflow/document";
-import { buildWorkflowRunProjection } from "~/lib/workflow/execution/artifact-projection";
+import { buildWorkflowOutputProjection } from "~/lib/workflow/execution/artifact-projection";
 import type {
   StartWorkflowExecutionRequest,
+  WorkflowExecutionStatus,
   WorkflowExecutionStatusResponse,
-  WorkflowRunStatus,
 } from "~/lib/workflow/execution/types";
 import { toTRPCError } from "~/server/api/errors";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { WorkflowArtifactStore } from "~/server/workflow/artifact-store";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
 import { WorkflowExecutionService } from "~/server/workflow/execution-service";
+import { WorkflowExecutionStore } from "~/server/workflow/execution-store";
 import {
   getWorkflowProject,
   saveWorkflowProjectDocument,
 } from "~/server/workflow/projects";
-import { WorkflowRunStore } from "~/server/workflow/run-store";
 import { WorkflowStorage } from "~/server/workflow/storage";
 
 const workflowAssetSchema = z.object({
@@ -79,7 +79,7 @@ const workflowExecutionRequestSchema = z
     document: workflowDocumentSchema,
     projectId: z.string().min(1),
     target: workflowExecutionTargetSchema,
-    clientRunId: z.string().nullable().optional(),
+    clientExecutionId: z.string().nullable().optional(),
     documentRevision: z.number().nullable().optional(),
     idempotencyKey: z.string().nullable().optional(),
     selection: z
@@ -107,13 +107,13 @@ const workflowExecutionQuoteRequestSchema = z
 
 const workflowExecutionEventsSchema = z.object({
   lastEventId: z.string().nullish(),
-  runId: z.string(),
+  executionId: z.string(),
 });
 
-const workflowReviewLaneDecisionSchema = z.object({
-  laneIndex: z.number().int().nonnegative(),
+const workflowReviewOutputDecisionSchema = z.object({
+  outputIndex: z.number().int().nonnegative(),
   reviewNodeId: z.string().min(1),
-  runId: z.string().min(1),
+  executionId: z.string().min(1),
 });
 
 const saveWorkflowProjectSchema = z.object({
@@ -122,7 +122,7 @@ const saveWorkflowProjectSchema = z.object({
   projectId: z.string().min(1),
 });
 
-function isTerminalStatus(status: WorkflowRunStatus) {
+function isTerminalStatus(status: WorkflowExecutionStatus) {
   return status === "success" || status === "error";
 }
 
@@ -133,9 +133,9 @@ function projectExecutionState(
   return ServerRuntime.runPromise(
     Effect.gen(function* () {
       const workflowArtifactStore = yield* WorkflowArtifactStore;
-      const artifacts = yield* workflowArtifactStore.getRunArtifacts({
+      const artifacts = yield* workflowArtifactStore.getOutputArtifacts({
         ownerUserId: userId,
-        runId: run.runId,
+        executionId: run.executionId,
       });
       const projectId = run.requestContext?.projectId?.trim();
       const project = projectId
@@ -152,7 +152,7 @@ function projectExecutionState(
 
       return {
         ...run,
-        document: buildWorkflowRunProjection({
+        document: buildWorkflowOutputProjection({
           artifacts,
           document,
         }),
@@ -173,9 +173,9 @@ export const workflowRouter = createTRPCRouter({
       ServerRuntime.runPromise(
         Effect.gen(function* () {
           const workflowStorage = yield* WorkflowStorage;
-          return yield* workflowStorage.listProjectAssets({
+          return yield* workflowStorage.listWorkflowAssets({
             ownerUserId: ctx.session.user.id,
-            projectId: input.projectId,
+            workflowId: input.projectId,
           });
         }),
       ).catch((error) => {
@@ -189,8 +189,8 @@ export const workflowRouter = createTRPCRouter({
       try {
         const lockedNodeIds = await ServerRuntime.runPromise(
           Effect.gen(function* () {
-            const workflowRunStore = yield* WorkflowRunStore;
-            return yield* workflowRunStore.getProjectLockedNodeIds({
+            const workflowExecutionStore = yield* WorkflowExecutionStore;
+            return yield* workflowExecutionStore.getProjectLockedNodeIds({
               projectId: input.projectId,
               userId: ctx.session.user.id,
             });
@@ -218,7 +218,10 @@ export const workflowRouter = createTRPCRouter({
       return ServerRuntime.runPromise(
         Effect.gen(function* () {
           const workflowExecutionService = yield* WorkflowExecutionService;
-          return yield* workflowExecutionService.startRun(userId, request);
+          return yield* workflowExecutionService.startExecution(
+            userId,
+            request,
+          );
         }),
       ).catch((error) => {
         throw toTRPCError(error);
@@ -233,7 +236,7 @@ export const workflowRouter = createTRPCRouter({
       return ServerRuntime.runPromise(
         Effect.gen(function* () {
           const workflowExecutionService = yield* WorkflowExecutionService;
-          return yield* workflowExecutionService.quoteRun(userId, input);
+          return yield* workflowExecutionService.quoteExecution(userId, input);
         }),
       ).catch((error) => {
         throw toTRPCError(error);
@@ -243,18 +246,18 @@ export const workflowRouter = createTRPCRouter({
   executionEvents: protectedProcedure
     .input(workflowExecutionEventsSchema)
     .subscription(async function* ({ ctx, input, signal }) {
-      const pendingRuns: WorkflowExecutionStatusResponse[] = [];
-      let resolveNextRun: (() => void) | undefined;
+      const pendingExecutions: WorkflowExecutionStatusResponse[] = [];
+      let resolveNextExecution: (() => void) | undefined;
 
       const subscription = await ServerRuntime.runPromise(
         Effect.gen(function* () {
-          const workflowRunStore = yield* WorkflowRunStore;
-          return yield* workflowRunStore.subscribe(
-            input.runId,
+          const workflowExecutionStore = yield* WorkflowExecutionStore;
+          return yield* workflowExecutionStore.subscribe(
+            input.executionId,
             ctx.session.user.id,
             (run) => {
-              pendingRuns.push(run);
-              resolveNextRun?.();
+              pendingExecutions.push(run);
+              resolveNextExecution?.();
             },
           );
         }),
@@ -263,26 +266,26 @@ export const workflowRouter = createTRPCRouter({
       });
 
       try {
-        const initialRun = await projectExecutionState(
-          subscription.initialRun,
+        const initialExecution = await projectExecutionState(
+          subscription.initialExecution,
           ctx.session.user.id,
         );
-        yield initialRun;
+        yield initialExecution;
 
-        if (isTerminalStatus(initialRun.status)) {
+        if (isTerminalStatus(initialExecution.status)) {
           return;
         }
 
         while (!signal?.aborted) {
-          const nextRun = pendingRuns.shift();
-          if (nextRun) {
-            const projectedRun = await projectExecutionState(
-              nextRun,
+          const nextExecution = pendingExecutions.shift();
+          if (nextExecution) {
+            const projectedExecution = await projectExecutionState(
+              nextExecution,
               ctx.session.user.id,
             );
-            yield projectedRun;
+            yield projectedExecution;
 
-            if (isTerminalStatus(projectedRun.status)) {
+            if (isTerminalStatus(projectedExecution.status)) {
               return;
             }
 
@@ -292,13 +295,13 @@ export const workflowRouter = createTRPCRouter({
           await new Promise<void>((resolve) => {
             const abortHandler = () => {
               signal?.removeEventListener("abort", abortHandler);
-              resolveNextRun = undefined;
+              resolveNextExecution = undefined;
               resolve();
             };
 
-            resolveNextRun = () => {
+            resolveNextExecution = () => {
               signal?.removeEventListener("abort", abortHandler);
-              resolveNextRun = undefined;
+              resolveNextExecution = undefined;
               resolve();
             };
 
@@ -310,16 +313,16 @@ export const workflowRouter = createTRPCRouter({
       }
     }),
 
-  approveReviewLane: protectedProcedure
-    .input(workflowReviewLaneDecisionSchema)
+  approveReviewOutput: protectedProcedure
+    .input(workflowReviewOutputDecisionSchema)
     .mutation(async ({ ctx, input }) =>
       ServerRuntime.runPromise(
         Effect.gen(function* () {
           const workflowExecutionService = yield* WorkflowExecutionService;
-          return yield* workflowExecutionService.approveReviewLane({
-            laneIndex: input.laneIndex,
+          return yield* workflowExecutionService.approveReviewOutput({
+            outputIndex: input.outputIndex,
             reviewNodeId: input.reviewNodeId,
-            runId: input.runId,
+            executionId: input.executionId,
             userId: ctx.session.user.id,
           });
         }),
@@ -328,16 +331,16 @@ export const workflowRouter = createTRPCRouter({
       }),
     ),
 
-  rejectReviewLane: protectedProcedure
-    .input(workflowReviewLaneDecisionSchema)
+  rejectReviewOutput: protectedProcedure
+    .input(workflowReviewOutputDecisionSchema)
     .mutation(async ({ ctx, input }) =>
       ServerRuntime.runPromise(
         Effect.gen(function* () {
           const workflowExecutionService = yield* WorkflowExecutionService;
-          return yield* workflowExecutionService.rejectReviewLane({
-            laneIndex: input.laneIndex,
+          return yield* workflowExecutionService.rejectReviewOutput({
+            outputIndex: input.outputIndex,
             reviewNodeId: input.reviewNodeId,
-            runId: input.runId,
+            executionId: input.executionId,
             userId: ctx.session.user.id,
           });
         }),

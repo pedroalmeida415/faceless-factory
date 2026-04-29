@@ -41,7 +41,7 @@ export const WorkflowClientService = {
   },
 
   openExecutionEvents(
-    runId: string,
+    executionId: string,
     handlers: {
       onExecutionState: (state: WorkflowExecutionStatusResponse) => void;
       onError: (error: WorkflowRequestError) => void;
@@ -65,7 +65,7 @@ export const WorkflowClientService = {
     };
 
     const subscription = trpcClient.workflow.executionEvents.subscribe(
-      { runId },
+      { executionId },
       {
         onData: handlers.onExecutionState,
         onConnectionStateChange: (state) => {
@@ -85,13 +85,13 @@ export const WorkflowClientService = {
     } satisfies Unsubscribable;
   },
 
-  approveReviewLane(input: {
-    laneIndex: number;
+  approveReviewOutput(input: {
+    outputIndex: number;
     reviewNodeId: string;
-    runId: string;
+    executionId: string;
   }) {
     return Effect.tryPromise({
-      try: () => trpcClient.workflow.approveReviewLane.mutate(input),
+      try: () => trpcClient.workflow.approveReviewOutput.mutate(input),
       catch: (cause) =>
         new WorkflowRequestError({
           message: getErrorMessage(cause),
@@ -100,13 +100,13 @@ export const WorkflowClientService = {
     }) as Effect.Effect<WorkflowExecutionStatusResponse, WorkflowRequestError>;
   },
 
-  rejectReviewLane(input: {
-    laneIndex: number;
+  rejectReviewOutput(input: {
+    outputIndex: number;
     reviewNodeId: string;
-    runId: string;
+    executionId: string;
   }) {
     return Effect.tryPromise({
-      try: () => trpcClient.workflow.rejectReviewLane.mutate(input),
+      try: () => trpcClient.workflow.rejectReviewOutput.mutate(input),
       catch: (cause) =>
         new WorkflowRequestError({
           message: getErrorMessage(cause),

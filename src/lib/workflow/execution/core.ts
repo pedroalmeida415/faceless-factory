@@ -21,10 +21,10 @@ import {
   coerceTextInputBatch,
 } from "~/lib/workflow/execution/input-coercion";
 import {
-  getRuntimeValueLane,
-  replaceMediaOutputLane,
-  replaceTextOutputLane,
-} from "~/lib/workflow/execution/output-lanes";
+  getRuntimeValueOutput,
+  replaceMediaOutputOutput,
+  replaceTextOutputOutput,
+} from "~/lib/workflow/execution/node-outputs";
 import {
   buildWorkflowExecutionStatusResponse,
   createWorkflowExecutionRuntimeState,
@@ -32,7 +32,7 @@ import {
 } from "~/lib/workflow/execution/runtime-state";
 import {
   buildWorkflowExecutionPlan,
-  getWorkflowPlannedLaneCount,
+  getWorkflowPlannedOutputCount,
 } from "~/lib/workflow/execution/subgraph";
 import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target-resolution";
 import type {
@@ -40,11 +40,11 @@ import type {
   WorkflowExecutionPortError,
   WorkflowExecutionPorts,
   WorkflowExecutionRuntimeState,
+  WorkflowExecutionStatus,
   WorkflowExecutionStatusResponse,
-  WorkflowRunStatus,
 } from "~/lib/workflow/execution/types";
 import {
-  WorkflowLaneDependencyMissing,
+  WorkflowOutputDependencyMissing,
   WorkflowReviewPause,
 } from "~/lib/workflow/execution/types";
 import {
@@ -68,24 +68,14 @@ import {
   resolvePromptNodeTextBatch,
 } from "~/lib/workflow/graph";
 import {
-  mergeRuntimeValues,
-  type RuntimeValue,
-  reorderRuntimeValue,
-  resolveLanePermutation,
-  selectRuntimeValue,
-  splitRuntimeValueLane,
-  type TextRuntimeValue,
-  zipAlignRuntimeValues,
-} from "~/lib/workflow/lanes";
-import {
   buildLlmGenerationRequest,
   calculateLlmUsageCreditCost,
   LLM_ESTIMATED_CREDIT_COST,
   SYSTEM_PROMPT_INPUT_HANDLE_ID,
 } from "~/lib/workflow/llm-models";
 import {
-  LANE_REORDER_INPUT_HANDLE_ID,
-  LANE_TRANSFORM_INPUT_HANDLE_ID,
+  OUTPUT_REORDER_INPUT_HANDLE_ID,
+  OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
   PROMPT_INPUT_HANDLE_ID,
 } from "~/lib/workflow/node-definitions";
 import {
@@ -93,6 +83,16 @@ import {
   isReviewFullyApproved,
   syncGeneratorReviewForOutput,
 } from "~/lib/workflow/review-state";
+import {
+  mergeRuntimeValues,
+  type RuntimeValue,
+  reorderRuntimeValue,
+  resolveOutputPermutation,
+  selectRuntimeValue,
+  splitRuntimeValueOutput,
+  type TextRuntimeValue,
+  zipAlignRuntimeValues,
+} from "~/lib/workflow/runtime-values";
 import {
   ImageGeneratorService,
   LlmGeneratorService,
@@ -107,43 +107,43 @@ import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator"
 type ExecutionError =
   | WorkflowExecutionError
   | WorkflowExecutionPortError
-  | WorkflowLaneDependencyMissing
+  | WorkflowOutputDependencyMissing
   | WorkflowReviewPause;
 type PendingMap = Map<string, Deferred.Deferred<RuntimeValue, ExecutionError>>;
 type NodeMap = Map<string, WorkflowDocumentNode>;
-type RequestedLaneIndex = number | null | undefined;
+type RequestedOutputIndex = number | null | undefined;
 
 type ExecutionState = {
   document: WorkflowDocument;
   runtime: WorkflowExecutionRuntimeState;
-  status: WorkflowRunStatus;
+  status: WorkflowExecutionStatus;
 };
 
 type EvaluateNode = (
   currentId: string,
   path: ReadonlySet<string>,
   sourceHandleId?: string | null,
-  requestedLaneIndex?: RequestedLaneIndex,
+  requestedOutputIndex?: RequestedOutputIndex,
 ) => Effect.Effect<RuntimeValue, ExecutionError>;
 
-function getExecutionLaneIndex(request: StartWorkflowExecutionRequest) {
+function getExecutionOutputIndex(request: StartWorkflowExecutionRequest) {
   return (
-    request.executionLaneFilter?.laneIndex ??
-    request.reviewLaneFilter?.laneIndex ??
+    request.executionOutputFilter?.outputIndex ??
+    request.reviewOutputFilter?.outputIndex ??
     null
   );
 }
 
-function formatLaneActivity(request: StartWorkflowExecutionRequest) {
-  if (request.reviewLaneFilter) {
-    return `Continuing lane ${request.reviewLaneFilter.laneIndex + 1} after review.`;
+function formatOutputActivity(request: StartWorkflowExecutionRequest) {
+  if (request.reviewOutputFilter) {
+    return `Continuing output ${request.reviewOutputFilter.outputIndex + 1} after review.`;
   }
 
-  if (request.executionLaneFilter) {
-    return `Running lane ${request.executionLaneFilter.laneIndex + 1} of ${request.executionLaneFilter.laneCount}.`;
+  if (request.executionOutputFilter) {
+    return `Running output ${request.executionOutputFilter.outputIndex + 1} of ${request.executionOutputFilter.outputCount}.`;
   }
 
-  return "Queued workflow run.";
+  return "Queued workflow execution.";
 }
 
 function toRequestContext(
@@ -153,13 +153,29 @@ function toRequestContext(
 ) {
   return {
     accruedCostCredits,
-    clientRunId: request.clientRunId ?? null,
+    clientExecutionId: request.clientExecutionId ?? null,
     documentRevision,
     idempotencyKey: request.idempotencyKey ?? null,
     projectId: request.projectId ?? null,
     selection: request.selection ?? null,
     target: request.target,
   } satisfies WorkflowExecutionStatusResponse["requestContext"];
+}
+
+function chargeOutputCost(
+  ports: Pick<WorkflowExecutionPorts, "onOutputCost">,
+  params: {
+    amount: number;
+    attempt: number;
+    idempotencyKey: string;
+    inputHash: string;
+    nodeId: string;
+    outputIndex: number;
+  },
+) {
+  return params.amount > 0 && ports.onOutputCost
+    ? ports.onOutputCost(params)
+    : Effect.succeed(0);
 }
 
 function isReviewNodeFullyApproved(document: WorkflowDocument, nodeId: string) {
@@ -204,7 +220,7 @@ function syncGeneratorReviewForGeneratedOutput(
   });
 }
 
-export function estimateGeneratorReviewLaneRegenerationCreditCost(params: {
+export function estimateGeneratorReviewOutputRegenerationCreditCost(params: {
   document: WorkflowDocument;
   generatorNodeId: string;
 }) {
@@ -249,7 +265,7 @@ function formatRunningActivity(
   hasIterator: boolean,
 ) {
   return hasIterator
-    ? `Running ${label} (${iterations} lanes)...`
+    ? `Running ${label} (${iterations} outputs)...`
     : `Running ${label}...`;
 }
 
@@ -279,37 +295,40 @@ function isGeneratorWorkflowNode(node: WorkflowDocumentNode) {
   );
 }
 
-function getBroadcastLaneIndex(
+function getBroadcastOutputIndex(
   document: WorkflowDocument,
   sourceNodeId: string,
   sourceHandleId: string | null | undefined,
-  requestedLaneIndex: number,
+  requestedOutputIndex: number,
 ) {
-  return getWorkflowPlannedLaneCount(document, sourceNodeId, sourceHandleId) ===
-    1
+  return getWorkflowPlannedOutputCount(
+    document,
+    sourceNodeId,
+    sourceHandleId,
+  ) === 1
     ? 0
-    : requestedLaneIndex;
+    : requestedOutputIndex;
 }
 
-function getLaneMergeSourceRequest(params: {
+function getOutputMergeSourceRequest(params: {
   document: WorkflowDocument;
   incomingEdges: ReturnType<typeof getIncomingEdgesForHandle>;
-  requestedLaneIndex: number;
+  requestedOutputIndex: number;
 }) {
   let offset = 0;
   for (const edge of params.incomingEdges) {
-    const laneCount = getWorkflowPlannedLaneCount(
+    const outputCount = getWorkflowPlannedOutputCount(
       params.document,
       edge.source,
       edge.sourceHandle,
     );
-    if (params.requestedLaneIndex < offset + laneCount) {
+    if (params.requestedOutputIndex < offset + outputCount) {
       return {
         edge,
-        laneIndex: params.requestedLaneIndex - offset,
+        outputIndex: params.requestedOutputIndex - offset,
       };
     }
-    offset += laneCount;
+    offset += outputCount;
   }
 
   return null;
@@ -331,26 +350,26 @@ function coerceGeneratorExecutionBatchPlan(
 
 function getExecutableGeneratorBatches(
   batches: readonly GeneratorExecutionBatch[],
-  laneIndex: number | null | undefined,
+  outputIndex: number | null | undefined,
 ) {
-  if (laneIndex === null || laneIndex === undefined) {
+  if (outputIndex === null || outputIndex === undefined) {
     return Effect.succeed(
-      batches.map((batch, index) => ({ batch, laneIndex: index })),
+      batches.map((batch, index) => ({ batch, outputIndex: index })),
     );
   }
 
-  const batch = batches[laneIndex];
+  const batch = batches[outputIndex];
   if (batch) {
-    return Effect.succeed([{ batch, laneIndex }]);
+    return Effect.succeed([{ batch, outputIndex }]);
   }
 
   if (batches.length === 1 && batches[0]) {
-    return Effect.succeed([{ batch: batches[0], laneIndex }]);
+    return Effect.succeed([{ batch: batches[0], outputIndex }]);
   }
 
   return Effect.fail(
     new WorkflowValidationError({
-      message: `Lane ${laneIndex + 1} is not available from the connected generator inputs.`,
+      message: `Output ${outputIndex + 1} is not available from the connected generator inputs.`,
     }),
   );
 }
@@ -372,7 +391,7 @@ function evaluatePromptNodeTextBatch(
   path: ReadonlySet<string>,
   incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
   evaluateNode: EvaluateNode,
-  requestedLaneIndex?: RequestedLaneIndex,
+  requestedOutputIndex?: RequestedOutputIndex,
 ) {
   return Effect.gen(function* () {
     const resolvedVariables = new Map(
@@ -387,7 +406,7 @@ function evaluatePromptNodeTextBatch(
                   edge.source,
                   path,
                   edge.sourceHandle,
-                  requestedLaneIndex,
+                  requestedOutputIndex,
                 ),
               {
                 concurrency: "unbounded",
@@ -416,26 +435,26 @@ function evaluatePromptNodeTextBatch(
   });
 }
 
-function evaluateLaneReorderInput(
+function evaluateOutputReorderInput(
   document: WorkflowDocument,
   currentId: string,
   path: ReadonlySet<string>,
   incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
   evaluateNode: EvaluateNode,
-  laneIndex?: RequestedLaneIndex,
-  laneOrder?: readonly number[],
+  outputIndex?: RequestedOutputIndex,
+  outputOrder?: readonly number[],
 ) {
   const incomingEdges = getIncomingEdgesForHandle(
     incomingByTarget,
     currentId,
-    LANE_REORDER_INPUT_HANDLE_ID,
+    OUTPUT_REORDER_INPUT_HANDLE_ID,
   );
   const edge = incomingEdges[0];
 
   if (!edge || incomingEdges.length !== 1) {
     return Effect.fail(
       new WorkflowValidationError({
-        message: "Lane Reorder needs exactly one input.",
+        message: "Output Reorder needs exactly one input.",
       }),
     );
   }
@@ -444,47 +463,51 @@ function evaluateLaneReorderInput(
     edge.source,
     path,
     edge.sourceHandle,
-    typeof laneIndex === "number"
-      ? (laneOrder?.[laneIndex] ??
-          getBroadcastLaneIndex(
+    typeof outputIndex === "number"
+      ? (outputOrder?.[outputIndex] ??
+          getBroadcastOutputIndex(
             document,
             edge.source,
             edge.sourceHandle,
-            laneIndex,
+            outputIndex,
           ))
-      : laneIndex,
+      : outputIndex,
   );
 }
 
-function evaluateLaneTransformInputs(
+function evaluateOutputTransformInputs(
   currentId: string,
   path: ReadonlySet<string>,
   incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
   evaluateNode: EvaluateNode,
-  requestedLaneIndex?: RequestedLaneIndex,
+  requestedOutputIndex?: RequestedOutputIndex,
 ) {
   return Effect.forEach(
     getIncomingEdgesForHandle(
       incomingByTarget,
       currentId,
-      LANE_TRANSFORM_INPUT_HANDLE_ID,
+      OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
     ),
     (edge) =>
-      evaluateNode(edge.source, path, edge.sourceHandle, requestedLaneIndex),
+      evaluateNode(edge.source, path, edge.sourceHandle, requestedOutputIndex),
     { concurrency: "unbounded" },
   );
 }
 
-export function regenerateGeneratorReviewLane(params: {
+export function regenerateGeneratorReviewOutput(params: {
   attempt: number;
   document: WorkflowDocument;
-  laneIndex: number;
+  outputIndex: number;
   ports: Pick<
     WorkflowExecutionPorts,
-    "generateImage" | "generateVideo" | "generateLlm" | "getNodeLaneOutput"
+    | "generateImage"
+    | "generateVideo"
+    | "generateLlm"
+    | "getNodeOutput"
+    | "onOutputCost"
   >;
   generatorNodeId: string;
-  runId: string;
+  executionId: string;
 }) {
   return Effect.gen(function* () {
     const incomingByTarget = buildIncomingByTarget(params.document.edges);
@@ -531,7 +554,7 @@ export function regenerateGeneratorReviewLane(params: {
             : Effect.fail(
                 new WorkflowValidationError({
                   message:
-                    "Cannot regenerate review lane without stored inputs.",
+                    "Cannot regenerate review output without stored inputs.",
                 }),
               ),
         ),
@@ -583,11 +606,11 @@ export function regenerateGeneratorReviewLane(params: {
       prompt,
       systemPrompt,
     });
-    const batch = batchPlan.batches[params.laneIndex];
+    const batch = batchPlan.batches[params.outputIndex];
     if (!batch) {
       return yield* Effect.fail(
         new WorkflowValidationError({
-          message: "Review lane is out of range.",
+          message: "Review output is out of range.",
         }),
       );
     }
@@ -602,44 +625,50 @@ export function regenerateGeneratorReviewLane(params: {
 
     if (sourceNode.kind === "imageGenerator") {
       const inputHash = getGeneratorOutputInputHash({
-        laneIndex: params.laneIndex,
+        outputIndex: params.outputIndex,
         node: sourceNode,
         promptSnapshot,
       });
-      const cached = yield* params.ports.getNodeLaneOutput({
+      const cached = yield* params.ports.getNodeOutput({
         attempt: params.attempt,
         inputHash,
-        laneIndex: params.laneIndex,
+        outputIndex: params.outputIndex,
         nodeId: sourceNode.id,
-        runId: params.runId,
+        executionId: params.executionId,
       });
       const response =
         cached?.value.type === "image"
           ? {
-              assets: cached.value.lanes[0] ?? [],
+              assets: cached.value.items[0] ?? [],
+              costCredits: 0,
               skipped: true as const,
             }
-          : yield* params.ports
-              .generateImage(
+          : yield* Effect.gen(function* () {
+              const idempotencyKey = getGeneratorOutputIdempotencyKey({
+                attempt: params.attempt,
+                inputHash,
+                outputIndex: params.outputIndex,
+                node: sourceNode,
+                executionId: params.executionId,
+              });
+              const output = yield* params.ports.generateImage(
                 buildImageGenerationRequest({
                   imageInputsByHandle: batch.mediaInputsByHandle,
                   prompt: batch.prompt,
                   settings: sourceNode,
-                  idempotencyKey: getGeneratorOutputIdempotencyKey({
-                    attempt: params.attempt,
-                    inputHash,
-                    laneIndex: params.laneIndex,
-                    node: sourceNode,
-                    runId: params.runId,
-                  }),
+                  idempotencyKey,
                 }),
-              )
-              .pipe(
-                Effect.map((output) => ({
-                  ...output,
-                  skipped: false as const,
-                })),
               );
+              const costCredits = yield* chargeOutputCost(params.ports, {
+                amount: getImageGeneratorModelCreditCost(sourceNode.model),
+                attempt: params.attempt,
+                idempotencyKey,
+                inputHash,
+                nodeId: sourceNode.id,
+                outputIndex: params.outputIndex,
+              });
+              return { ...output, costCredits, skipped: false as const };
+            });
       const document = updateWorkflowDocumentNode(
         params.document,
         sourceNode.id,
@@ -647,29 +676,29 @@ export function regenerateGeneratorReviewLane(params: {
           if (node.kind !== "imageGenerator") {
             return node;
           }
-          const outputLanes = replaceMediaOutputLane(
-            node.outputLanes,
-            params.laneIndex,
+          const outputs = replaceMediaOutputOutput(
+            node.outputs,
+            params.outputIndex,
             response.assets,
           );
           const nextNode = ImageGeneratorService.setExecutionResult(node, {
             lastPrompt: promptSnapshot,
-            outputLanes,
+            outputs,
           });
           return {
             ...nextNode,
             review: {
               ...nextNode.review,
-              lanes: nextNode.review.lanes.map((lane) =>
-                lane.laneIndex === params.laneIndex
+              outputs: nextNode.review.outputs.map((output) =>
+                output.outputIndex === params.outputIndex
                   ? {
-                      ...lane,
+                      ...output,
                       assets: response.assets,
                       attempt: params.attempt,
                       status: "pending",
                       text: null,
                     }
-                  : lane,
+                  : output,
               ),
               updatedAt: now,
             },
@@ -677,50 +706,57 @@ export function regenerateGeneratorReviewLane(params: {
         },
       );
       return {
-        costCredits: response.skipped
-          ? 0
-          : getImageGeneratorModelCreditCost(sourceNode.model),
+        costCredits: response.costCredits,
         document,
       };
     }
 
     if (sourceNode.kind === "videoGenerator") {
       const inputHash = getGeneratorOutputInputHash({
-        laneIndex: params.laneIndex,
+        outputIndex: params.outputIndex,
         node: sourceNode,
         promptSnapshot,
       });
-      const cached = yield* params.ports.getNodeLaneOutput({
+      const cached = yield* params.ports.getNodeOutput({
         attempt: params.attempt,
         inputHash,
-        laneIndex: params.laneIndex,
+        outputIndex: params.outputIndex,
         nodeId: sourceNode.id,
-        runId: params.runId,
+        executionId: params.executionId,
       });
       const response =
         cached?.value.type === "video"
-          ? { assets: cached.value.lanes[0] ?? [], skipped: true as const }
-          : yield* params.ports
-              .generateVideo(
+          ? {
+              assets: cached.value.items[0] ?? [],
+              costCredits: 0,
+              skipped: true as const,
+            }
+          : yield* Effect.gen(function* () {
+              const idempotencyKey = getGeneratorOutputIdempotencyKey({
+                attempt: params.attempt,
+                inputHash,
+                outputIndex: params.outputIndex,
+                node: sourceNode,
+                executionId: params.executionId,
+              });
+              const output = yield* params.ports.generateVideo(
                 buildVideoGenerationRequest({
                   imageInputsByHandle: batch.mediaInputsByHandle,
                   prompt: batch.prompt,
                   settings: sourceNode,
-                  idempotencyKey: getGeneratorOutputIdempotencyKey({
-                    attempt: params.attempt,
-                    inputHash,
-                    laneIndex: params.laneIndex,
-                    node: sourceNode,
-                    runId: params.runId,
-                  }),
+                  idempotencyKey,
                 }),
-              )
-              .pipe(
-                Effect.map((output) => ({
-                  ...output,
-                  skipped: false as const,
-                })),
               );
+              const costCredits = yield* chargeOutputCost(params.ports, {
+                amount: getVideoGeneratorModelCreditCost(sourceNode.model),
+                attempt: params.attempt,
+                idempotencyKey,
+                inputHash,
+                nodeId: sourceNode.id,
+                outputIndex: params.outputIndex,
+              });
+              return { ...output, costCredits, skipped: false as const };
+            });
       const document = updateWorkflowDocumentNode(
         params.document,
         sourceNode.id,
@@ -728,29 +764,29 @@ export function regenerateGeneratorReviewLane(params: {
           if (node.kind !== "videoGenerator") {
             return node;
           }
-          const outputLanes = replaceMediaOutputLane(
-            node.outputLanes,
-            params.laneIndex,
+          const outputs = replaceMediaOutputOutput(
+            node.outputs,
+            params.outputIndex,
             response.assets,
           );
           const nextNode = VideoGeneratorService.setExecutionResult(node, {
             lastPrompt: promptSnapshot,
-            outputLanes,
+            outputs,
           });
           return {
             ...nextNode,
             review: {
               ...nextNode.review,
-              lanes: nextNode.review.lanes.map((lane) =>
-                lane.laneIndex === params.laneIndex
+              outputs: nextNode.review.outputs.map((output) =>
+                output.outputIndex === params.outputIndex
                   ? {
-                      ...lane,
+                      ...output,
                       assets: response.assets,
                       attempt: params.attempt,
                       status: "pending",
                       text: null,
                     }
-                  : lane,
+                  : output,
               ),
               updatedAt: now,
             },
@@ -758,9 +794,7 @@ export function regenerateGeneratorReviewLane(params: {
         },
       );
       return {
-        costCredits: response.skipped
-          ? 0
-          : getVideoGeneratorModelCreditCost(sourceNode.model),
+        costCredits: response.costCredits,
         document,
       };
     }
@@ -774,45 +808,57 @@ export function regenerateGeneratorReviewLane(params: {
     }
 
     const inputHash = getGeneratorOutputInputHash({
-      laneIndex: params.laneIndex,
+      outputIndex: params.outputIndex,
       node: sourceNode,
       promptSnapshot,
       systemPromptSnapshot,
     });
-    const cached = yield* params.ports.getNodeLaneOutput({
+    const cached = yield* params.ports.getNodeOutput({
       attempt: params.attempt,
       inputHash,
-      laneIndex: params.laneIndex,
+      outputIndex: params.outputIndex,
       nodeId: sourceNode.id,
-      runId: params.runId,
+      executionId: params.executionId,
     });
     const response =
       cached?.value.type === "text"
         ? {
             model: sourceNode.model,
-            responseText: cached.value.lanes[0] ?? "",
+            responseText: cached.value.items[0] ?? "",
             skipped: true as const,
+            costCredits: 0,
             usage: null,
           }
-        : yield* params.ports
-            .generateLlm(
+        : yield* Effect.gen(function* () {
+            const idempotencyKey = getGeneratorOutputIdempotencyKey({
+              attempt: params.attempt,
+              inputHash,
+              outputIndex: params.outputIndex,
+              node: sourceNode,
+              executionId: params.executionId,
+            });
+            const output = yield* params.ports.generateLlm(
               buildLlmGenerationRequest({
                 imageInputsByHandle: batch.mediaInputsByHandle,
-                idempotencyKey: getGeneratorOutputIdempotencyKey({
-                  attempt: params.attempt,
-                  inputHash,
-                  laneIndex: params.laneIndex,
-                  node: sourceNode,
-                  runId: params.runId,
-                }),
+                idempotencyKey,
                 prompt: batch.prompt,
                 settings: sourceNode,
                 systemPrompt: batch.systemPrompt,
               }),
-            )
-            .pipe(
-              Effect.map((output) => ({ ...output, skipped: false as const })),
             );
+            const costCredits = yield* chargeOutputCost(params.ports, {
+              amount: calculateLlmUsageCreditCost({
+                model: output.model,
+                usage: output.usage,
+              }),
+              attempt: params.attempt,
+              idempotencyKey,
+              inputHash,
+              nodeId: sourceNode.id,
+              outputIndex: params.outputIndex,
+            });
+            return { ...output, costCredits, skipped: false as const };
+          });
     const outputText = response.responseText.trim();
     const document = updateWorkflowDocumentNode(
       params.document,
@@ -821,30 +867,30 @@ export function regenerateGeneratorReviewLane(params: {
         if (node.kind !== "llmGenerator") {
           return node;
         }
-        const outputLanes = replaceTextOutputLane(
-          node.outputLanes,
-          params.laneIndex,
+        const outputs = replaceTextOutputOutput(
+          node.outputs,
+          params.outputIndex,
           outputText,
         );
         const nextNode = LlmGeneratorService.setExecutionResult(node, {
           lastPrompt: promptSnapshot,
           lastSystemPrompt: systemPromptSnapshot,
-          outputLanes,
+          outputs,
         });
         return {
           ...nextNode,
           review: {
             ...nextNode.review,
-            lanes: nextNode.review.lanes.map((lane) =>
-              lane.laneIndex === params.laneIndex
+            outputs: nextNode.review.outputs.map((output) =>
+              output.outputIndex === params.outputIndex
                 ? {
-                    ...lane,
+                    ...output,
                     assets: [],
                     attempt: params.attempt,
                     status: "pending",
                     text: outputText,
                   }
-                : lane,
+                : output,
             ),
             updatedAt: now,
           },
@@ -852,15 +898,8 @@ export function regenerateGeneratorReviewLane(params: {
       },
     );
 
-    if (response.skipped) {
-      return { costCredits: 0, document };
-    }
-
     return {
-      costCredits: calculateLlmUsageCreditCost({
-        model: response.model,
-        usage: response.usage,
-      }),
+      costCredits: response.costCredits,
       document,
     };
   });
@@ -868,7 +907,7 @@ export function regenerateGeneratorReviewLane(params: {
 
 export function executeWorkflow(params: {
   request: StartWorkflowExecutionRequest;
-  runId: string;
+  executionId: string;
   ports: WorkflowExecutionPorts;
 }) {
   const targetNodeIds = resolveWorkflowExecutionTargets(
@@ -885,22 +924,22 @@ export function executeWorkflow(params: {
   const artifactNodeIds = Array.from(
     new Set([...executedNodeIds, ...executionPlan.reviewBarrierNodeIds]),
   );
-  const executionLaneIndex = getExecutionLaneIndex(params.request);
+  const executionOutputIndex = getExecutionOutputIndex(params.request);
 
   const state: ExecutionState = {
     document: params.request.document,
     runtime: createWorkflowExecutionRuntimeState(
       params.request.document,
-      formatLaneActivity(params.request),
+      formatOutputActivity(params.request),
     ),
-    status: params.request.reviewLaneFilter ? "waiting_for_review" : "queued",
+    status: params.request.reviewOutputFilter ? "waiting_for_review" : "queued",
   };
   let projectDocumentRevision = params.request.documentRevision ?? null;
   let finalCostCredits = params.request.accruedCostCredits ?? 0;
 
   const publish = () => {
     const response = buildWorkflowExecutionStatusResponse({
-      runId: params.runId,
+      executionId: params.executionId,
       targetNodeIds: artifactNodeIds,
       accruedCostCredits: finalCostCredits,
       projectDocumentRevision,
@@ -920,7 +959,7 @@ export function executeWorkflow(params: {
       : Effect.void;
   };
 
-  const setStatus = (status: WorkflowRunStatus) => {
+  const setStatus = (status: WorkflowExecutionStatus) => {
     state.status = status;
     return publish();
   };
@@ -933,26 +972,26 @@ export function executeWorkflow(params: {
     return publish();
   };
 
-  const getRequiredNodeLaneValue = (laneDependency: {
-    laneIndex: number;
+  const getRequiredNodeOutputValue = (outputDependency: {
+    outputIndex: number;
     nodeId: string;
     nodeLabel: string;
   }): Effect.Effect<RuntimeValue, ExecutionError> =>
     Effect.gen(function* () {
-      const value = yield* params.ports.getNodeLaneValue({
-        laneIndex: laneDependency.laneIndex,
-        nodeId: laneDependency.nodeId,
-        runId: params.runId,
+      const value = yield* params.ports.getNodeOutputValue({
+        outputIndex: outputDependency.outputIndex,
+        nodeId: outputDependency.nodeId,
+        executionId: params.executionId,
       });
       if (value) {
         return value;
       }
 
       return yield* Effect.fail(
-        new WorkflowLaneDependencyMissing({
-          laneIndex: laneDependency.laneIndex,
-          nodeId: laneDependency.nodeId,
-          nodeLabel: laneDependency.nodeLabel,
+        new WorkflowOutputDependencyMissing({
+          outputIndex: outputDependency.outputIndex,
+          nodeId: outputDependency.nodeId,
+          nodeLabel: outputDependency.nodeLabel,
         }),
       );
     });
@@ -1054,11 +1093,11 @@ export function executeWorkflow(params: {
     incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
     evaluateNode: EvaluateNode,
     sourceHandleId?: string | null,
-    requestedLaneIndex?: RequestedLaneIndex,
+    requestedOutputIndex?: RequestedOutputIndex,
   ): Effect.Effect<RuntimeValue, ExecutionError> => {
-    const activeLaneIndex = requestedLaneIndex ?? executionLaneIndex;
+    const activeOutputIndex = requestedOutputIndex ?? executionOutputIndex;
     const storedOutput = getWorkflowGeneratorOutputRuntimeValue(node, {
-      laneIndex: activeLaneIndex,
+      outputIndex: activeOutputIndex,
     });
     if (storedOutput && !targetNodeIdSet.has(currentId)) {
       return Effect.gen(function* () {
@@ -1068,15 +1107,15 @@ export function executeWorkflow(params: {
     }
 
     if (
-      typeof activeLaneIndex === "number" &&
-      typeof executionLaneIndex === "number" &&
+      typeof activeOutputIndex === "number" &&
+      typeof executionOutputIndex === "number" &&
       isGeneratorWorkflowNode(node) &&
-      ((activeLaneIndex !== executionLaneIndex &&
+      ((activeOutputIndex !== executionOutputIndex &&
         targetNodeIdSet.has(currentId)) ||
         !targetNodeIdSet.has(currentId))
     ) {
-      return getRequiredNodeLaneValue({
-        laneIndex: activeLaneIndex,
+      return getRequiredNodeOutputValue({
+        outputIndex: activeOutputIndex,
         nodeId: currentId,
         nodeLabel: node.label,
       });
@@ -1084,7 +1123,7 @@ export function executeWorkflow(params: {
 
     const awaitingReviewOutput = getWorkflowGeneratorAwaitingReviewRuntimeValue(
       node,
-      { laneIndex: activeLaneIndex },
+      { outputIndex: activeOutputIndex },
     );
     if (awaitingReviewOutput && !targetNodeIdSet.has(currentId)) {
       return releaseGeneratorOutputAfterReview(currentId, awaitingReviewOutput);
@@ -1099,7 +1138,7 @@ export function executeWorkflow(params: {
           const textValue = buildTextRuntimeValue([
             {
               type: "text",
-              lanes: textValues,
+              items: textValues,
             },
           ]);
 
@@ -1112,8 +1151,8 @@ export function executeWorkflow(params: {
           }
 
           yield* setNodeRuntime(currentId, "success", null);
-          return typeof activeLaneIndex === "number"
-            ? (getRuntimeValueLane(textValue, activeLaneIndex) ?? textValue)
+          return typeof activeOutputIndex === "number"
+            ? (getRuntimeValueOutput(textValue, activeOutputIndex) ?? textValue)
             : (textValue satisfies RuntimeValue);
         });
       case "prompt":
@@ -1123,7 +1162,7 @@ export function executeWorkflow(params: {
             nextPath,
             incomingByTarget,
             evaluateNode,
-            activeLaneIndex,
+            activeOutputIndex,
           );
 
           if (!textValue) {
@@ -1150,25 +1189,26 @@ export function executeWorkflow(params: {
           yield* setNodeRuntime(currentId, "success", null);
           const assetValue = {
             type: node.assetKind,
-            lanes: node.assets.map((asset) => [asset]),
+            items: node.assets.map((asset) => [asset]),
           } satisfies RuntimeValue;
-          return typeof activeLaneIndex === "number"
-            ? (getRuntimeValueLane(assetValue, activeLaneIndex) ?? assetValue)
+          return typeof activeOutputIndex === "number"
+            ? (getRuntimeValueOutput(assetValue, activeOutputIndex) ??
+                assetValue)
             : assetValue;
         });
-      case "laneReorder":
+      case "outputReorder":
         return Effect.gen(function* () {
-          const laneOrder = yield* Effect.try({
+          const outputOrder = yield* Effect.try({
             try: () =>
-              resolveLanePermutation({
-                laneCount:
-                  typeof activeLaneIndex === "number"
-                    ? (params.request.executionLaneFilter?.laneCount ??
-                      getWorkflowPlannedLaneCount(
+              resolveOutputPermutation({
+                outputCount:
+                  typeof activeOutputIndex === "number"
+                    ? (params.request.executionOutputFilter?.outputCount ??
+                      getWorkflowPlannedOutputCount(
                         params.request.document,
                         currentId,
                       ))
-                    : getWorkflowPlannedLaneCount(
+                    : getWorkflowPlannedOutputCount(
                         params.request.document,
                         currentId,
                       ),
@@ -1181,58 +1221,58 @@ export function executeWorkflow(params: {
                 message:
                   cause instanceof Error
                     ? cause.message
-                    : "Invalid lane order.",
+                    : "Invalid output order.",
                 cause,
               }),
           });
-          const inputValue = yield* evaluateLaneReorderInput(
+          const inputValue = yield* evaluateOutputReorderInput(
             state.document,
             currentId,
             nextPath,
             incomingByTarget,
             evaluateNode,
-            activeLaneIndex,
-            laneOrder,
+            activeOutputIndex,
+            outputOrder,
           );
 
           if (inputValue.type !== node.valueType) {
             return yield* Effect.fail(
               new WorkflowValidationError({
                 message:
-                  "Lane Reorder input type does not match its lane type.",
+                  "Output Reorder input type does not match its output type.",
               }),
             );
           }
 
           yield* setNodeRuntime(currentId, "success", null);
-          return typeof activeLaneIndex === "number"
+          return typeof activeOutputIndex === "number"
             ? (inputValue satisfies RuntimeValue)
             : (reorderRuntimeValue(
                 inputValue,
-                laneOrder,
+                outputOrder,
               ) satisfies RuntimeValue);
         });
-      case "laneSelect":
+      case "outputSelect":
         return Effect.gen(function* () {
-          const inputLaneIndex =
-            typeof activeLaneIndex === "number"
-              ? node.indices[activeLaneIndex]
-              : activeLaneIndex;
-          const [inputValue] = yield* evaluateLaneTransformInputs(
+          const inputOutputIndex =
+            typeof activeOutputIndex === "number"
+              ? node.indices[activeOutputIndex]
+              : activeOutputIndex;
+          const [inputValue] = yield* evaluateOutputTransformInputs(
             currentId,
             nextPath,
             incomingByTarget,
             evaluateNode,
-            inputLaneIndex,
+            inputOutputIndex,
           );
           if (!inputValue || inputValue.type !== node.valueType) {
             return yield* Effect.fail(
-              new WorkflowValidationError({ message: "Connect lane input." }),
+              new WorkflowValidationError({ message: "Connect output input." }),
             );
           }
 
           const selectedValue =
-            typeof activeLaneIndex === "number"
+            typeof activeOutputIndex === "number"
               ? inputValue
               : yield* Effect.try({
                   try: () => selectRuntimeValue(inputValue, node.indices),
@@ -1241,75 +1281,75 @@ export function executeWorkflow(params: {
                       message:
                         cause instanceof Error
                           ? cause.message
-                          : "Invalid lane selection.",
+                          : "Invalid output selection.",
                       cause,
                     }),
                 });
           yield* setNodeRuntime(currentId, "success", null);
-          return typeof activeLaneIndex === "number"
+          return typeof activeOutputIndex === "number"
             ? (inputValue satisfies RuntimeValue)
             : (selectedValue satisfies RuntimeValue);
         });
-      case "laneSplit":
+      case "outputSplit":
         return Effect.gen(function* () {
-          const laneIndex = Number(
-            (sourceHandleId ?? "lane-0").replace("lane-", ""),
+          const outputIndex = Number(
+            (sourceHandleId ?? "output-0").replace("output-", ""),
           );
-          const [inputValue] = yield* evaluateLaneTransformInputs(
+          const [inputValue] = yield* evaluateOutputTransformInputs(
             currentId,
             nextPath,
             incomingByTarget,
             evaluateNode,
-            Number.isInteger(laneIndex) ? laneIndex : activeLaneIndex,
+            Number.isInteger(outputIndex) ? outputIndex : activeOutputIndex,
           );
           if (!inputValue || inputValue.type !== node.valueType) {
             return yield* Effect.fail(
-              new WorkflowValidationError({ message: "Connect lane input." }),
+              new WorkflowValidationError({ message: "Connect output input." }),
             );
           }
 
           const splitValue =
-            typeof activeLaneIndex === "number"
+            typeof activeOutputIndex === "number"
               ? inputValue
-              : Number.isInteger(laneIndex)
-                ? splitRuntimeValueLane(inputValue, laneIndex)
+              : Number.isInteger(outputIndex)
+                ? splitRuntimeValueOutput(inputValue, outputIndex)
                 : null;
           if (!splitValue) {
             return yield* Effect.fail(
               new WorkflowValidationError({
-                message: "Lane split output is empty.",
+                message: "Output split output is empty.",
               }),
             );
           }
 
           yield* setNodeRuntime(currentId, "success", null);
-          return typeof activeLaneIndex === "number"
+          return typeof activeOutputIndex === "number"
             ? (inputValue satisfies RuntimeValue)
             : (splitValue satisfies RuntimeValue);
         });
-      case "laneMerge":
-      case "laneZipAlign":
+      case "outputMerge":
+      case "outputZipAlign":
         return Effect.gen(function* () {
           const incomingEdges = getIncomingEdgesForHandle(
             incomingByTarget,
             currentId,
-            LANE_TRANSFORM_INPUT_HANDLE_ID,
+            OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
           );
           const mergeRequest =
-            typeof activeLaneIndex === "number" && node.kind === "laneMerge"
-              ? getLaneMergeSourceRequest({
+            typeof activeOutputIndex === "number" && node.kind === "outputMerge"
+              ? getOutputMergeSourceRequest({
                   document: params.request.document,
                   incomingEdges,
-                  requestedLaneIndex: activeLaneIndex,
+                  requestedOutputIndex: activeOutputIndex,
                 })
               : null;
-          const laneValues = mergeRequest
+          const outputValues = mergeRequest
             ? Effect.forEach([mergeRequest], (request) =>
                 evaluateNode(
                   request.edge.source,
                   nextPath,
                   request.edge.sourceHandle,
-                  request.laneIndex,
+                  request.outputIndex,
                 ),
               )
             : Effect.forEach(
@@ -1319,25 +1359,25 @@ export function executeWorkflow(params: {
                     edge.source,
                     nextPath,
                     edge.sourceHandle,
-                    typeof activeLaneIndex === "number" &&
-                      node.kind === "laneZipAlign" &&
+                    typeof activeOutputIndex === "number" &&
+                      node.kind === "outputZipAlign" &&
                       node.mode === "broadcast"
-                      ? getBroadcastLaneIndex(
+                      ? getBroadcastOutputIndex(
                           params.request.document,
                           edge.source,
                           edge.sourceHandle,
-                          activeLaneIndex,
+                          activeOutputIndex,
                         )
-                      : activeLaneIndex,
+                      : activeOutputIndex,
                   ),
                 { concurrency: "unbounded" },
               );
-          const values = (yield* laneValues).filter(
+          const values = (yield* outputValues).filter(
             (value) => value.type === node.valueType,
           );
           const nextValue = yield* Effect.try({
             try: () =>
-              node.kind === "laneMerge"
+              node.kind === "outputMerge"
                 ? mergeRuntimeValues(values)
                 : zipAlignRuntimeValues(values, {
                     broadcast: node.mode === "broadcast",
@@ -1347,13 +1387,15 @@ export function executeWorkflow(params: {
                 message:
                   cause instanceof Error
                     ? cause.message
-                    : "Invalid lane transform.",
+                    : "Invalid output transform.",
                 cause,
               }),
           });
           if (!nextValue) {
             return yield* Effect.fail(
-              new WorkflowValidationError({ message: "Connect lane inputs." }),
+              new WorkflowValidationError({
+                message: "Connect output inputs.",
+              }),
             );
           }
 
@@ -1379,7 +1421,7 @@ export function executeWorkflow(params: {
             },
             incomingByTarget,
             evaluateNode,
-            activeLaneIndex,
+            activeOutputIndex,
           )) as TextRuntimeValue | null;
           const mediaPlan = yield* coerceMediaInputBatches(
             state.document,
@@ -1388,7 +1430,7 @@ export function executeWorkflow(params: {
             "image",
             incomingByTarget,
             evaluateNode,
-            activeLaneIndex,
+            activeOutputIndex,
           );
           const batchPlan = yield* coerceGeneratorExecutionBatchPlan({
             mediaPlan,
@@ -1409,65 +1451,78 @@ export function executeWorkflow(params: {
           const responses = yield* Effect.forEach(
             yield* getExecutableGeneratorBatches(
               batchPlan.batches,
-              activeLaneIndex,
+              activeOutputIndex,
             ),
-            ({ batch, laneIndex }) =>
+            ({ batch, outputIndex }) =>
               Effect.gen(function* () {
-                const attempt = getGeneratorOutputAttempt(node, laneIndex);
+                const attempt = getGeneratorOutputAttempt(node, outputIndex);
                 const inputHash = getGeneratorOutputInputHash({
-                  laneIndex,
+                  outputIndex,
                   node,
                   promptSnapshot,
                 });
-                const cached = yield* params.ports.getNodeLaneOutput({
+                const cached = yield* params.ports.getNodeOutput({
                   attempt,
                   inputHash,
-                  laneIndex,
+                  outputIndex,
                   nodeId: currentId,
-                  runId: params.runId,
+                  executionId: params.executionId,
                 });
                 const response =
                   cached?.value.type === "image"
                     ? {
-                        assets: cached.value.lanes[0] ?? [],
+                        assets: cached.value.items[0] ?? [],
+                        costCredits: 0,
                         skipped: true as boolean,
                       }
-                    : yield* params.ports
-                        .generateImage(
+                    : yield* Effect.gen(function* () {
+                        const idempotencyKey = getGeneratorOutputIdempotencyKey(
+                          {
+                            attempt,
+                            inputHash,
+                            outputIndex,
+                            node,
+                            executionId: params.executionId,
+                          },
+                        );
+                        const output = yield* params.ports.generateImage(
                           buildImageGenerationRequest({
-                            idempotencyKey: getGeneratorOutputIdempotencyKey({
-                              attempt,
-                              inputHash,
-                              laneIndex,
-                              node,
-                              runId: params.runId,
-                            }),
+                            idempotencyKey,
                             settings: node,
                             imageInputsByHandle: batch.mediaInputsByHandle,
                             prompt: batch.prompt,
                           }),
-                        )
-                        .pipe(
-                          Effect.map((output) => ({
-                            ...output,
-                            skipped: false as boolean,
-                          })),
                         );
+                        const costCredits = yield* chargeOutputCost(
+                          params.ports,
+                          {
+                            amount: getImageGeneratorModelCreditCost(
+                              node.model,
+                            ),
+                            attempt,
+                            idempotencyKey,
+                            inputHash,
+                            nodeId: currentId,
+                            outputIndex,
+                          },
+                        );
+                        return { ...output, costCredits, skipped: false };
+                      });
 
                 yield* updateDocumentNode(currentId, (currentNode) => {
                   if (currentNode.kind !== "imageGenerator") {
                     return currentNode;
                   }
 
-                  const outputLanes = replaceMediaOutputLane(
-                    currentNode.outputLanes,
-                    laneIndex,
+                  const outputs = replaceMediaOutputOutput(
+                    currentNode.outputs,
+                    outputIndex,
                     response.assets,
                   );
 
                   return ImageGeneratorService.setExecutionResult(currentNode, {
                     lastPrompt: promptSnapshot,
-                    outputLanes,
+                    outputs,
                   });
                 });
 
@@ -1476,35 +1531,34 @@ export function executeWorkflow(params: {
             { concurrency: "unbounded" },
           );
 
-          finalCostCredits +=
-            responses.filter((response) => !response.skipped).length *
-            getImageGeneratorModelCreditCost(node.model);
-
-          const responseOutputLanes = responses.map(
-            (response) => response.assets,
+          finalCostCredits += responses.reduce(
+            (totalCost, response) => totalCost + response.costCredits,
+            0,
           );
+
+          const responseOutputs = responses.map((response) => response.assets);
           yield* updateDocumentNode(currentId, (currentNode) => {
             if (currentNode.kind !== "imageGenerator") {
               return currentNode;
             }
 
-            const outputLanes =
-              executionLaneIndex !== null
-                ? replaceMediaOutputLane(
-                    currentNode.outputLanes,
-                    activeLaneIndex ?? executionLaneIndex,
-                    responseOutputLanes[0] ?? [],
+            const outputs =
+              executionOutputIndex !== null
+                ? replaceMediaOutputOutput(
+                    currentNode.outputs,
+                    activeOutputIndex ?? executionOutputIndex,
+                    responseOutputs[0] ?? [],
                   )
-                : responseOutputLanes;
+                : responseOutputs;
 
             return ImageGeneratorService.setExecutionResult(currentNode, {
               lastPrompt: promptSnapshot,
-              outputLanes,
+              outputs,
             });
           });
           return yield* releaseGeneratorOutputAfterReview(currentId, {
             type: "image",
-            lanes: responseOutputLanes,
+            items: responseOutputs,
           } satisfies RuntimeValue);
         });
       case "videoGenerator":
@@ -1526,7 +1580,7 @@ export function executeWorkflow(params: {
             },
             incomingByTarget,
             evaluateNode,
-            activeLaneIndex,
+            activeOutputIndex,
           )) as TextRuntimeValue | null;
           const mediaPlan = yield* coerceMediaInputBatches(
             state.document,
@@ -1535,7 +1589,7 @@ export function executeWorkflow(params: {
             "image",
             incomingByTarget,
             evaluateNode,
-            activeLaneIndex,
+            activeOutputIndex,
           );
           const batchPlan = yield* coerceGeneratorExecutionBatchPlan({
             mediaPlan,
@@ -1556,65 +1610,78 @@ export function executeWorkflow(params: {
           const responses = yield* Effect.forEach(
             yield* getExecutableGeneratorBatches(
               batchPlan.batches,
-              activeLaneIndex,
+              activeOutputIndex,
             ),
-            ({ batch, laneIndex }) =>
+            ({ batch, outputIndex }) =>
               Effect.gen(function* () {
-                const attempt = getGeneratorOutputAttempt(node, laneIndex);
+                const attempt = getGeneratorOutputAttempt(node, outputIndex);
                 const inputHash = getGeneratorOutputInputHash({
-                  laneIndex,
+                  outputIndex,
                   node,
                   promptSnapshot,
                 });
-                const cached = yield* params.ports.getNodeLaneOutput({
+                const cached = yield* params.ports.getNodeOutput({
                   attempt,
                   inputHash,
-                  laneIndex,
+                  outputIndex,
                   nodeId: currentId,
-                  runId: params.runId,
+                  executionId: params.executionId,
                 });
                 const response =
                   cached?.value.type === "video"
                     ? {
-                        assets: cached.value.lanes[0] ?? [],
+                        assets: cached.value.items[0] ?? [],
+                        costCredits: 0,
                         skipped: true as boolean,
                       }
-                    : yield* params.ports
-                        .generateVideo(
+                    : yield* Effect.gen(function* () {
+                        const idempotencyKey = getGeneratorOutputIdempotencyKey(
+                          {
+                            attempt,
+                            inputHash,
+                            outputIndex,
+                            node,
+                            executionId: params.executionId,
+                          },
+                        );
+                        const output = yield* params.ports.generateVideo(
                           buildVideoGenerationRequest({
-                            idempotencyKey: getGeneratorOutputIdempotencyKey({
-                              attempt,
-                              inputHash,
-                              laneIndex,
-                              node,
-                              runId: params.runId,
-                            }),
+                            idempotencyKey,
                             settings: node,
                             imageInputsByHandle: batch.mediaInputsByHandle,
                             prompt: batch.prompt,
                           }),
-                        )
-                        .pipe(
-                          Effect.map((output) => ({
-                            ...output,
-                            skipped: false as boolean,
-                          })),
                         );
+                        const costCredits = yield* chargeOutputCost(
+                          params.ports,
+                          {
+                            amount: getVideoGeneratorModelCreditCost(
+                              node.model,
+                            ),
+                            attempt,
+                            idempotencyKey,
+                            inputHash,
+                            nodeId: currentId,
+                            outputIndex,
+                          },
+                        );
+                        return { ...output, costCredits, skipped: false };
+                      });
 
                 yield* updateDocumentNode(currentId, (currentNode) => {
                   if (currentNode.kind !== "videoGenerator") {
                     return currentNode;
                   }
 
-                  const outputLanes = replaceMediaOutputLane(
-                    currentNode.outputLanes,
-                    laneIndex,
+                  const outputs = replaceMediaOutputOutput(
+                    currentNode.outputs,
+                    outputIndex,
                     response.assets,
                   );
 
                   return VideoGeneratorService.setExecutionResult(currentNode, {
                     lastPrompt: promptSnapshot,
-                    outputLanes,
+                    outputs,
                   });
                 });
 
@@ -1623,36 +1690,35 @@ export function executeWorkflow(params: {
             { concurrency: "unbounded" },
           );
 
-          finalCostCredits +=
-            responses.filter((response) => !response.skipped).length *
-            getVideoGeneratorModelCreditCost(node.model);
-
-          const responseOutputLanes = responses.map(
-            (response) => response.assets,
+          finalCostCredits += responses.reduce(
+            (totalCost, response) => totalCost + response.costCredits,
+            0,
           );
+
+          const responseOutputs = responses.map((response) => response.assets);
 
           yield* updateDocumentNode(currentId, (currentNode) => {
             if (currentNode.kind !== "videoGenerator") {
               return currentNode;
             }
 
-            const outputLanes =
-              executionLaneIndex !== null
-                ? replaceMediaOutputLane(
-                    currentNode.outputLanes,
-                    activeLaneIndex ?? executionLaneIndex,
-                    responseOutputLanes[0] ?? [],
+            const outputs =
+              executionOutputIndex !== null
+                ? replaceMediaOutputOutput(
+                    currentNode.outputs,
+                    activeOutputIndex ?? executionOutputIndex,
+                    responseOutputs[0] ?? [],
                   )
-                : responseOutputLanes;
+                : responseOutputs;
 
             return VideoGeneratorService.setExecutionResult(currentNode, {
               lastPrompt: promptSnapshot,
-              outputLanes,
+              outputs,
             });
           });
           return yield* releaseGeneratorOutputAfterReview(currentId, {
             type: "video",
-            lanes: responseOutputLanes,
+            items: responseOutputs,
           } satisfies RuntimeValue);
         });
       case "llmGenerator":
@@ -1670,7 +1736,7 @@ export function executeWorkflow(params: {
             },
             incomingByTarget,
             evaluateNode,
-            activeLaneIndex,
+            activeOutputIndex,
           )) as TextRuntimeValue;
           const systemPrompt = yield* coerceTextInputBatch(
             state.document,
@@ -1683,7 +1749,7 @@ export function executeWorkflow(params: {
             },
             incomingByTarget,
             evaluateNode,
-            activeLaneIndex,
+            activeOutputIndex,
           );
           const mediaPlan = yield* coerceMediaInputBatches(
             state.document,
@@ -1692,7 +1758,7 @@ export function executeWorkflow(params: {
             "image",
             incomingByTarget,
             evaluateNode,
-            activeLaneIndex,
+            activeOutputIndex,
           );
           const batchPlan = yield* coerceGeneratorExecutionBatchPlan({
             mediaPlan,
@@ -1717,73 +1783,86 @@ export function executeWorkflow(params: {
           const responses = yield* Effect.forEach(
             yield* getExecutableGeneratorBatches(
               batchPlan.batches,
-              activeLaneIndex,
+              activeOutputIndex,
             ),
-            ({ batch, laneIndex }) =>
+            ({ batch, outputIndex }) =>
               Effect.gen(function* () {
-                const attempt = getGeneratorOutputAttempt(node, laneIndex);
+                const attempt = getGeneratorOutputAttempt(node, outputIndex);
                 const inputHash = getGeneratorOutputInputHash({
-                  laneIndex,
+                  outputIndex,
                   node,
                   promptSnapshot,
                   systemPromptSnapshot,
                 });
-                const cached = yield* params.ports.getNodeLaneOutput({
+                const cached = yield* params.ports.getNodeOutput({
                   attempt,
                   inputHash,
-                  laneIndex,
+                  outputIndex,
                   nodeId: currentId,
-                  runId: params.runId,
+                  executionId: params.executionId,
                 });
                 const response =
                   cached?.value.type === "text"
                     ? {
                         costCredits: 0,
-                        responseText: cached.value.lanes[0] ?? "",
+                        responseText: cached.value.items[0] ?? "",
                         skipped: true as boolean,
                       }
-                    : yield* params.ports
-                        .generateLlm(
+                    : yield* Effect.gen(function* () {
+                        const idempotencyKey = getGeneratorOutputIdempotencyKey(
+                          {
+                            attempt,
+                            inputHash,
+                            outputIndex,
+                            node,
+                            executionId: params.executionId,
+                          },
+                        );
+                        const output = yield* params.ports.generateLlm(
                           buildLlmGenerationRequest({
                             imageInputsByHandle: batch.mediaInputsByHandle,
-                            idempotencyKey: getGeneratorOutputIdempotencyKey({
-                              attempt,
-                              inputHash,
-                              laneIndex,
-                              node,
-                              runId: params.runId,
-                            }),
+                            idempotencyKey,
                             prompt: batch.prompt,
                             settings: node,
                             systemPrompt: batch.systemPrompt,
                           }),
-                        )
-                        .pipe(
-                          Effect.map((output) => ({
-                            costCredits: calculateLlmUsageCreditCost({
+                        );
+                        const costCredits = yield* chargeOutputCost(
+                          params.ports,
+                          {
+                            amount: calculateLlmUsageCreditCost({
                               model: output.model,
                               usage: output.usage,
                             }),
-                            responseText: output.responseText,
-                            skipped: false as boolean,
-                          })),
+                            attempt,
+                            idempotencyKey,
+                            inputHash,
+                            nodeId: currentId,
+                            outputIndex,
+                          },
                         );
+                        return {
+                          costCredits,
+                          responseText: output.responseText,
+                          skipped: false,
+                        };
+                      });
 
                 yield* updateDocumentNode(currentId, (currentNode) => {
                   if (currentNode.kind !== "llmGenerator") {
                     return currentNode;
                   }
 
-                  const outputLanes = replaceTextOutputLane(
-                    currentNode.outputLanes,
-                    laneIndex,
+                  const outputs = replaceTextOutputOutput(
+                    currentNode.outputs,
+                    outputIndex,
                     response.responseText.trim(),
                   );
 
                   return LlmGeneratorService.setExecutionResult(currentNode, {
                     lastPrompt: promptSnapshot,
                     lastSystemPrompt: systemPromptSnapshot,
-                    outputLanes,
+                    outputs,
                   });
                 });
 
@@ -1802,27 +1881,27 @@ export function executeWorkflow(params: {
               return currentNode;
             }
 
-            const responseOutputLanes = responses.map((response) =>
+            const responseOutputs = responses.map((response) =>
               response.responseText.trim(),
             );
-            const outputLanes =
-              executionLaneIndex !== null
-                ? replaceTextOutputLane(
-                    currentNode.outputLanes,
-                    activeLaneIndex ?? executionLaneIndex,
-                    responseOutputLanes[0] ?? "",
+            const outputs =
+              executionOutputIndex !== null
+                ? replaceTextOutputOutput(
+                    currentNode.outputs,
+                    activeOutputIndex ?? executionOutputIndex,
+                    responseOutputs[0] ?? "",
                   )
-                : responseOutputLanes;
+                : responseOutputs;
 
             return LlmGeneratorService.setExecutionResult(currentNode, {
               lastPrompt: promptSnapshot,
               lastSystemPrompt: systemPromptSnapshot,
-              outputLanes,
+              outputs,
             });
           });
           return yield* releaseGeneratorOutputAfterReview(currentId, {
             type: "text",
-            lanes: responses.map((response) => response.responseText.trim()),
+            items: responses.map((response) => response.responseText.trim()),
           } satisfies RuntimeValue);
         });
     }
@@ -1835,7 +1914,7 @@ export function executeWorkflow(params: {
     incomingByTarget: ReturnType<typeof buildIncomingByTarget>,
     pending: PendingMap,
     sourceHandleId?: string | null,
-    requestedLaneIndex?: RequestedLaneIndex,
+    requestedOutputIndex?: RequestedOutputIndex,
   ): Effect.Effect<RuntimeValue, ExecutionError> =>
     Effect.suspend(() => {
       if (path.has(currentId)) {
@@ -1846,7 +1925,7 @@ export function executeWorkflow(params: {
         );
       }
 
-      const pendingKey = `${currentId}:${sourceHandleId ?? ""}:${requestedLaneIndex ?? "all"}`;
+      const pendingKey = `${currentId}:${sourceHandleId ?? ""}:${requestedOutputIndex ?? "all"}`;
       const cached = pending.get(pendingKey);
       if (cached) {
         return Deferred.await(cached);
@@ -1856,7 +1935,7 @@ export function executeWorkflow(params: {
         nextId,
         nextPath,
         nextSourceHandleId,
-        nextRequestedLaneIndex,
+        nextRequestedOutputIndex,
       ) =>
         evaluateNode(
           nextId,
@@ -1865,7 +1944,7 @@ export function executeWorkflow(params: {
           incomingByTarget,
           pending,
           nextSourceHandleId,
-          nextRequestedLaneIndex,
+          nextRequestedOutputIndex,
         );
 
       return Effect.gen(function* () {
@@ -1893,7 +1972,7 @@ export function executeWorkflow(params: {
               incomingByTarget,
               recursiveEvaluateNode,
               sourceHandleId,
-              requestedLaneIndex,
+              requestedOutputIndex,
             );
           }).pipe(
             Effect.tapError((error) =>
@@ -1925,15 +2004,15 @@ export function executeWorkflow(params: {
       targetNodeIds,
     );
 
-    state.status = params.request.reviewLaneFilter
+    state.status = params.request.reviewOutputFilter
       ? "waiting_for_review"
       : "running";
     state.runtime = {
       ...state.runtime,
-      activity: params.request.reviewLaneFilter
-        ? `Continuing lane ${params.request.reviewLaneFilter.laneIndex + 1} after review...`
-        : params.request.executionLaneFilter
-          ? `Running lane ${params.request.executionLaneFilter.laneIndex + 1} of ${params.request.executionLaneFilter.laneCount}...`
+      activity: params.request.reviewOutputFilter
+        ? `Continuing output ${params.request.reviewOutputFilter.outputIndex + 1} after review...`
+        : params.request.executionOutputFilter
+          ? `Running output ${params.request.executionOutputFilter.outputIndex + 1} of ${params.request.executionOutputFilter.outputCount}...`
           : "Running workflow...",
       startedAt: new Date().toISOString(),
     };
@@ -1955,18 +2034,21 @@ export function executeWorkflow(params: {
       },
     );
 
-    const reviewLaneFilter = params.request.reviewLaneFilter;
+    const reviewOutputFilter = params.request.reviewOutputFilter;
     if (
-      reviewLaneFilter &&
-      !isReviewNodeFullyApproved(state.document, reviewLaneFilter.reviewNodeId)
+      reviewOutputFilter &&
+      !isReviewNodeFullyApproved(
+        state.document,
+        reviewOutputFilter.reviewNodeId,
+      )
     ) {
       state.status = "waiting_for_review";
       state.runtime = {
         ...state.runtime,
-        activity: `Lane ${reviewLaneFilter.laneIndex + 1} continued. Waiting for remaining reviewed lanes.`,
+        activity: `Output ${reviewOutputFilter.outputIndex + 1} continued. Waiting for remaining reviewed outputs.`,
         nodeStateById: {
           ...state.runtime.nodeStateById,
-          [reviewLaneFilter.reviewNodeId]: {
+          [reviewOutputFilter.reviewNodeId]: {
             error: null,
             status: "waiting",
           },
@@ -1975,7 +2057,7 @@ export function executeWorkflow(params: {
       yield* publish();
 
       return buildWorkflowExecutionStatusResponse({
-        runId: params.runId,
+        executionId: params.executionId,
         targetNodeIds: artifactNodeIds,
         accruedCostCredits: finalCostCredits,
         projectDocumentRevision,
@@ -1999,21 +2081,21 @@ export function executeWorkflow(params: {
             document: state.document,
             finalCostCredits,
             request: params.request,
-            runId: params.runId,
+            executionId: params.executionId,
             targetNodeIds: artifactNodeIds,
           })
         : Effect.succeed(projectDocumentRevision)) ?? projectDocumentRevision;
 
     state.runtime = {
       ...state.runtime,
-      activity: "Workflow run finished.",
+      activity: "Workflow execution finished.",
       error: null,
       finishedAt: new Date().toISOString(),
     };
     yield* setStatus("success");
 
     return buildWorkflowExecutionStatusResponse({
-      runId: params.runId,
+      executionId: params.executionId,
       targetNodeIds: artifactNodeIds,
       accruedCostCredits: finalCostCredits,
       projectDocumentRevision,
@@ -2032,7 +2114,7 @@ export function executeWorkflow(params: {
       error instanceof WorkflowReviewPause
         ? Effect.succeed(
             buildWorkflowExecutionStatusResponse({
-              runId: params.runId,
+              executionId: params.executionId,
               targetNodeIds: artifactNodeIds,
               accruedCostCredits: finalCostCredits,
               projectDocumentRevision,

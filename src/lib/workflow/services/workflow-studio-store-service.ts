@@ -21,10 +21,10 @@ export class WorkflowStudioStoreService extends Context.Tag(
     readonly applyServerExecutionState: (
       executionState: WorkflowExecutionStatusResponse,
     ) => Effect.Effect<void>;
-    readonly clearActiveRunId: () => Effect.Effect<void>;
+    readonly clearActiveExecutionId: () => Effect.Effect<void>;
     readonly getWorkflowSnapshot: () => Effect.Effect<WorkflowStudioStoreSnapshot>;
     readonly setActivity: (activity: string) => Effect.Effect<void>;
-    readonly setActiveRunId: (runId: string) => Effect.Effect<void>;
+    readonly setActiveExecutionId: (executionId: string) => Effect.Effect<void>;
     readonly setExecutionStreaming: (
       isStreaming: boolean,
     ) => Effect.Effect<void>;
@@ -46,9 +46,9 @@ export class WorkflowStudioStoreService extends Context.Tag(
           .getState()
           .applyServerExecutionState(executionState);
       }),
-    clearActiveRunId: () =>
+    clearActiveExecutionId: () =>
       Effect.sync(() => {
-        useWorkflowStudioStore.getState().clearActiveRunId();
+        useWorkflowStudioStore.getState().clearActiveExecutionId();
       }),
     getWorkflowSnapshot: () =>
       Effect.sync(() => {
@@ -60,9 +60,9 @@ export class WorkflowStudioStoreService extends Context.Tag(
       Effect.sync(() => {
         useWorkflowStudioStore.getState().setActivity(activity);
       }),
-    setActiveRunId: (runId) =>
+    setActiveExecutionId: (executionId) =>
       Effect.sync(() => {
-        useWorkflowStudioStore.getState().setActiveRunId(runId);
+        useWorkflowStudioStore.getState().setActiveExecutionId(executionId);
       }),
     setExecutionStreaming: (isStreaming) =>
       Effect.sync(() => {

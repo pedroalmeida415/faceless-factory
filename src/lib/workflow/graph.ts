@@ -6,39 +6,39 @@ import type {
   WorkflowDocumentEdge,
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
-import { getRuntimeValueLane } from "~/lib/workflow/execution/output-lanes";
+import { getRuntimeValueOutput } from "~/lib/workflow/execution/node-outputs";
 import {
   type GeneratorHandleDefinition,
   getImageGeneratorHandleDefinitions,
   getVideoGeneratorHandleDefinitions,
 } from "~/lib/workflow/generator-models";
-import {
-  type MediaRuntimeValue,
-  mergeRuntimeValues,
-  type RuntimeValue,
-  reorderRuntimeValue,
-  resolveLanePermutation,
-  selectRuntimeValue,
-  splitRuntimeValueLane,
-  type TextRuntimeValue,
-  zipAlignRuntimeValues,
-} from "~/lib/workflow/lanes";
 import { getLlmGeneratorHandleDefinitions } from "~/lib/workflow/llm-models";
 import {
-  getLaneSplitOutputHandleId,
   getNodeOutputHandleId,
-  LANE_REORDER_INPUT_HANDLE_ID,
-  LANE_REORDER_OUTPUT_HANDLE_ID,
-  LANE_TRANSFORM_INPUT_HANDLE_ID,
-  LANE_TRANSFORM_OUTPUT_HANDLE_ID,
+  getOutputSplitOutputHandleId,
+  OUTPUT_REORDER_INPUT_HANDLE_ID,
+  OUTPUT_REORDER_OUTPUT_HANDLE_ID,
+  OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
+  OUTPUT_TRANSFORM_OUTPUT_HANDLE_ID,
   PROMPT_VARIABLE_HANDLE_COLOR,
   PROMPT_VARIABLE_PATTERN,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
 import {
-  getApprovedReviewLaneRuntimeValue,
+  getApprovedReviewOutputRuntimeValue,
   getApprovedReviewRuntimeValue,
 } from "~/lib/workflow/review-state";
+import {
+  type MediaRuntimeValue,
+  mergeRuntimeValues,
+  type RuntimeValue,
+  reorderRuntimeValue,
+  resolveOutputPermutation,
+  selectRuntimeValue,
+  splitRuntimeValueOutput,
+  type TextRuntimeValue,
+  zipAlignRuntimeValues,
+} from "~/lib/workflow/runtime-values";
 import { isGeneratorNodeKind, type WorkflowAsset } from "~/lib/workflow/types";
 
 export type { MediaRuntimeValue, RuntimeValue, TextRuntimeValue };
@@ -58,7 +58,7 @@ type MediaBatchPlan = {
 };
 
 type TextBatchPlan = {
-  lanes: string[];
+  items: string[];
   iterations: number;
 };
 
@@ -155,26 +155,26 @@ function joinTextValues(values: readonly string[]) {
   return normalizeTextValues(values).join("\n\n").trim();
 }
 
-export function getAlignedLaneCount(counts: readonly number[]) {
-  const laneCounts = counts.filter((count) => count > 0);
-  if (!laneCounts.length) {
+export function getAlignedOutputCount(counts: readonly number[]) {
+  const outputCounts = counts.filter((count) => count > 0);
+  if (!outputCounts.length) {
     return 1;
   }
 
-  const laneCount = Math.max(...laneCounts);
-  const mismatchedCount = laneCounts.find(
-    (count) => count !== 1 && count !== laneCount,
+  const outputCount = Math.max(...outputCounts);
+  const mismatchedCount = outputCounts.find(
+    (count) => count !== 1 && count !== outputCount,
   );
 
   if (mismatchedCount !== undefined) {
-    throw new Error("Connected input lane counts do not match.");
+    throw new Error("Connected input output item counts do not match.");
   }
 
-  return laneCount;
+  return outputCount;
 }
 
-function getBroadcastLane<T>(lanes: readonly T[], index: number) {
-  return lanes.length === 1 ? lanes[0] : lanes[index];
+function getBroadcastOutput<T>(items: readonly T[], index: number) {
+  return items.length === 1 ? items[0] : items[index];
 }
 
 function toTextRuntimeValue(
@@ -185,7 +185,7 @@ function toTextRuntimeValue(
   return normalizedValues.length
     ? {
         type: "text",
-        lanes: normalizedValues,
+        items: normalizedValues,
       }
     : null;
 }
@@ -193,37 +193,39 @@ function toTextRuntimeValue(
 export function buildTextBatchPlan(
   values: readonly TextRuntimeValue[],
 ): TextBatchPlan {
-  const laneGroups = values.map((value) => normalizeTextValues(value.lanes));
+  const outputGroups = values.map((value) => normalizeTextValues(value.items));
 
-  if (!laneGroups.length) {
+  if (!outputGroups.length) {
     return {
-      lanes: [],
+      items: [],
       iterations: 1,
     };
   }
 
-  for (const lanes of laneGroups) {
-    if (!lanes.length) {
+  for (const outputs of outputGroups) {
+    if (!outputs.length) {
       throw new Error("Connected text batch is empty.");
     }
   }
 
-  const laneCount = getAlignedLaneCount(
-    laneGroups.map((lanes) => lanes.length),
+  const outputCount = getAlignedOutputCount(
+    outputGroups.map((outputs) => outputs.length),
   );
-  const resolvedLanes = Array.from({ length: laneCount }, (_, index) =>
+  const resolvedOutputs = Array.from({ length: outputCount }, (_, index) =>
     joinTextValues(
-      laneGroups.flatMap((lanes) => getBroadcastLane(lanes, index) ?? []),
+      outputGroups.flatMap(
+        (outputs) => getBroadcastOutput(outputs, index) ?? [],
+      ),
     ),
   ).filter(Boolean);
 
-  if (!resolvedLanes.length) {
+  if (!resolvedOutputs.length) {
     throw new Error("Connected text batch is empty.");
   }
 
   return {
-    lanes: resolvedLanes,
-    iterations: resolvedLanes.length,
+    items: resolvedOutputs,
+    iterations: resolvedOutputs.length,
   };
 }
 
@@ -231,7 +233,7 @@ export function buildTextRuntimeValue(
   values: readonly TextRuntimeValue[],
 ): TextRuntimeValue | null {
   const plan = buildTextBatchPlan(values);
-  return toTextRuntimeValue(plan.lanes);
+  return toTextRuntimeValue(plan.items);
 }
 
 export function getPromptNodeReferencedVariableKeys(node: PromptWorkflowNode) {
@@ -285,31 +287,31 @@ export function resolvePromptNodeTextBatch(
     resolvedByKey.set(key, resolveVariableValue(key));
   }
 
-  const laneEntries = Array.from(resolvedByKey.entries()).flatMap(
+  const outputEntries = Array.from(resolvedByKey.entries()).flatMap(
     ([key, value]) => {
       if (!value) {
         return [];
       }
 
-      const lanes = normalizeTextValues(value.lanes);
-      if (!lanes.length) {
+      const outputs = normalizeTextValues(value.items);
+      if (!outputs.length) {
         return null;
       }
 
-      return [[key, lanes] as const];
+      return [[key, outputs] as const];
     },
   );
-  if (laneEntries.some((entry) => entry === null)) {
+  if (outputEntries.some((entry) => entry === null)) {
     return null;
   }
 
-  const textLaneEntries = laneEntries.filter(
+  const textOutputEntries = outputEntries.filter(
     (entry): entry is readonly [string, string[]] => entry !== null,
   );
-  const laneCount = getAlignedLaneCount(
-    textLaneEntries.map(([, lanes]) => lanes.length),
+  const outputCount = getAlignedOutputCount(
+    textOutputEntries.map(([, outputs]) => outputs.length),
   );
-  const resolvedPrompts = Array.from({ length: laneCount }, (_, index) => {
+  const resolvedPrompts = Array.from({ length: outputCount }, (_, index) => {
     const prompt = node.prompt.replace(
       PROMPT_VARIABLE_PATTERN,
       (match, key) => {
@@ -317,10 +319,10 @@ export function resolvePromptNodeTextBatch(
           return match;
         }
 
-        const lanes = textLaneEntries.find(
+        const outputs = textOutputEntries.find(
           ([entryKey]) => entryKey === key,
         )?.[1];
-        return lanes ? (getBroadcastLane(lanes, index) ?? "") : "";
+        return outputs ? (getBroadcastOutput(outputs, index) ?? "") : "";
       },
     );
     const resolvedPrompt = prompt.trim();
@@ -378,7 +380,7 @@ function resolveRuntimePromptNodeText(
   );
 }
 
-export function getLaneReorderInputValue(
+export function getOutputReorderInputValue(
   document: WorkflowDocument,
   nodeId: string,
   path: ReadonlySet<string> = new Set(),
@@ -388,7 +390,7 @@ export function getLaneReorderInputValue(
   const incomingEdges = getIncomingEdgesForHandle(
     incomingByTarget,
     nodeId,
-    LANE_REORDER_INPUT_HANDLE_ID,
+    OUTPUT_REORDER_INPUT_HANDLE_ID,
   );
   const edge = incomingEdges[0];
   if (!edge || incomingEdges.length !== 1) {
@@ -405,7 +407,7 @@ export function getLaneReorderInputValue(
   );
 }
 
-export function getLaneTransformInputValue(
+export function getOutputTransformInputValue(
   document: WorkflowDocument,
   nodeId: string,
   path: ReadonlySet<string> = new Set(),
@@ -415,7 +417,7 @@ export function getLaneTransformInputValue(
   const incomingEdges = getIncomingEdgesForHandle(
     incomingByTarget,
     nodeId,
-    LANE_TRANSFORM_INPUT_HANDLE_ID,
+    OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
   );
   const edge = incomingEdges[0];
   if (!edge || incomingEdges.length !== 1) {
@@ -432,7 +434,7 @@ export function getLaneTransformInputValue(
   );
 }
 
-function getLaneTransformInputValues(
+function getOutputTransformInputValues(
   document: WorkflowDocument,
   nodeId: string,
   handleId: string,
@@ -455,14 +457,14 @@ function getLaneTransformInputValues(
   );
 }
 
-function resolveLaneReorderRuntimeValue(
+function resolveOutputReorderRuntimeValue(
   document: WorkflowDocument,
-  node: Extract<WorkflowDocumentNode, { kind: "laneReorder" }>,
+  node: Extract<WorkflowDocumentNode, { kind: "outputReorder" }>,
   path: ReadonlySet<string>,
   nodeMap: NodeMap,
   incomingByTarget: IncomingByTarget,
 ): RuntimeValue | null {
-  const inputValue = getLaneReorderInputValue(
+  const inputValue = getOutputReorderInputValue(
     document,
     node.id,
     path,
@@ -475,8 +477,8 @@ function resolveLaneReorderRuntimeValue(
 
   return reorderRuntimeValue(
     inputValue,
-    resolveLanePermutation({
-      laneCount: inputValue.lanes.length,
+    resolveOutputPermutation({
+      outputCount: inputValue.items.length,
       mode: node.mode,
       order: node.order,
       shift: node.shift,
@@ -484,14 +486,14 @@ function resolveLaneReorderRuntimeValue(
   );
 }
 
-function resolveLaneSelectRuntimeValue(
+function resolveOutputSelectRuntimeValue(
   document: WorkflowDocument,
-  node: Extract<WorkflowDocumentNode, { kind: "laneSelect" }>,
+  node: Extract<WorkflowDocumentNode, { kind: "outputSelect" }>,
   path: ReadonlySet<string>,
   nodeMap: NodeMap,
   incomingByTarget: IncomingByTarget,
 ): RuntimeValue | null {
-  const inputValue = getLaneTransformInputValue(
+  const inputValue = getOutputTransformInputValue(
     document,
     node.id,
     path,
@@ -503,15 +505,15 @@ function resolveLaneSelectRuntimeValue(
     : null;
 }
 
-function resolveLaneSplitRuntimeValue(
+function resolveOutputSplitRuntimeValue(
   document: WorkflowDocument,
-  node: Extract<WorkflowDocumentNode, { kind: "laneSplit" }>,
+  node: Extract<WorkflowDocumentNode, { kind: "outputSplit" }>,
   path: ReadonlySet<string>,
   nodeMap: NodeMap,
   incomingByTarget: IncomingByTarget,
   sourceHandleId: string | null | undefined,
 ): RuntimeValue | null {
-  const inputValue = getLaneTransformInputValue(
+  const inputValue = getOutputTransformInputValue(
     document,
     node.id,
     path,
@@ -523,24 +525,24 @@ function resolveLaneSplitRuntimeValue(
   }
 
   const index = Number(
-    (sourceHandleId ?? getLaneSplitOutputHandleId(0)).replace("lane-", ""),
+    (sourceHandleId ?? getOutputSplitOutputHandleId(0)).replace("output-", ""),
   );
   return Number.isInteger(index)
-    ? splitRuntimeValueLane(inputValue, index)
+    ? splitRuntimeValueOutput(inputValue, index)
     : null;
 }
 
-function resolveLaneMergeRuntimeValue(
+function resolveOutputMergeRuntimeValue(
   document: WorkflowDocument,
-  node: Extract<WorkflowDocumentNode, { kind: "laneMerge" }>,
+  node: Extract<WorkflowDocumentNode, { kind: "outputMerge" }>,
   path: ReadonlySet<string>,
   nodeMap: NodeMap,
   incomingByTarget: IncomingByTarget,
 ): RuntimeValue | null {
-  const values = getLaneTransformInputValues(
+  const values = getOutputTransformInputValues(
     document,
     node.id,
-    LANE_TRANSFORM_INPUT_HANDLE_ID,
+    OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
     path,
     nodeMap,
     incomingByTarget,
@@ -548,17 +550,17 @@ function resolveLaneMergeRuntimeValue(
   return mergeRuntimeValues(values);
 }
 
-function resolveLaneZipAlignRuntimeValue(
+function resolveOutputZipAlignRuntimeValue(
   document: WorkflowDocument,
-  node: Extract<WorkflowDocumentNode, { kind: "laneZipAlign" }>,
+  node: Extract<WorkflowDocumentNode, { kind: "outputZipAlign" }>,
   path: ReadonlySet<string>,
   nodeMap: NodeMap,
   incomingByTarget: IncomingByTarget,
 ): RuntimeValue | null {
-  const values = getLaneTransformInputValues(
+  const values = getOutputTransformInputValues(
     document,
     node.id,
-    LANE_TRANSFORM_INPUT_HANDLE_ID,
+    OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
     path,
     nodeMap,
     incomingByTarget,
@@ -611,7 +613,7 @@ export function getWorkflowHandleValueType(
     : getNodeInputValueType(node, handle.handleId, document.edges);
 }
 
-export function normalizeLaneReorderValueTypes(
+export function normalizeOutputReorderValueTypes(
   nodes: WorkflowDocumentNode[],
   edges: WorkflowDocumentEdge[],
 ) {
@@ -621,19 +623,19 @@ export function normalizeLaneReorderValueTypes(
 
   const normalizedNodes = nodes.map((node) => {
     if (
-      node.kind !== "laneReorder" &&
-      node.kind !== "laneSelect" &&
-      node.kind !== "laneSplit" &&
-      node.kind !== "laneMerge" &&
-      node.kind !== "laneZipAlign"
+      node.kind !== "outputReorder" &&
+      node.kind !== "outputSelect" &&
+      node.kind !== "outputSplit" &&
+      node.kind !== "outputMerge" &&
+      node.kind !== "outputZipAlign"
     ) {
       return node;
     }
 
     const inputHandleId =
-      node.kind === "laneReorder"
-        ? LANE_REORDER_INPUT_HANDLE_ID
-        : LANE_TRANSFORM_INPUT_HANDLE_ID;
+      node.kind === "outputReorder"
+        ? OUTPUT_REORDER_INPUT_HANDLE_ID
+        : OUTPUT_TRANSFORM_INPUT_HANDLE_ID;
     const inputEdges = getIncomingEdgesForHandle(
       incomingByTarget,
       node.id,
@@ -684,17 +686,17 @@ export function findFirstWorkflowHandleIdByValueType(
       : null;
   }
 
-  if (node.kind === "laneReorder") {
-    return LANE_REORDER_INPUT_HANDLE_ID;
+  if (node.kind === "outputReorder") {
+    return OUTPUT_REORDER_INPUT_HANDLE_ID;
   }
 
   if (
-    node.kind === "laneSelect" ||
-    node.kind === "laneSplit" ||
-    node.kind === "laneMerge" ||
-    node.kind === "laneZipAlign"
+    node.kind === "outputSelect" ||
+    node.kind === "outputSplit" ||
+    node.kind === "outputMerge" ||
+    node.kind === "outputZipAlign"
   ) {
-    return LANE_TRANSFORM_INPUT_HANDLE_ID;
+    return OUTPUT_TRANSFORM_INPUT_HANDLE_ID;
   }
 
   if (node.kind === "prompt") {
@@ -769,18 +771,18 @@ function getNodeOutputValueType(
       return normalizedHandleId === "text" ? "text" : null;
     case "asset":
       return normalizedHandleId === "asset" ? node.assetKind : null;
-    case "laneReorder":
-      return normalizedHandleId === LANE_REORDER_OUTPUT_HANDLE_ID
+    case "outputReorder":
+      return normalizedHandleId === OUTPUT_REORDER_OUTPUT_HANDLE_ID
         ? node.valueType
         : null;
-    case "laneSelect":
-    case "laneMerge":
-    case "laneZipAlign":
-      return normalizedHandleId === LANE_TRANSFORM_OUTPUT_HANDLE_ID
+    case "outputSelect":
+    case "outputMerge":
+    case "outputZipAlign":
+      return normalizedHandleId === OUTPUT_TRANSFORM_OUTPUT_HANDLE_ID
         ? node.valueType
         : null;
-    case "laneSplit": {
-      const outputIndex = Number(normalizedHandleId.replace("lane-", ""));
+    case "outputSplit": {
+      const outputIndex = Number(normalizedHandleId.replace("output-", ""));
       return Number.isInteger(outputIndex) &&
         outputIndex >= 0 &&
         outputIndex < node.splitCount
@@ -813,17 +815,19 @@ function getNodeInputValueType(
       : null;
   }
 
-  if (node.kind === "laneReorder") {
-    return handleId === LANE_REORDER_INPUT_HANDLE_ID ? node.valueType : null;
+  if (node.kind === "outputReorder") {
+    return handleId === OUTPUT_REORDER_INPUT_HANDLE_ID ? node.valueType : null;
   }
 
   if (
-    node.kind === "laneSelect" ||
-    node.kind === "laneSplit" ||
-    node.kind === "laneMerge" ||
-    node.kind === "laneZipAlign"
+    node.kind === "outputSelect" ||
+    node.kind === "outputSplit" ||
+    node.kind === "outputMerge" ||
+    node.kind === "outputZipAlign"
   ) {
-    return handleId === LANE_TRANSFORM_INPUT_HANDLE_ID ? node.valueType : null;
+    return handleId === OUTPUT_TRANSFORM_INPUT_HANDLE_ID
+      ? node.valueType
+      : null;
   }
 
   if (node.kind === "list" || !isGeneratorNodeKind(node.kind)) {
@@ -875,27 +879,27 @@ export function getWorkflowNodeRuntimeValue(
       return node.assetKind && node.assets.length
         ? {
             type: node.assetKind,
-            lanes: node.assets.map((asset) => [asset]),
+            items: node.assets.map((asset) => [asset]),
           }
         : null;
-    case "laneReorder":
-      return resolveLaneReorderRuntimeValue(
+    case "outputReorder":
+      return resolveOutputReorderRuntimeValue(
         document,
         node,
         nextPath,
         nodeMap,
         incomingByTarget,
       );
-    case "laneSelect":
-      return resolveLaneSelectRuntimeValue(
+    case "outputSelect":
+      return resolveOutputSelectRuntimeValue(
         document,
         node,
         nextPath,
         nodeMap,
         incomingByTarget,
       );
-    case "laneSplit":
-      return resolveLaneSplitRuntimeValue(
+    case "outputSplit":
+      return resolveOutputSplitRuntimeValue(
         document,
         node,
         nextPath,
@@ -903,16 +907,16 @@ export function getWorkflowNodeRuntimeValue(
         incomingByTarget,
         sourceHandleId,
       );
-    case "laneMerge":
-      return resolveLaneMergeRuntimeValue(
+    case "outputMerge":
+      return resolveOutputMergeRuntimeValue(
         document,
         node,
         nextPath,
         nodeMap,
         incomingByTarget,
       );
-    case "laneZipAlign":
-      return resolveLaneZipAlignRuntimeValue(
+    case "outputZipAlign":
+      return resolveOutputZipAlignRuntimeValue(
         document,
         node,
         nextPath,
@@ -931,29 +935,29 @@ export function getWorkflowGeneratorRawOutputRuntimeValue(
 ): RuntimeValue | null {
   switch (node.kind) {
     case "imageGenerator": {
-      const lanes = node.outputLanes.map((lane) => lane ?? []);
-      return lanes.some((lane) => lane.length)
+      const outputs = node.outputs.map((output) => output ?? []);
+      return outputs.some((output) => output.length)
         ? {
             type: "image",
-            lanes,
+            items: outputs,
           }
         : null;
     }
     case "videoGenerator": {
-      const lanes = node.outputLanes.map((lane) => lane ?? []);
-      return lanes.some((lane) => lane.length)
+      const outputs = node.outputs.map((output) => output ?? []);
+      return outputs.some((output) => output.length)
         ? {
             type: "video",
-            lanes,
+            items: outputs,
           }
         : null;
     }
     case "llmGenerator": {
-      const lanes = node.outputLanes.map((lane) => lane ?? "");
-      return lanes.some((lane) => lane.trim())
+      const outputs = node.outputs.map((output) => output ?? "");
+      return outputs.some((output) => output.trim())
         ? {
             type: "text",
-            lanes,
+            items: outputs,
           }
         : null;
     }
@@ -964,9 +968,9 @@ export function getWorkflowGeneratorRawOutputRuntimeValue(
 
 export function getWorkflowGeneratorOutputRuntimeValue(
   node: WorkflowDocumentNode,
-  options?: { laneIndex?: number | null },
+  options?: { outputIndex?: number | null },
 ): RuntimeValue | null {
-  const laneIndex = options?.laneIndex;
+  const outputIndex = options?.outputIndex;
   if (
     (node.kind === "imageGenerator" ||
       node.kind === "videoGenerator" ||
@@ -974,8 +978,8 @@ export function getWorkflowGeneratorOutputRuntimeValue(
     node.reviewEnabled
   ) {
     const rawOutput = getWorkflowGeneratorRawOutputRuntimeValue(node);
-    return rawOutput && laneIndex !== null && laneIndex !== undefined
-      ? getApprovedReviewLaneRuntimeValue(node, laneIndex, {
+    return rawOutput && outputIndex !== null && outputIndex !== undefined
+      ? getApprovedReviewOutputRuntimeValue(node, outputIndex, {
           inputValue: rawOutput,
         })
       : rawOutput
@@ -984,16 +988,16 @@ export function getWorkflowGeneratorOutputRuntimeValue(
   }
 
   const rawOutput = getWorkflowGeneratorRawOutputRuntimeValue(node);
-  return rawOutput && laneIndex !== null && laneIndex !== undefined
-    ? getRuntimeValueLane(rawOutput, laneIndex)
+  return rawOutput && outputIndex !== null && outputIndex !== undefined
+    ? getRuntimeValueOutput(rawOutput, outputIndex)
     : rawOutput;
 }
 
 export function getWorkflowGeneratorAwaitingReviewRuntimeValue(
   node: WorkflowDocumentNode,
-  options?: { laneIndex?: number | null },
+  options?: { outputIndex?: number | null },
 ): RuntimeValue | null {
-  const laneIndex = options?.laneIndex;
+  const outputIndex = options?.outputIndex;
   if (
     node.kind !== "imageGenerator" &&
     node.kind !== "videoGenerator" &&
@@ -1012,8 +1016,8 @@ export function getWorkflowGeneratorAwaitingReviewRuntimeValue(
   }
 
   const approvedOutput =
-    laneIndex !== null && laneIndex !== undefined
-      ? getApprovedReviewLaneRuntimeValue(node, laneIndex, {
+    outputIndex !== null && outputIndex !== undefined
+      ? getApprovedReviewOutputRuntimeValue(node, outputIndex, {
           inputValue: rawOutput,
         })
       : getApprovedReviewRuntimeValue(node, { inputValue: rawOutput });
@@ -1022,8 +1026,8 @@ export function getWorkflowGeneratorAwaitingReviewRuntimeValue(
     return null;
   }
 
-  return laneIndex !== null && laneIndex !== undefined
-    ? getRuntimeValueLane(rawOutput, laneIndex)
+  return outputIndex !== null && outputIndex !== undefined
+    ? getRuntimeValueOutput(rawOutput, outputIndex)
     : rawOutput;
 }
 
@@ -1036,16 +1040,16 @@ function buildMediaBatchPlan(values: MediaRuntimeValue[]): MediaBatchPlan {
   }
 
   for (const value of values) {
-    if (!value.lanes.length) {
+    if (!value.items.length) {
       throw new Error("Connected asset batch is empty.");
     }
   }
 
-  const laneCount = getAlignedLaneCount(
-    values.map((value) => value.lanes.length),
+  const outputCount = getAlignedOutputCount(
+    values.map((value) => value.items.length),
   );
-  const batches = Array.from({ length: laneCount }, (_, index) =>
-    values.flatMap((value) => getBroadcastLane(value.lanes, index) ?? []),
+  const batches = Array.from({ length: outputCount }, (_, index) =>
+    values.flatMap((value) => getBroadcastOutput(value.items, index) ?? []),
   );
 
   return {
@@ -1068,14 +1072,14 @@ export function buildGeneratorAssetBatchPlan(
     };
   }
 
-  const laneCount = getAlignedLaneCount(
+  const outputCount = getAlignedOutputCount(
     plansByHandle.map(([, plan]) => plan.iterations),
   );
-  const batches = Array.from({ length: laneCount }, (_, index) =>
+  const batches = Array.from({ length: outputCount }, (_, index) =>
     Object.fromEntries(
       plansByHandle.map(([handleId, plan]) => [
         handleId,
-        getBroadcastLane(plan.batches, index) ?? [],
+        getBroadcastOutput(plan.batches, index) ?? [],
       ]),
     ),
   );
@@ -1091,20 +1095,22 @@ export function buildGeneratorExecutionBatchPlan(params: {
   prompt: TextRuntimeValue | null;
   systemPrompt?: TextRuntimeValue | null;
 }): GeneratorExecutionBatchPlan {
-  const promptLanes = params.prompt?.lanes.length ? params.prompt.lanes : [""];
-  const systemPromptLanes = params.systemPrompt?.lanes.length
-    ? params.systemPrompt.lanes
+  const promptOutputs = params.prompt?.items.length
+    ? params.prompt.items
+    : [""];
+  const systemPromptOutputs = params.systemPrompt?.items.length
+    ? params.systemPrompt.items
     : [null];
-  const laneCount = getAlignedLaneCount([
-    promptLanes.length,
-    systemPromptLanes.length,
+  const outputCount = getAlignedOutputCount([
+    promptOutputs.length,
+    systemPromptOutputs.length,
     params.mediaPlan.iterations,
   ]);
-  const batches = Array.from({ length: laneCount }, (_, index) => ({
+  const batches = Array.from({ length: outputCount }, (_, index) => ({
     mediaInputsByHandle:
-      getBroadcastLane(params.mediaPlan.batches, index) ?? {},
-    prompt: getBroadcastLane(promptLanes, index) ?? "",
-    systemPrompt: getBroadcastLane(systemPromptLanes, index) ?? null,
+      getBroadcastOutput(params.mediaPlan.batches, index) ?? {},
+    prompt: getBroadcastOutput(promptOutputs, index) ?? "",
+    systemPrompt: getBroadcastOutput(systemPromptOutputs, index) ?? null,
   })).filter(
     (batch) =>
       batch.prompt.trim() ||
@@ -1195,8 +1201,8 @@ function conflictsWithSingleInputHandle(
   >,
 ) {
   if (
-    connection.targetHandle !== LANE_REORDER_INPUT_HANDLE_ID &&
-    connection.targetHandle !== LANE_TRANSFORM_INPUT_HANDLE_ID
+    connection.targetHandle !== OUTPUT_REORDER_INPUT_HANDLE_ID &&
+    connection.targetHandle !== OUTPUT_TRANSFORM_INPUT_HANDLE_ID
   ) {
     return false;
   }
@@ -1205,17 +1211,18 @@ function conflictsWithSingleInputHandle(
     (node) => node.id === connection.target,
   );
   return (
-    (targetNode?.kind === "laneReorder" &&
+    (targetNode?.kind === "outputReorder" &&
       document.edges.some(
         (edge) =>
           edge.target === connection.target &&
-          edge.targetHandle === LANE_REORDER_INPUT_HANDLE_ID,
+          edge.targetHandle === OUTPUT_REORDER_INPUT_HANDLE_ID,
       )) ||
-    ((targetNode?.kind === "laneSelect" || targetNode?.kind === "laneSplit") &&
+    ((targetNode?.kind === "outputSelect" ||
+      targetNode?.kind === "outputSplit") &&
       document.edges.some(
         (edge) =>
           edge.target === connection.target &&
-          edge.targetHandle === LANE_TRANSFORM_INPUT_HANDLE_ID,
+          edge.targetHandle === OUTPUT_TRANSFORM_INPUT_HANDLE_ID,
       ))
   );
 }
@@ -1249,24 +1256,24 @@ function hasCompatibleConnection(
     document.edges,
   );
 
-  if (sourceNode.kind === "laneSplit") {
+  if (sourceNode.kind === "outputSplit") {
     const outputIndex = Number(
-      (connection.sourceHandle ?? "").replace("lane-", ""),
+      (connection.sourceHandle ?? "").replace("output-", ""),
     );
-    const inputValue = getLaneTransformInputValue(document, sourceNode.id);
+    const inputValue = getOutputTransformInputValue(document, sourceNode.id);
 
     if (
       inputValue?.type === sourceNode.valueType &&
       Number.isInteger(outputIndex) &&
-      outputIndex >= inputValue.lanes.length
+      outputIndex >= inputValue.items.length
     ) {
       return false;
     }
   }
 
   if (
-    targetNode.kind === "laneReorder" &&
-    connection.targetHandle === LANE_REORDER_INPUT_HANDLE_ID
+    targetNode.kind === "outputReorder" &&
+    connection.targetHandle === OUTPUT_REORDER_INPUT_HANDLE_ID
   ) {
     return Boolean(
       sourceValueType &&
@@ -1275,11 +1282,11 @@ function hasCompatibleConnection(
   }
 
   if (
-    (targetNode.kind === "laneSelect" ||
-      targetNode.kind === "laneSplit" ||
-      targetNode.kind === "laneMerge" ||
-      targetNode.kind === "laneZipAlign") &&
-    connection.targetHandle === LANE_TRANSFORM_INPUT_HANDLE_ID
+    (targetNode.kind === "outputSelect" ||
+      targetNode.kind === "outputSplit" ||
+      targetNode.kind === "outputMerge" ||
+      targetNode.kind === "outputZipAlign") &&
+    connection.targetHandle === OUTPUT_TRANSFORM_INPUT_HANDLE_ID
   ) {
     return Boolean(
       sourceValueType &&
@@ -1383,5 +1390,5 @@ export function getPromptVariableValue(
     new Set([targetId]),
   );
 
-  return value ? value.lanes.join("\n\n") : null;
+  return value ? value.items.join("\n\n") : null;
 }

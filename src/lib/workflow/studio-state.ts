@@ -100,7 +100,7 @@ function toWorkflowNodeData(
   node: WorkflowDocumentNode,
   runtimeState: WorkflowNodeRuntimeState | undefined,
 ): WorkflowNodeData {
-  const status = runtimeState?.status ?? "idle";
+  const status = getHydratedNodeStatus(node, runtimeState);
   const error = runtimeState?.error ?? null;
 
   switch (node.kind) {
@@ -140,7 +140,7 @@ function toWorkflowNodeData(
         assetKind: node.assetKind,
         assets: node.assets,
       };
-    case "laneReorder":
+    case "outputReorder":
       return {
         kind: node.kind,
         label: node.label,
@@ -151,7 +151,7 @@ function toWorkflowNodeData(
         shift: node.shift,
         valueType: node.valueType,
       };
-    case "laneSelect":
+    case "outputSelect":
       return {
         kind: node.kind,
         label: node.label,
@@ -160,7 +160,7 @@ function toWorkflowNodeData(
         indices: node.indices,
         valueType: node.valueType,
       };
-    case "laneSplit":
+    case "outputSplit":
       return {
         kind: node.kind,
         label: node.label,
@@ -169,7 +169,7 @@ function toWorkflowNodeData(
         splitCount: node.splitCount,
         valueType: node.valueType,
       };
-    case "laneMerge":
+    case "outputMerge":
       return {
         kind: node.kind,
         label: node.label,
@@ -177,7 +177,7 @@ function toWorkflowNodeData(
         error,
         valueType: node.valueType,
       };
-    case "laneZipAlign":
+    case "outputZipAlign":
       return {
         kind: node.kind,
         label: node.label,
@@ -196,7 +196,7 @@ function toWorkflowNodeData(
         mode: node.mode,
         config: node.config,
         lastPrompt: node.lastPrompt,
-        outputLanes: node.outputLanes,
+        outputs: node.outputs,
         review: node.review,
         reviewEnabled: node.reviewEnabled,
       };
@@ -210,7 +210,7 @@ function toWorkflowNodeData(
         mode: node.mode,
         config: node.config,
         lastPrompt: node.lastPrompt,
-        outputLanes: node.outputLanes,
+        outputs: node.outputs,
         review: node.review,
         reviewEnabled: node.reviewEnabled,
       };
@@ -225,11 +225,31 @@ function toWorkflowNodeData(
         config: node.config,
         lastPrompt: node.lastPrompt,
         lastSystemPrompt: node.lastSystemPrompt,
-        outputLanes: node.outputLanes,
+        outputs: node.outputs,
         review: node.review,
         reviewEnabled: node.reviewEnabled,
       };
   }
+}
+
+function getHydratedNodeStatus(
+  node: WorkflowDocumentNode,
+  runtimeState: WorkflowNodeRuntimeState | undefined,
+): WorkflowNodeStatus {
+  if (runtimeState && runtimeState.status !== "idle") {
+    return runtimeState.status;
+  }
+
+  return (node.kind === "imageGenerator" ||
+    node.kind === "videoGenerator" ||
+    node.kind === "llmGenerator") &&
+    node.reviewEnabled &&
+    node.review.outputs.some(
+      (output) =>
+        output.status === "pending" || output.status === "regenerating",
+    )
+    ? "waiting"
+    : (runtimeState?.status ?? "idle");
 }
 
 function buildWorkflowCanvasNode(
@@ -334,9 +354,9 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
     );
   }
 
-  if (left.kind === "laneReorder") {
+  if (left.kind === "outputReorder") {
     return (
-      right.kind === "laneReorder" &&
+      right.kind === "outputReorder" &&
       left.mode === right.mode &&
       left.order === right.order &&
       left.shift === right.shift &&
@@ -344,29 +364,29 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
     );
   }
 
-  if (left.kind === "laneSelect") {
+  if (left.kind === "outputSelect") {
     return (
-      right.kind === "laneSelect" &&
+      right.kind === "outputSelect" &&
       left.indices === right.indices &&
       left.valueType === right.valueType
     );
   }
 
-  if (left.kind === "laneSplit") {
+  if (left.kind === "outputSplit") {
     return (
-      right.kind === "laneSplit" &&
+      right.kind === "outputSplit" &&
       left.splitCount === right.splitCount &&
       left.valueType === right.valueType
     );
   }
 
-  if (left.kind === "laneMerge") {
-    return right.kind === "laneMerge" && left.valueType === right.valueType;
+  if (left.kind === "outputMerge") {
+    return right.kind === "outputMerge" && left.valueType === right.valueType;
   }
 
-  if (left.kind === "laneZipAlign") {
+  if (left.kind === "outputZipAlign") {
     return (
-      right.kind === "laneZipAlign" &&
+      right.kind === "outputZipAlign" &&
       left.mode === right.mode &&
       left.valueType === right.valueType
     );
@@ -379,7 +399,7 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       left.mode === right.mode &&
       left.config === right.config &&
       left.lastPrompt === right.lastPrompt &&
-      left.outputLanes === right.outputLanes &&
+      left.outputs === right.outputs &&
       left.review === right.review &&
       left.reviewEnabled === right.reviewEnabled
     );
@@ -392,7 +412,7 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
       left.mode === right.mode &&
       left.config === right.config &&
       left.lastPrompt === right.lastPrompt &&
-      left.outputLanes === right.outputLanes &&
+      left.outputs === right.outputs &&
       left.review === right.review &&
       left.reviewEnabled === right.reviewEnabled
     );
@@ -405,7 +425,7 @@ function isSameNodeData(left: WorkflowNodeData, right: WorkflowNodeData) {
     left.config === right.config &&
     left.lastPrompt === right.lastPrompt &&
     left.lastSystemPrompt === right.lastSystemPrompt &&
-    left.outputLanes === right.outputLanes &&
+    left.outputs === right.outputs &&
     left.review === right.review &&
     left.reviewEnabled === right.reviewEnabled
   );

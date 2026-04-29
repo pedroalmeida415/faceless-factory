@@ -6,9 +6,9 @@ import {
   WorkflowConfigError,
   WorkflowCreditsError,
   WorkflowExecutionError,
+  WorkflowExecutionNotFoundError,
   WorkflowGenerationError,
   WorkflowRequestError,
-  WorkflowRunNotFoundError,
   WorkflowStorageError,
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
@@ -29,7 +29,7 @@ export function toTRPCError(error: unknown) {
     });
   }
 
-  if (error instanceof WorkflowRunNotFoundError) {
+  if (error instanceof WorkflowExecutionNotFoundError) {
     return new TRPCError({
       code: "NOT_FOUND",
       message: error.message,

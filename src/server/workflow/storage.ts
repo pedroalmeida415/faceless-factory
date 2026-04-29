@@ -45,7 +45,7 @@ type AssetRow = typeof assets.$inferSelect;
 
 type AssetOwner = {
   ownerUserId: string;
-  projectId?: string | null;
+  workflowId: string;
 };
 
 type SaveBufferAsAssetOptions = AssetOwner & {
@@ -138,18 +138,16 @@ async function insertAssetRecord(params: {
   mimeType: string;
   model: string | null;
   ownerUserId: string;
-  projectId: string | null;
+  workflowId: string;
   sizeBytes: number;
   source: AssetSource;
   storageKey: string | null;
   storageProvider: string;
 }) {
-  if (params.projectId) {
-    await assertWorkflowProjectAccess({
-      ownerUserId: params.ownerUserId,
-      projectId: params.projectId,
-    });
-  }
+  await assertWorkflowProjectAccess({
+    ownerUserId: params.ownerUserId,
+    projectId: params.workflowId,
+  });
 
   const [asset] = await db
     .insert(assets)
@@ -162,7 +160,7 @@ async function insertAssetRecord(params: {
       mimeType: params.mimeType,
       model: params.model,
       ownerUserId: params.ownerUserId,
-      projectId: params.projectId,
+      workflowId: params.workflowId,
       sizeBytes: params.sizeBytes,
       source: params.source,
       storageKey: params.storageKey,
@@ -179,13 +177,17 @@ async function insertAssetRecord(params: {
   return toWorkflowAsset(asset);
 }
 
-function listProjectAssetsEffect(params: {
+function listWorkflowAssetsEffect(params: {
   ownerUserId: string;
-  projectId: string;
+  workflowId: string;
 }) {
   return Effect.gen(function* () {
     yield* Effect.tryPromise({
-      try: () => assertWorkflowProjectAccess(params),
+      try: () =>
+        assertWorkflowProjectAccess({
+          ownerUserId: params.ownerUserId,
+          projectId: params.workflowId,
+        }),
       catch: (cause) =>
         toAssetWriteError("Failed to load project assets.", cause),
     });
@@ -198,7 +200,7 @@ function listProjectAssetsEffect(params: {
           .where(
             and(
               eq(assets.ownerUserId, params.ownerUserId),
-              eq(assets.projectId, params.projectId),
+              eq(assets.workflowId, params.workflowId),
               isNull(assets.deletedAt),
             ),
           )
@@ -222,20 +224,18 @@ function saveBufferAsAssetEffect({
   fileName,
   model = null,
   ownerUserId,
-  projectId = null,
+  workflowId,
 }: SaveBufferAsAssetOptions) {
   return Effect.gen(function* () {
-    if (projectId) {
-      yield* Effect.tryPromise({
-        try: () =>
-          assertWorkflowProjectAccess({
-            ownerUserId,
-            projectId,
-          }),
-        catch: (cause) =>
-          toAssetWriteError("Failed to persist asset metadata.", cause),
-      });
-    }
+    yield* Effect.tryPromise({
+      try: () =>
+        assertWorkflowProjectAccess({
+          ownerUserId,
+          projectId: workflowId,
+        }),
+      catch: (cause) =>
+        toAssetWriteError("Failed to persist asset metadata.", cause),
+    });
 
     const extension = inferExtension(fileName, mimeType);
     const baseName = sanitizeBaseName(path.basename(fileName, extension));
@@ -282,7 +282,7 @@ function saveBufferAsAssetEffect({
           mimeType,
           model,
           ownerUserId,
-          projectId,
+          workflowId,
           sizeBytes: buffer.byteLength,
           source,
           storageKey,
@@ -300,7 +300,7 @@ function saveExternalAssetEffect({
   mimeType,
   model = null,
   ownerUserId,
-  projectId = null,
+  workflowId,
   source,
   url,
 }: SaveExternalAssetOptions) {
@@ -314,7 +314,7 @@ function saveExternalAssetEffect({
         mimeType,
         model,
         ownerUserId,
-        projectId,
+        workflowId,
         sizeBytes: 0,
         source,
         storageKey: null,
@@ -442,9 +442,9 @@ export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
     readonly readStoredAsset: (
       asset: Pick<WorkflowAsset, "storagePath">,
     ) => Effect.Effect<Buffer, WorkflowStorageError>;
-    readonly listProjectAssets: (params: {
+    readonly listWorkflowAssets: (params: {
       ownerUserId: string;
-      projectId: string;
+      workflowId: string;
     }) => Effect.Effect<
       WorkflowAsset[],
       WorkflowAuthorizationError | WorkflowStorageError
@@ -465,7 +465,7 @@ export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
       file: File;
       kind: AssetKind;
       ownerUserId: string;
-      projectId?: string | null;
+      workflowId: string;
       source: AssetSource;
       model?: string | null;
     }) => Effect.Effect<
@@ -475,7 +475,7 @@ export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
   }
 >() {
   static readonly Live = Layer.succeed(this, {
-    listProjectAssets: listProjectAssetsEffect,
+    listWorkflowAssets: listWorkflowAssetsEffect,
     readAssetById: readAssetByIdEffect,
     readStoredAsset: readStoredAssetEffect,
     saveBufferAsAsset: saveBufferAsAssetEffect,
@@ -498,7 +498,7 @@ export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
           mimeType: options.file.type || guessMimeType(options.file.name),
           model: options.model,
           ownerUserId: options.ownerUserId,
-          projectId: options.projectId,
+          workflowId: options.workflowId,
           source: options.source,
         });
       }),
