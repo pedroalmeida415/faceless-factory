@@ -1,0 +1,89 @@
+import { ServerRuntime } from "~/effect/server/runtime";
+import { VertexAi } from "~/server/workflow/vertex";
+import { createWorkflowRuntimeComposition } from "~/server/workflow-runtime/workflow-runtime-composition";
+import { createWorkflowRuntimeProviderExecutor } from "~/server/workflow-runtime/workflow-runtime-provider-executor";
+import {
+  createWorkflowRuntimeWorker,
+  sweepQueuedTaskRunJobs,
+} from "~/server/workflow-runtime/workflow-runtime-worker";
+
+const QUEUED_TASK_SWEEP_LIMIT = 500;
+
+async function createProviderExecutor() {
+  const vertexAi = await ServerRuntime.runPromise(VertexAi);
+
+  return createWorkflowRuntimeProviderExecutor({
+    runEffect: (effect) => ServerRuntime.runPromise(effect),
+    vertexAi,
+  });
+}
+
+async function main() {
+  const composition = await createWorkflowRuntimeComposition();
+  const worker = createWorkflowRuntimeWorker({
+    eventPublisher: composition.eventPublisher,
+    orchestrator: composition.orchestrator,
+    providerExecutor: await createProviderExecutor(),
+    queue: composition.queue,
+    repository: composition.repository,
+  });
+
+  worker.on("completed", (job) => {
+    console.info(`Workflow runtime job ${job.id} completed.`);
+  });
+
+  worker.on("failed", (job, error) => {
+    console.error(`Workflow runtime job ${job?.id ?? "unknown"} failed`, error);
+  });
+
+  worker.on("error", (error) => {
+    console.error("Workflow runtime worker error", error);
+  });
+
+  await worker.waitUntilReady();
+  const sweep = await sweepQueuedTaskRunJobs({
+    limit: QUEUED_TASK_SWEEP_LIMIT,
+    queue: composition.queue,
+    repository: composition.repository,
+  });
+  console.info(
+    `Workflow runtime worker ready. Re-enqueued ${sweep.enqueued} queued Task Runs.`,
+  );
+
+  let shuttingDown = false;
+
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) {
+      return;
+    }
+
+    shuttingDown = true;
+    console.info(`Shutting down workflow runtime worker (${signal}).`);
+
+    await Promise.allSettled([worker.close()]);
+  };
+
+  process.once("SIGINT", () => {
+    void shutdown("SIGINT").finally(() => {
+      process.exit(0);
+    });
+  });
+
+  process.once("SIGTERM", () => {
+    void shutdown("SIGTERM").finally(() => {
+      process.exit(0);
+    });
+  });
+}
+
+void main().catch((error) => {
+  console.error("Workflow runtime worker failed to start", errorMessage(error));
+  console.error(error);
+  process.exit(1);
+});
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message.length > 0
+    ? error.message
+    : "Unknown error";
+}

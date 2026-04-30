@@ -4,9 +4,9 @@ import { Context, Effect, Layer } from "effect";
 
 import { useWorkflowStudioStore } from "~/components/workflow/studio/store";
 import type { WorkflowDocumentNode } from "~/lib/workflow/document";
-import type { WorkflowExecutionStatusResponse } from "~/lib/workflow/execution/types";
 import type { WorkflowStudioSnapshot } from "~/lib/workflow/studio-state";
 import type { WorkflowNodeStatus } from "~/lib/workflow/types";
+import type { TaskRunStudioProjectionSlot } from "~/lib/workflow-runtime/task-run-studio-projection";
 
 type WorkflowStudioStoreSnapshot = WorkflowStudioSnapshot & {
   documentRevision: number | null;
@@ -18,13 +18,12 @@ export class WorkflowStudioStoreService extends Context.Tag(
 )<
   WorkflowStudioStoreService,
   {
-    readonly applyServerExecutionState: (
-      executionState: WorkflowExecutionStatusResponse,
+    readonly applyRuntimeTaskProjection: (
+      slots: readonly TaskRunStudioProjectionSlot[],
     ) => Effect.Effect<void>;
-    readonly clearActiveExecutionId: () => Effect.Effect<void>;
+    readonly clearExecutionStreaming: () => Effect.Effect<void>;
     readonly getWorkflowSnapshot: () => Effect.Effect<WorkflowStudioStoreSnapshot>;
     readonly setActivity: (activity: string) => Effect.Effect<void>;
-    readonly setActiveExecutionId: (executionId: string) => Effect.Effect<void>;
     readonly setExecutionStreaming: (
       isStreaming: boolean,
     ) => Effect.Effect<void>;
@@ -40,15 +39,13 @@ export class WorkflowStudioStoreService extends Context.Tag(
   }
 >() {
   static readonly Live = Layer.succeed(this, {
-    applyServerExecutionState: (executionState) =>
+    applyRuntimeTaskProjection: (slots) =>
       Effect.sync(() => {
-        useWorkflowStudioStore
-          .getState()
-          .applyServerExecutionState(executionState);
+        useWorkflowStudioStore.getState().applyRuntimeTaskProjection(slots);
       }),
-    clearActiveExecutionId: () =>
+    clearExecutionStreaming: () =>
       Effect.sync(() => {
-        useWorkflowStudioStore.getState().clearActiveExecutionId();
+        useWorkflowStudioStore.getState().clearExecutionStreaming();
       }),
     getWorkflowSnapshot: () =>
       Effect.sync(() => {
@@ -59,10 +56,6 @@ export class WorkflowStudioStoreService extends Context.Tag(
     setActivity: (activity) =>
       Effect.sync(() => {
         useWorkflowStudioStore.getState().setActivity(activity);
-      }),
-    setActiveExecutionId: (executionId) =>
-      Effect.sync(() => {
-        useWorkflowStudioStore.getState().setActiveExecutionId(executionId);
       }),
     setExecutionStreaming: (isStreaming) =>
       Effect.sync(() => {

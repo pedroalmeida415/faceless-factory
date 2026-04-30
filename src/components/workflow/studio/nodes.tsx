@@ -781,11 +781,9 @@ function GeneratorReviewPanel({
   valueType: "text" | "image" | "video";
 }) {
   const document = useWorkflowStudioStore((state) => state.document);
-  const activeExecutionId = useWorkflowStudioStore(
-    (state) => state.activeExecutionId,
-  );
-  const applyServerExecutionState = useWorkflowStudioStore(
-    (state) => state.applyServerExecutionState,
+  const projectId = useWorkflowStudioStore((state) => state.projectId);
+  const applyRuntimeTaskProjection = useWorkflowStudioStore(
+    (state) => state.applyRuntimeTaskProjection,
   );
   const setActivity = useWorkflowStudioStore((state) => state.setActivity);
   const node = document.nodes.find((candidate) => candidate.id === nodeId);
@@ -804,35 +802,44 @@ function GeneratorReviewPanel({
       outputIndex: number,
       decision: "approve" | "reject",
       reviewExecutionId: string | null,
+      taskRunId: string | undefined,
+      attempt: number,
     ) => {
-      const executionId = reviewExecutionId ?? activeExecutionId;
-      if (!executionId) {
-        setActivity("Run the workflow before reviewing outputs.");
+      void outputIndex;
+      void reviewExecutionId;
+
+      if (!taskRunId || !projectId) {
+        setActivity("This review item is missing Task Run metadata.");
         return;
       }
 
-      const effect =
+      const effect = (
         decision === "approve"
-          ? WorkflowClientService.approveReviewOutput({
-              outputIndex,
-              reviewNodeId: nodeId,
-              executionId,
+          ? WorkflowClientService.approveTaskRun({
+              attempt,
+              projectId,
+              taskRunId,
             })
-          : WorkflowClientService.rejectReviewOutput({
-              outputIndex,
-              reviewNodeId: nodeId,
-              executionId,
-            });
+          : WorkflowClientService.rejectTaskRun({
+              attempt,
+              projectId,
+              taskRunId,
+            })
+      ).pipe(
+        Effect.flatMap(() =>
+          WorkflowClientService.getTaskProjection(projectId),
+        ),
+      );
 
       void Effect.runPromise(effect)
-        .then((executionState) => {
-          applyServerExecutionState(executionState);
+        .then((projection) => {
+          applyRuntimeTaskProjection(projection);
         })
         .catch((error) => {
           setActivity(getErrorMessage(error));
         });
     },
-    [activeExecutionId, applyServerExecutionState, nodeId, setActivity],
+    [applyRuntimeTaskProjection, projectId, setActivity],
   );
 
   if (!reviewEnabled) {
@@ -875,7 +882,13 @@ function GeneratorReviewPanel({
                 output.status === "approved" || output.status === "regenerating"
               }
               onClick={() =>
-                decideOutput(output.outputIndex, "approve", output.executionId)
+                decideOutput(
+                  output.outputIndex,
+                  "approve",
+                  output.executionId,
+                  output.taskRunId,
+                  output.attempt,
+                )
               }
             >
               Approve
@@ -884,7 +897,13 @@ function GeneratorReviewPanel({
               className="justify-center"
               disabled={output.status !== "pending"}
               onClick={() =>
-                decideOutput(output.outputIndex, "reject", output.executionId)
+                decideOutput(
+                  output.outputIndex,
+                  "reject",
+                  output.executionId,
+                  output.taskRunId,
+                  output.attempt,
+                )
               }
             >
               Regenerate

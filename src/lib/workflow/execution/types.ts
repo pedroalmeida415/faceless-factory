@@ -22,9 +22,7 @@ import type {
   WorkflowOutputReviewStatus,
 } from "~/lib/workflow/types";
 
-export type WorkflowExecutionTarget =
-  | { type: "selected-or-all" }
-  | { type: "node"; nodeId: string };
+export type WorkflowExecutionTarget = { type: "node"; nodeId: string };
 
 export type WorkflowExecutionSelection = {
   nodeIds: string[];

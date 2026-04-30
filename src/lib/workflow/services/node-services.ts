@@ -18,9 +18,9 @@ import {
 import { setLlmGeneratorConfigValue } from "~/lib/workflow/llm-models";
 import type { WorkflowValueType } from "~/lib/workflow/node-definitions";
 import type {
-  AssetKind,
   GeneratorConfigValue,
   ImageGeneratorModelId,
+  MediaAssetKind,
   PromptDisplayMode,
   PromptVariable,
   VideoGeneratorModelId,
@@ -33,6 +33,12 @@ function getBatchAssetKind(assets: WorkflowAsset[]) {
     return null;
   }
 
+  if (firstAsset.kind !== "image" && firstAsset.kind !== "video") {
+    throw new WorkflowValidationError({
+      message: "Asset nodes only accept image or video assets.",
+    });
+  }
+
   if (!assets.every((asset) => asset.kind === firstAsset.kind)) {
     throw new WorkflowValidationError({
       message: "Asset nodes only accept one media type at a time.",
@@ -43,8 +49,8 @@ function getBatchAssetKind(assets: WorkflowAsset[]) {
 }
 
 function assertCompatibleAssetKind(
-  expectedKind: AssetKind | null,
-  nextKind: AssetKind | null,
+  expectedKind: MediaAssetKind | null,
+  nextKind: MediaAssetKind | null,
 ) {
   if (!expectedKind || !nextKind || expectedKind === nextKind) {
     return;

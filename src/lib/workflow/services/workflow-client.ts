@@ -5,15 +5,14 @@ import { Effect } from "effect";
 
 import { getErrorMessage, WorkflowRequestError } from "~/lib/workflow/errors";
 import type {
-  StartWorkflowExecutionRequest,
-  WorkflowExecutionStatusResponse,
-} from "~/lib/workflow/execution/types";
-import type {
   WorkflowProjectSaveRequest,
   WorkflowProjectSaveResponse,
 } from "~/lib/workflow/project";
 import type { UploadAssetResponse } from "~/lib/workflow/types";
-import { getTrpcClient } from "~/trpc/react";
+import { getTrpcClient, type RouterOutputs } from "~/trpc/react";
+
+export type WorkflowRuntimeTaskProjection =
+  RouterOutputs["workflowRuntime"]["taskProjection"];
 
 const trpcClient = getTrpcClient();
 
@@ -29,21 +28,43 @@ export const WorkflowClientService = {
     }) as Effect.Effect<WorkflowProjectSaveResponse, WorkflowRequestError>;
   },
 
-  startExecution(input: StartWorkflowExecutionRequest & { projectId: string }) {
+  runTarget(input: { nodeId: string; projectId: string }) {
     return Effect.tryPromise({
-      try: () => trpcClient.workflow.startExecution.mutate(input),
+      try: () => trpcClient.workflowRuntime.runTarget.mutate(input),
       catch: (cause) =>
         new WorkflowRequestError({
           message: getErrorMessage(cause),
           cause,
         }),
-    }) as Effect.Effect<WorkflowExecutionStatusResponse, WorkflowRequestError>;
+    });
   },
 
-  openExecutionEvents(
-    executionId: string,
+  rerunNode(input: { nodeId: string; projectId: string }) {
+    return Effect.tryPromise({
+      try: () => trpcClient.workflowRuntime.rerunNode.mutate(input),
+      catch: (cause) =>
+        new WorkflowRequestError({
+          message: getErrorMessage(cause),
+          cause,
+        }),
+    });
+  },
+
+  getTaskProjection(projectId: string) {
+    return Effect.tryPromise({
+      try: () => trpcClient.workflowRuntime.taskProjection.query({ projectId }),
+      catch: (cause) =>
+        new WorkflowRequestError({
+          message: getErrorMessage(cause),
+          cause,
+        }),
+    }) as Effect.Effect<WorkflowRuntimeTaskProjection, WorkflowRequestError>;
+  },
+
+  openTaskEvents(
+    projectId: string,
     handlers: {
-      onExecutionState: (state: WorkflowExecutionStatusResponse) => void;
+      onTaskEvent: () => void;
       onError: (error: WorkflowRequestError) => void;
     },
   ) {
@@ -64,10 +85,10 @@ export const WorkflowClientService = {
       );
     };
 
-    const subscription = trpcClient.workflow.executionEvents.subscribe(
-      { executionId },
+    const subscription = trpcClient.workflowRuntime.taskEvents.subscribe(
+      { projectId },
       {
-        onData: handlers.onExecutionState,
+        onData: handlers.onTaskEvent,
         onConnectionStateChange: (state) => {
           if (state.error) {
             reportError(state.error);
@@ -85,34 +106,49 @@ export const WorkflowClientService = {
     } satisfies Unsubscribable;
   },
 
-  approveReviewOutput(input: {
-    outputIndex: number;
-    reviewNodeId: string;
-    executionId: string;
+  approveTaskRun(input: {
+    attempt: number;
+    projectId: string;
+    taskRunId: string;
   }) {
     return Effect.tryPromise({
-      try: () => trpcClient.workflow.approveReviewOutput.mutate(input),
+      try: () => trpcClient.workflowRuntime.approveTaskRun.mutate(input),
       catch: (cause) =>
         new WorkflowRequestError({
           message: getErrorMessage(cause),
           cause,
         }),
-    }) as Effect.Effect<WorkflowExecutionStatusResponse, WorkflowRequestError>;
+    });
   },
 
-  rejectReviewOutput(input: {
-    outputIndex: number;
-    reviewNodeId: string;
-    executionId: string;
+  rejectTaskRun(input: {
+    attempt: number;
+    projectId: string;
+    taskRunId: string;
   }) {
     return Effect.tryPromise({
-      try: () => trpcClient.workflow.rejectReviewOutput.mutate(input),
+      try: () => trpcClient.workflowRuntime.rejectTaskRun.mutate(input),
       catch: (cause) =>
         new WorkflowRequestError({
           message: getErrorMessage(cause),
           cause,
         }),
-    }) as Effect.Effect<WorkflowExecutionStatusResponse, WorkflowRequestError>;
+    });
+  },
+
+  cancelTaskRun(input: {
+    attempt: number;
+    projectId: string;
+    taskRunId: string;
+  }) {
+    return Effect.tryPromise({
+      try: () => trpcClient.workflowRuntime.cancelTaskRun.mutate(input),
+      catch: (cause) =>
+        new WorkflowRequestError({
+          message: getErrorMessage(cause),
+          cause,
+        }),
+    });
   },
 
   uploadAsset(file: File, projectId: string) {

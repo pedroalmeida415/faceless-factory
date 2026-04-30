@@ -20,15 +20,7 @@ import {
 } from "~/lib/workflow/document";
 import { getErrorMessage } from "~/lib/workflow/errors";
 import { collectWorkflowExecutionNodeIds } from "~/lib/workflow/execution/subgraph";
-import type {
-  WorkflowCreditsSummary,
-  WorkflowExecutionRuntimeState,
-  WorkflowExecutionStatusResponse,
-} from "~/lib/workflow/execution/types";
-import {
-  isWorkflowExecutionActiveStatus,
-  isWorkflowExecutionLockingStatus,
-} from "~/lib/workflow/execution/types";
+import type { WorkflowCreditsSummary } from "~/lib/workflow/execution/types";
 import type { WorkflowHandleReference } from "~/lib/workflow/graph";
 import type { WorkflowValueType } from "~/lib/workflow/node-definitions";
 import type { WorkflowProject } from "~/lib/workflow/project";
@@ -66,6 +58,10 @@ import {
   DEFAULT_WORKFLOW_ACTIVITY,
   WorkflowEngine,
 } from "~/lib/workflow/workflow-engine";
+import {
+  applyTaskRunStudioProjection,
+  type TaskRunStudioProjectionSlot,
+} from "~/lib/workflow-runtime/task-run-studio-projection";
 
 function snapshotFromState(
   state: Pick<WorkflowStudioState, "document" | "editor" | "runtime">,
@@ -374,189 +370,6 @@ function restoreHistoryEntry(
   }
 }
 
-function mergeExecutionTargetResults(
-  currentDocument: WorkflowDocument,
-  executionState: WorkflowExecutionStatusResponse,
-) {
-  const projectedNodeById = new Map(
-    executionState.document.nodes.map((node) => [node.id, node]),
-  );
-
-  return {
-    ...currentDocument,
-    nodes: currentDocument.nodes.map((node) => {
-      const projectedNode = projectedNodeById.get(node.id);
-      if (
-        node.kind === "imageGenerator" &&
-        projectedNode?.kind === "imageGenerator"
-      ) {
-        return {
-          ...node,
-          lastPrompt: projectedNode.lastPrompt,
-          outputs: mergeMediaExecutionOutputs({
-            currentOutputs: node.outputs,
-            projectedOutputs: projectedNode.outputs,
-          }),
-          review: mergeExecutionReview(node.review, projectedNode.review),
-        };
-      }
-
-      if (
-        node.kind === "videoGenerator" &&
-        projectedNode?.kind === "videoGenerator"
-      ) {
-        return {
-          ...node,
-          lastPrompt: projectedNode.lastPrompt,
-          outputs: mergeMediaExecutionOutputs({
-            currentOutputs: node.outputs,
-            projectedOutputs: projectedNode.outputs,
-          }),
-          review: mergeExecutionReview(node.review, projectedNode.review),
-        };
-      }
-
-      if (
-        node.kind === "llmGenerator" &&
-        projectedNode?.kind === "llmGenerator"
-      ) {
-        return {
-          ...node,
-          lastPrompt: projectedNode.lastPrompt,
-          lastSystemPrompt: projectedNode.lastSystemPrompt,
-          outputs: mergeTextExecutionOutputs({
-            currentOutputs: node.outputs,
-            projectedOutputs: projectedNode.outputs,
-          }),
-          review: mergeExecutionReview(node.review, projectedNode.review),
-        };
-      }
-
-      return node;
-    }),
-  } satisfies WorkflowDocument;
-}
-
-function mergeMediaExecutionOutputs(params: {
-  currentOutputs: readonly WorkflowAsset[][];
-  projectedOutputs: readonly WorkflowAsset[][];
-}) {
-  const outputCount = Math.max(
-    params.currentOutputs.length,
-    params.projectedOutputs.length,
-  );
-  const outputs = Array.from(
-    { length: outputCount },
-    (_, outputIndex) => params.currentOutputs[outputIndex] ?? [],
-  );
-  for (
-    let outputIndex = 0;
-    outputIndex < params.projectedOutputs.length;
-    outputIndex += 1
-  ) {
-    const projectedOutput = params.projectedOutputs[outputIndex];
-    if (projectedOutput?.length) {
-      outputs[outputIndex] = projectedOutput;
-    }
-  }
-  return outputs;
-}
-
-function mergeTextExecutionOutputs(params: {
-  currentOutputs: readonly string[];
-  projectedOutputs: readonly string[];
-}) {
-  const outputCount = Math.max(
-    params.currentOutputs.length,
-    params.projectedOutputs.length,
-  );
-  const outputs = Array.from(
-    { length: outputCount },
-    (_, outputIndex) => params.currentOutputs[outputIndex] ?? "",
-  );
-  for (
-    let outputIndex = 0;
-    outputIndex < params.projectedOutputs.length;
-    outputIndex += 1
-  ) {
-    const projectedOutput = params.projectedOutputs[outputIndex];
-    if (projectedOutput?.trim()) {
-      outputs[outputIndex] = projectedOutput;
-    }
-  }
-  return outputs;
-}
-
-type ReviewState = WorkflowDocument["nodes"][number] extends infer Node
-  ? Node extends { review: infer Review }
-    ? Review
-    : never
-  : never;
-
-function mergeExecutionReview(
-  currentReview: ReviewState,
-  projectedReview: ReviewState,
-) {
-  if (!projectedReview.outputs.length) {
-    return currentReview;
-  }
-
-  const currentOutputByIndex = new Map(
-    currentReview.outputs.map((output) => [output.outputIndex, output]),
-  );
-  const projectedOutputByIndex = new Map(
-    projectedReview.outputs.map((output) => [output.outputIndex, output]),
-  );
-  const outputIndexes = new Set([
-    ...currentOutputByIndex.keys(),
-    ...projectedOutputByIndex.keys(),
-  ]);
-
-  return {
-    ...currentReview,
-    sourceNodeId: projectedReview.sourceNodeId,
-    updatedAt: projectedReview.updatedAt ?? currentReview.updatedAt,
-    valueType: projectedReview.valueType,
-    outputs: Array.from(outputIndexes)
-      .sort((left, right) => left - right)
-      .flatMap((outputIndex) => {
-        const currentOutput = currentOutputByIndex.get(outputIndex);
-        const projectedOutput = projectedOutputByIndex.get(outputIndex);
-        if (!projectedOutput) {
-          return currentOutput ? [currentOutput] : [];
-        }
-        if (!currentOutput) {
-          return [projectedOutput];
-        }
-        return [
-          {
-            ...projectedOutput,
-            assets: projectedOutput.assets.length
-              ? projectedOutput.assets
-              : currentOutput.assets,
-            text:
-              projectedOutput.text && projectedOutput.text.trim().length > 0
-                ? projectedOutput.text
-                : currentOutput.text,
-          },
-        ];
-      }),
-  };
-}
-
-function mergeExecutionRuntimeState(
-  currentRuntime: WorkflowRuntimeState,
-  executionState: WorkflowExecutionStatusResponse,
-): WorkflowRuntimeState {
-  return {
-    activity: executionState.runtime.activity,
-    nodeStateById: {
-      ...currentRuntime.nodeStateById,
-      ...executionState.runtime.nodeStateById,
-    },
-  };
-}
-
 const initialSnapshot = WorkflowEngine.createInitialState();
 const initialCanvas = buildWorkflowCanvas(initialSnapshot);
 
@@ -568,12 +381,10 @@ type WorkflowStudioState = {
   savedLocalDocumentVersion: number;
   projectId: string | null;
   runtime: WorkflowRuntimeState;
-  activeExecutionId: string | null;
   isStreamingExecutionStatus: boolean;
   lockedNodeIds: string[];
   lastExecutionFinishedAt: string | null;
   lastKnownCredits: WorkflowCreditsSummary | null;
-  lastServerRuntime: WorkflowExecutionRuntimeState | null;
   nodes: WorkflowCanvasNode[];
   edges: WorkflowCanvasEdge[];
   history: WorkflowHistoryState;
@@ -582,16 +393,15 @@ type WorkflowStudioState = {
   canRedo: boolean;
   ready: boolean;
   hydrate: (project: WorkflowProject) => void;
-  applyServerExecutionState: (
-    executionState: WorkflowExecutionStatusResponse,
+  applyRuntimeTaskProjection: (
+    slots: readonly TaskRunStudioProjectionSlot[],
   ) => void;
-  clearActiveExecutionId: () => void;
+  clearExecutionStreaming: () => void;
   setProjectPersistence: (
     documentRevision: number,
     savedLocalDocumentVersion: number,
   ) => void;
   setActivity: (activity: string) => void;
-  setActiveExecutionId: (executionId: string) => void;
   setExecutionStreaming: (isStreaming: boolean) => void;
   setNodeRuntimeState: (
     nodeId: string,
@@ -683,12 +493,10 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     savedLocalDocumentVersion: 0,
     projectId: null,
     runtime: initialSnapshot.runtime,
-    activeExecutionId: null,
     isStreamingExecutionStatus: false,
     lockedNodeIds: [],
     lastExecutionFinishedAt: null,
     lastKnownCredits: null,
-    lastServerRuntime: null,
     nodes: initialCanvas.nodes,
     edges: initialCanvas.edges,
     history: createHistoryState(),
@@ -712,7 +520,6 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           );
 
           applySnapshotToState(state, nextSnapshot);
-          state.activeExecutionId = null;
           state.documentRevision = project.documentRevision;
           state.isStreamingExecutionStatus = false;
           state.lockedNodeIds = [];
@@ -720,12 +527,10 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           state.savedLocalDocumentVersion = 0;
           state.lastExecutionFinishedAt = null;
           state.lastKnownCredits = null;
-          state.lastServerRuntime = null;
           state.projectId = project.id;
           resetHistory(state);
           state.ready = true;
         } catch (error) {
-          state.activeExecutionId = null;
           state.documentRevision = null;
           state.isStreamingExecutionStatus = false;
           state.lockedNodeIds = [];
@@ -733,7 +538,6 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           state.savedLocalDocumentVersion = 0;
           state.lastExecutionFinishedAt = null;
           state.lastKnownCredits = null;
-          state.lastServerRuntime = null;
           applySnapshotToState(state, WorkflowEngine.createInitialState());
           state.projectId = null;
           resetHistory(state);
@@ -743,52 +547,33 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
       });
     },
 
-    applyServerExecutionState: (executionState) => {
+    applyRuntimeTaskProjection: (slots) => {
       set((state) => {
         const currentSnapshot = snapshotFromState(state);
+        const projection = applyTaskRunStudioProjection({
+          document: currentSnapshot.document,
+          runtime: currentSnapshot.runtime,
+          slots,
+        });
 
         runSnapshotMutation(
           state,
           () =>
             WorkflowEngine.syncState({
-              document: mergeExecutionTargetResults(
-                currentSnapshot.document,
-                executionState,
-              ),
+              document: projection.document,
               editor: currentSnapshot.editor,
-              runtime: mergeExecutionRuntimeState(
-                currentSnapshot.runtime,
-                executionState,
-              ),
+              runtime: projection.runtime,
             }),
           { persistDocument: false, recordHistory: false },
         );
 
-        state.activeExecutionId = isWorkflowExecutionActiveStatus(
-          executionState.status,
-        )
-          ? executionState.executionId
-          : null;
-        state.lockedNodeIds = isWorkflowExecutionLockingStatus(
-          executionState.status,
-        )
-          ? executionState.targetNodeIds
-          : [];
-        state.isStreamingExecutionStatus = isWorkflowExecutionActiveStatus(
-          executionState.status,
-        );
-        state.documentRevision =
-          executionState.projectDocumentRevision ?? state.documentRevision;
-        state.lastExecutionFinishedAt = executionState.runtime.finishedAt;
-        state.lastKnownCredits =
-          executionState.credits ?? state.lastKnownCredits;
-        state.lastServerRuntime = executionState.runtime;
+        state.lockedNodeIds = [...projection.activeNodeIds];
+        state.isStreamingExecutionStatus = projection.activeNodeIds.length > 0;
       });
     },
 
-    clearActiveExecutionId: () => {
+    clearExecutionStreaming: () => {
       set((state) => {
-        state.activeExecutionId = null;
         state.isStreamingExecutionStatus = false;
         state.lockedNodeIds = [];
       });
@@ -807,12 +592,6 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     setActivity: (activity) => {
       set((state) => {
         state.runtime.activity = activity;
-      });
-    },
-
-    setActiveExecutionId: (executionId) => {
-      set((state) => {
-        state.activeExecutionId = executionId;
       });
     },
 

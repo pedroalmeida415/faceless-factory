@@ -16,7 +16,9 @@ function isWorkflowAsset(value: unknown): value is WorkflowAsset {
   return (
     isRecord(value) &&
     typeof value.id === "string" &&
-    (value.kind === "image" || value.kind === "video") &&
+    (value.kind === "image" ||
+      value.kind === "video" ||
+      value.kind === "text") &&
     (value.source === "upload" || value.source === "generated") &&
     typeof value.fileName === "string" &&
     typeof value.mimeType === "string" &&

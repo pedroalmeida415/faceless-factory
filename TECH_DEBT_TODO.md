@@ -2,9 +2,9 @@
 
 - [x] Unify workflow upstream dependency traversal.
   Pricing (`src/lib/workflow/pricing.ts`) walks upstream to collect cost-contributing generator nodes, while execution (`src/lib/workflow/execution/core.ts` and `src/lib/workflow/execution/input-coercion.ts`) walks upstream to resolve and run dependencies. Extract a shared helper/source of truth for upstream execution dependency discovery so pricing, validation, and execution cannot drift.
-- [ ] Remove `// @ts-nocheck` from lane recovery service tests.
-  `src/server/workflow/execution-service.test.ts` currently disables type checking for the new `startRun` lane-reuse coverage. Type the mocked Effect services and queue job assertions so the test itself complies with the project's strict TypeScript standard.
-- [ ] Add DB-backed lane recovery artifact-store tests.
-  Cover terminal-run filtering for prior lane reuse candidates, exclusion of active queued/running/waiting runs, exclusion of the newly created run, and transaction rollback for reusable lane seeding so partial copy failures cannot create misleading latest lane state.
-- [ ] Split lane recovery service coverage into focused scenarios.
-  Add separate service-level tests for terminal success reuse, active-run exclusion, seed failure cleanup/terminal error behavior, latest-error regeneration, and quote/debit excluding reused lanes instead of relying only on one combined mocked `startRun` scenario.
+- [ ] Add prompt-node variable resolution to workflow-runtime provider input rendering.
+  The new Task Run snapshot renderer currently supports direct parent text/media inputs. Add support for prompt nodes with variable bindings so rendered provider inputs can be built from prompt templates and upstream task-run outputs without falling back to live graph execution.
+- [ ] Add output-reorder item-index mapping to workflow-runtime planning.
+  The new Task Dependency model preserves edge addresses, but output reorder semantics still need explicit item-index remapping during planning so downstream task runs depend on the correct upstream item indexes.
+- [ ] Add final cost attribution for image and video provider execution.
+  The new Vertex provider executor calculates LLM cost from usage, but image/video final cost is currently `0` until a reliable pricing source is wired into runtime settlement.

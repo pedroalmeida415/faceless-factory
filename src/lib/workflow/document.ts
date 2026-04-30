@@ -345,7 +345,7 @@ function asWorkflowAsset(value: unknown): WorkflowAsset | null {
   const kind = value.kind;
   const source = value.source;
   if (
-    (kind !== "image" && kind !== "video") ||
+    (kind !== "image" && kind !== "video" && kind !== "text") ||
     (source !== "upload" && source !== "generated")
   ) {
     return null;
@@ -378,7 +378,11 @@ function asWorkflowAssets(value: unknown) {
 
 function asMediaOutputs(value: unknown) {
   return Array.isArray(value)
-    ? value.map((output) => asWorkflowAssets(output))
+    ? value.map((output) =>
+        asWorkflowAssets(output).filter(
+          (asset) => asset.kind === "image" || asset.kind === "video",
+        ),
+      )
     : [];
 }
 
@@ -419,6 +423,9 @@ function asWorkflowReviewOutput(value: unknown): WorkflowReviewOutput | null {
     executionId: asNullableString(value.executionId, null),
     outputIndex,
     status,
+    ...(typeof value.taskRunId === "string" && value.taskRunId.length > 0
+      ? { taskRunId: value.taskRunId }
+      : {}),
     text: asNullableString(value.text, null),
   };
 }
@@ -514,6 +521,10 @@ function inferAssetKindFromAssets(assets: WorkflowAsset[]) {
     return null;
   }
 
+  if (firstAsset.kind !== "image" && firstAsset.kind !== "video") {
+    return null;
+  }
+
   return assets.every((asset) => asset.kind === firstAsset.kind)
     ? firstAsset.kind
     : null;
@@ -569,7 +580,9 @@ function normalizeWorkflowNode(
         value.kind,
         position,
       ) as AssetWorkflowNode;
-      const assets = asWorkflowAssets(value.assets);
+      const assets = asWorkflowAssets(value.assets).filter(
+        (asset) => asset.kind === "image" || asset.kind === "video",
+      );
       const inferredAssetKind = inferAssetKindFromAssets(assets);
 
       return {

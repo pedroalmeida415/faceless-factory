@@ -1,0 +1,168 @@
+import type { WorkflowDefinitionDocumentNode } from "~/lib/workflow/document";
+import { buildTaskRunIdempotencyKey } from "~/lib/workflow-runtime/domain/task-run-state";
+import {
+  type RenderedTaskRunProviderInput,
+  renderTaskRunProviderInput,
+  type TaskRunProviderInput,
+} from "~/lib/workflow-runtime/execution/provider-input-rendering";
+import type { RenderableTaskOutput } from "~/lib/workflow-runtime/runtime/task-status-events";
+
+export type { RenderedTaskRunProviderInput, TaskRunProviderInput };
+
+export type ResolvedParentTaskRunInputSnapshot = {
+  readonly taskRunId: string;
+  readonly nodeExecutionId: string;
+  readonly itemIndex: number;
+  readonly attempt: number;
+  readonly output?: RenderableTaskOutput;
+  readonly sourceNodeId?: string;
+  readonly targetNodeId?: string;
+  readonly sourceHandle?: string | null;
+  readonly targetHandle?: string | null;
+};
+
+export type TaskRunInputSnapshot = {
+  readonly kind: "task-run-input-snapshot";
+  readonly version: 1;
+  readonly taskRunId: string;
+  readonly nodeExecutionId: string;
+  readonly nodeId: string;
+  readonly itemIndex: number;
+  readonly attempt: number;
+  readonly idempotencyKey: string;
+  readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
+  readonly resolvedParentTaskRuns: readonly ResolvedParentTaskRunInputSnapshot[];
+  readonly providerInput: TaskRunProviderInput;
+};
+
+export type ExecutableTaskRunInputSnapshot = TaskRunInputSnapshot & {
+  readonly providerInput: RenderedTaskRunProviderInput;
+};
+
+export function buildTaskRunInputSnapshot(input: {
+  readonly taskRunId: string;
+  readonly nodeExecutionId: string;
+  readonly nodeId: string;
+  readonly itemIndex: number;
+  readonly attempt: number;
+  readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
+  readonly resolvedParentTaskRuns: readonly ResolvedParentTaskRunInputSnapshot[];
+}): TaskRunInputSnapshot {
+  const idempotencyKey = buildTaskRunIdempotencyKey({
+    attempt: input.attempt,
+    taskRunId: input.taskRunId,
+  });
+
+  return {
+    attempt: input.attempt,
+    idempotencyKey,
+    itemIndex: input.itemIndex,
+    kind: "task-run-input-snapshot",
+    nodeExecutionId: input.nodeExecutionId,
+    nodeId: input.nodeId,
+    providerInput: renderTaskRunProviderInput({
+      idempotencyKey,
+      itemIndex: input.itemIndex,
+      resolvedParentTaskRuns: input.resolvedParentTaskRuns,
+      targetNodeConfig: input.targetNodeConfig,
+    }).providerInput,
+    resolvedParentTaskRuns: input.resolvedParentTaskRuns,
+    targetNodeConfig: input.targetNodeConfig,
+    taskRunId: input.taskRunId,
+    version: 1,
+  };
+}
+
+export function isTaskRunInputSnapshot(
+  value: unknown,
+): value is TaskRunInputSnapshot {
+  return (
+    isRecord(value) &&
+    value.kind === "task-run-input-snapshot" &&
+    value.version === 1 &&
+    typeof value.idempotencyKey === "string" &&
+    typeof value.taskRunId === "string" &&
+    typeof value.nodeExecutionId === "string" &&
+    typeof value.nodeId === "string" &&
+    typeof value.itemIndex === "number" &&
+    typeof value.attempt === "number" &&
+    isWorkflowDefinitionDocumentNode(value.targetNodeConfig) &&
+    Array.isArray(value.resolvedParentTaskRuns) &&
+    value.resolvedParentTaskRuns.every(isResolvedParentTaskRunInputSnapshot) &&
+    isTaskRunProviderInput(value.providerInput)
+  );
+}
+
+function isResolvedParentTaskRunInputSnapshot(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.taskRunId === "string" &&
+    typeof value.nodeExecutionId === "string" &&
+    typeof value.itemIndex === "number" &&
+    typeof value.attempt === "number" &&
+    (value.sourceNodeId === undefined ||
+      typeof value.sourceNodeId === "string") &&
+    (value.targetNodeId === undefined ||
+      typeof value.targetNodeId === "string") &&
+    (value.sourceHandle === undefined ||
+      value.sourceHandle === null ||
+      typeof value.sourceHandle === "string") &&
+    (value.targetHandle === undefined ||
+      value.targetHandle === null ||
+      typeof value.targetHandle === "string") &&
+    (value.output === undefined || isRenderableTaskOutput(value.output))
+  );
+}
+
+function isTaskRunProviderInput(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.kind !== "string") {
+    return false;
+  }
+
+  if (value.kind === "non-executable-node") {
+    return (
+      value.reason === "UNSUPPORTED_NODE_KIND" &&
+      typeof value.message === "string"
+    );
+  }
+
+  return (
+    (value.kind === "image-generation-request" ||
+      value.kind === "video-generation-request" ||
+      value.kind === "llm-generation-request") &&
+    isRecord(value.request) &&
+    typeof value.request.model === "string" &&
+    typeof value.request.prompt === "string"
+  );
+}
+
+function isRenderableTaskOutput(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    ((value.kind === "inline-text-asset" &&
+      typeof value.assetId === "string" &&
+      typeof value.text === "string") ||
+      (value.kind === "cdn-asset" &&
+        typeof value.assetId === "string" &&
+        typeof value.cdnUrl === "string" &&
+        typeof value.contentType === "string"))
+  );
+}
+
+function isWorkflowDefinitionDocumentNode(
+  value: unknown,
+): value is WorkflowDefinitionDocumentNode {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.kind === "string" &&
+    typeof value.label === "string" &&
+    isRecord(value.position) &&
+    typeof value.position.x === "number" &&
+    typeof value.position.y === "number"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}

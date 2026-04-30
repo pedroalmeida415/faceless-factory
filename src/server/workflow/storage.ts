@@ -12,6 +12,7 @@ import {
 import type {
   AssetKind,
   AssetSource,
+  MediaAssetKind,
   WorkflowAsset,
 } from "~/lib/workflow/types";
 import { db } from "~/server/db";
@@ -463,7 +464,7 @@ export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
     >;
     readonly saveFormFileAsAsset: (options: {
       file: File;
-      kind: AssetKind;
+      kind: MediaAssetKind;
       ownerUserId: string;
       workflowId: string;
       source: AssetSource;

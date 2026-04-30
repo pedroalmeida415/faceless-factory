@@ -1,5 +1,5 @@
 import { WorkflowValidationError } from "~/lib/workflow/errors";
-import type { AssetKind, WorkflowAsset } from "~/lib/workflow/types";
+import type { MediaAssetKind, WorkflowAsset } from "~/lib/workflow/types";
 
 export const MAX_WORKFLOW_UPLOAD_BYTES = 128 * 1024 * 1024;
 export const MAX_INLINE_ASSET_PREVIEW_BYTES = 24 * 1024 * 1024;
@@ -56,17 +56,19 @@ export function formatWorkflowAssetSize(bytes: number) {
   return `${rounded} ${units[unitIndex]}`;
 }
 
-export function getWorkflowUploadAssetKind(file: Pick<File, "type">) {
+export function getWorkflowUploadAssetKind(
+  file: Pick<File, "type">,
+): MediaAssetKind | null {
   if (!SUPPORTED_WORKFLOW_UPLOAD_MIME_TYPES.has(file.type)) {
     return null;
   }
 
   if (file.type.startsWith("image/")) {
-    return "image" satisfies AssetKind;
+    return "image";
   }
 
   if (file.type.startsWith("video/")) {
-    return "video" satisfies AssetKind;
+    return "video";
   }
 
   return null;

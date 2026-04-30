@@ -1,16 +1,13 @@
 import { Effect } from "effect";
 
 import { getErrorMessage, WorkflowRequestError } from "~/lib/workflow/errors";
-import {
-  isWorkflowExecutionActiveStatus,
-  type WorkflowExecutionTarget,
-} from "~/lib/workflow/execution/types";
 import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
 import { WorkflowPersistenceService } from "~/lib/workflow/services/workflow-persistence-service";
 import { WorkflowStudioStoreService } from "~/lib/workflow/services/workflow-studio-store-service";
+import { hasActiveTaskRunProjection } from "~/lib/workflow-runtime/task-run-studio-projection";
 
 export const WorkflowExecutionService = {
-  start(target: WorkflowExecutionTarget) {
+  start(target: { type: "node"; nodeId: string }) {
     return Effect.gen(function* () {
       const workflowStudioStore = yield* WorkflowStudioStoreService;
       yield* Effect.tryPromise({
@@ -30,89 +27,104 @@ export const WorkflowExecutionService = {
           }),
         );
       }
+      const projectId = snapshot.projectId;
 
       yield* workflowStudioStore.setExecutionStreaming(true);
 
-      const executionState = yield* WorkflowClientService.startExecution({
-        clientExecutionId: crypto.randomUUID(),
-        document: snapshot.document,
-        documentRevision: snapshot.documentRevision,
-        projectId: snapshot.projectId,
-        selection: {
-          nodeIds: snapshot.editor.selectedNodeIds,
-        },
-        target,
-      });
-
-      yield* workflowStudioStore.setActiveExecutionId(
-        executionState.executionId,
+      const previousProjection =
+        yield* WorkflowClientService.getTaskProjection(projectId);
+      const hasExistingNodeExecution = previousProjection.some(
+        (slot) => slot.nodeId === target.nodeId,
       );
-      yield* workflowStudioStore.applyServerExecutionState(executionState);
 
-      if (!isWorkflowExecutionActiveStatus(executionState.status)) {
-        yield* workflowStudioStore.clearActiveExecutionId();
+      if (hasExistingNodeExecution) {
+        yield* WorkflowClientService.rerunNode({
+          nodeId: target.nodeId,
+          projectId,
+        });
+      } else {
+        yield* WorkflowClientService.runTarget({
+          nodeId: target.nodeId,
+          projectId,
+        });
+      }
+
+      const initialProjection =
+        yield* WorkflowClientService.getTaskProjection(projectId);
+      yield* workflowStudioStore.applyRuntimeTaskProjection(initialProjection);
+
+      if (!hasActiveTaskRunProjection(initialProjection)) {
+        yield* workflowStudioStore.clearExecutionStreaming();
         return;
       }
 
       yield* Effect.async<void, WorkflowRequestError>((resume) => {
         let settled = false;
+        let refreshing = false;
+        let refreshAgain = false;
 
-        const subscription = WorkflowClientService.openExecutionEvents(
-          executionState.executionId,
-          {
-            onExecutionState: (nextExecutionState) => {
-              void Effect.runPromise(
-                workflowStudioStore.applyServerExecutionState(
-                  nextExecutionState,
-                ),
-              )
-                .then(() => {
-                  if (
-                    isWorkflowExecutionActiveStatus(
-                      nextExecutionState.status,
-                    ) ||
-                    settled
-                  ) {
-                    return;
-                  }
+        const refreshProjection = () => {
+          if (refreshing) {
+            refreshAgain = true;
+            return;
+          }
 
-                  settled = true;
-                  subscription.unsubscribe();
-
-                  void Effect.runPromise(
-                    workflowStudioStore.clearActiveExecutionId(),
-                  ).finally(() => {
-                    resume(Effect.void);
-                  });
-                })
-                .catch((cause) => {
-                  if (settled) {
-                    return;
-                  }
-
-                  settled = true;
-                  subscription.unsubscribe();
-                  resume(
-                    Effect.fail(
-                      new WorkflowRequestError({
-                        message: getErrorMessage(cause),
-                        cause,
-                      }),
-                    ),
-                  );
-                });
-            },
-            onError: (error) => {
+          refreshing = true;
+          void Effect.runPromise(
+            WorkflowClientService.getTaskProjection(projectId).pipe(
+              Effect.flatMap((projection) =>
+                workflowStudioStore
+                  .applyRuntimeTaskProjection(projection)
+                  .pipe(Effect.as(projection)),
+              ),
+            ),
+          )
+            .then((projection) => {
+              if (!hasActiveTaskRunProjection(projection) && !settled) {
+                settled = true;
+                subscription.unsubscribe();
+                void Effect.runPromise(
+                  workflowStudioStore.clearExecutionStreaming(),
+                ).finally(() => resume(Effect.void));
+              }
+            })
+            .catch((cause) => {
               if (settled) {
                 return;
               }
 
               settled = true;
               subscription.unsubscribe();
-              resume(Effect.fail(error));
-            },
+              resume(
+                Effect.fail(
+                  new WorkflowRequestError({
+                    message: getErrorMessage(cause),
+                    cause,
+                  }),
+                ),
+              );
+            })
+            .finally(() => {
+              refreshing = false;
+              if (refreshAgain && !settled) {
+                refreshAgain = false;
+                refreshProjection();
+              }
+            });
+        };
+
+        const subscription = WorkflowClientService.openTaskEvents(projectId, {
+          onTaskEvent: refreshProjection,
+          onError: (error) => {
+            if (settled) {
+              return;
+            }
+
+            settled = true;
+            subscription.unsubscribe();
+            resume(Effect.fail(error));
           },
-        );
+        });
 
         return Effect.sync(() => {
           subscription.unsubscribe();
@@ -122,7 +134,7 @@ export const WorkflowExecutionService = {
       Effect.catchAll((error) =>
         Effect.gen(function* () {
           const workflowStudioStore = yield* WorkflowStudioStoreService;
-          yield* workflowStudioStore.clearActiveExecutionId();
+          yield* workflowStudioStore.clearExecutionStreaming();
           yield* workflowStudioStore.setExecutionStreaming(false);
           yield* workflowStudioStore.setActivity(getErrorMessage(error));
         }),

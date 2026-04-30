@@ -111,22 +111,8 @@ function isGeneratorNode(node: WorkflowDocument["nodes"][number] | undefined) {
 }
 
 function resolveTargetNodeIds(request: PlanningRequest) {
-  if (request.target.type === "node") {
-    return [request.target.nodeId];
-  }
-
-  const selectedSet = new Set(request.selectionNodeIds ?? []);
-  const selectedGeneratorIds = request.document.nodes
-    .filter(
-      (node) => selectedSet.has(node.id) && isGeneratorNodeKind(node.kind),
-    )
-    .map((node) => node.id);
-
-  return selectedGeneratorIds.length
-    ? selectedGeneratorIds
-    : request.document.nodes
-        .filter((node) => isGeneratorNodeKind(node.kind))
-        .map((node) => node.id);
+  void request.selectionNodeIds;
+  return [request.target.nodeId];
 }
 
 function validateTargetNodes(

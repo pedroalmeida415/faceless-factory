@@ -33,8 +33,11 @@ export const PROMPT_DISPLAY_MODES = [
   "value",
   "source",
 ] as const;
+export const ASSET_KINDS = ["image", "video", "text"] as const;
+export const MEDIA_ASSET_KINDS = ["image", "video"] as const;
 
-export type AssetKind = "image" | "video";
+export type AssetKind = (typeof ASSET_KINDS)[number];
+export type MediaAssetKind = (typeof MEDIA_ASSET_KINDS)[number];
 export type AssetSource = "upload" | "generated";
 export type WorkflowNodeStatus =
   | "idle"
@@ -105,7 +108,7 @@ export type ListNodeFields = {
 };
 
 export type AssetNodeFields = {
-  assetKind: AssetKind | null;
+  assetKind: MediaAssetKind | null;
   assets: WorkflowAsset[];
 };
 
@@ -128,6 +131,7 @@ export type WorkflowReviewOutput = {
   status: WorkflowOutputReviewStatus;
   attempt: number;
   assets: WorkflowAsset[];
+  taskRunId?: string;
   text: string | null;
 };
 
