@@ -4,7 +4,7 @@ import type {
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
 import { getWorkflowVisibleCompletionOutputs } from "~/lib/workflow/execution/artifact-projection";
-import { getWorkflowPlannedOutputCount } from "~/lib/workflow/execution/subgraph";
+import { WorkflowExecutionPlanner } from "~/lib/workflow/execution/planning";
 import {
   getErroredWorkflowOutputResults,
   getWorkflowOutputKey,
@@ -85,12 +85,12 @@ function getSourceOutputCount(params: {
   sourceHandleId?: string | null;
   sourceNodeId: string;
 }): number {
-  return getWorkflowPlannedOutputCount(
-    params.document,
-    params.sourceNodeId,
-    params.sourceHandleId,
-    params.generatorIterationById,
-  );
+  return WorkflowExecutionPlanner.getPlannedOutputCount({
+    document: params.document,
+    generatorIterationById: params.generatorIterationById,
+    nodeId: params.sourceNodeId,
+    sourceHandleId: params.sourceHandleId,
+  });
 }
 
 function resolveSourceOutputDependencies(params: {

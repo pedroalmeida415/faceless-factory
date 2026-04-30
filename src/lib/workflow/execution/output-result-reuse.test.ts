@@ -102,7 +102,7 @@ describe("workflow output result reuse", () => {
     );
   });
 
-  test("ignores input and config snapshots when the latest output output is reusable", () => {
+  test("does not reuse direct non-review target outputs", () => {
     const output = {
       ...textOutput({
         documentRevision: 1,
@@ -126,6 +126,60 @@ describe("workflow output result reuse", () => {
             valueType: "text",
           },
         ],
+      }),
+      [],
+    );
+  });
+
+  test("reuses non-review dependency outputs", () => {
+    const output = {
+      ...textOutput({
+        documentRevision: 1,
+        inputHash: "previous-input",
+        model: "previous-model",
+        promptSnapshot: "previous prompt",
+      }),
+      status: "success" as const,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    assert.deepEqual(
+      selectReusableWorkflowOutputs({
+        candidates: [output],
+        expectedOutputs: [
+          {
+            outputIndex: 0,
+            isRequestedTarget: false,
+            nodeId: "llm",
+            reviewEnabled: false,
+            valueType: "text",
+          },
+        ],
+      }),
+      [output],
+    );
+  });
+
+  test("reuses direct target outputs only when requested for recovery", () => {
+    const output = {
+      ...textOutput(),
+      status: "success" as const,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    assert.deepEqual(
+      selectReusableWorkflowOutputs({
+        candidates: [output],
+        expectedOutputs: [
+          {
+            outputIndex: 0,
+            isRequestedTarget: true,
+            nodeId: "llm",
+            reviewEnabled: false,
+            valueType: "text",
+          },
+        ],
+        reuseRequestedTargets: true,
       }),
       [output],
     );

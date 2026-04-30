@@ -1,0 +1,699 @@
+import { Data } from "effect";
+
+import type { WorkflowDocument } from "~/lib/workflow/document";
+import { WorkflowValidationError } from "~/lib/workflow/errors";
+import type { WorkflowExecutionTarget } from "~/lib/workflow/execution/types";
+import {
+  buildIncomingByTarget,
+  buildOutgoingBySource,
+  getAlignedOutputCount,
+  getGeneratorInputHandles,
+  getIncomingEdgesForHandle,
+  getOutputReorderInputValue,
+  getPromptNodeReferencedVariableKeys,
+  getWorkflowGeneratorAwaitingReviewRuntimeValue,
+  getWorkflowGeneratorOutputRuntimeValue,
+  resolvePromptNodeTextBatch,
+} from "~/lib/workflow/graph";
+import {
+  OUTPUT_REORDER_INPUT_HANDLE_ID,
+  PROMPT_VARIABLE_PATTERN,
+  type WorkflowValueType,
+} from "~/lib/workflow/node-definitions";
+import { getReviewOutputCount } from "~/lib/workflow/review-state";
+import { getOutputPermutationValidationMessage } from "~/lib/workflow/runtime-values";
+import { isGeneratorNodeKind } from "~/lib/workflow/types";
+
+export class WorkflowExecutionPlanningError extends Data.TaggedError(
+  "WorkflowExecutionPlanningError",
+)<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+export type GeneratorIterationInfo = {
+  hasIterator: boolean;
+  iterations: number;
+  mismatchedIterators: boolean;
+};
+
+type PlannedValue = {
+  type: WorkflowValueType;
+  outputCount: number;
+  mismatched: boolean;
+};
+
+type PlanningContext = {
+  document: WorkflowDocument;
+  executableNodeIds: string[];
+  generatorIterationById: Map<string, GeneratorIterationInfo>;
+  incomingByTarget: ReturnType<typeof buildIncomingByTarget>;
+  nodeMap: Map<string, WorkflowDocument["nodes"][number]>;
+  reviewBarrierNodeIds: Set<string>;
+  requiredNodeIds: Set<string>;
+  targetNodeIdSet: Set<string>;
+};
+
+export type WorkflowExecutionPlan = {
+  targetNodeIds: string[];
+  requiredNodeIds: Set<string>;
+  executableNodeIds: string[];
+  reviewBarrierNodeIds: string[];
+  generatorIterationById: Map<string, GeneratorIterationInfo>;
+};
+
+type PlanningRequest = {
+  document: WorkflowDocument;
+  selectionNodeIds?: readonly string[];
+  target: WorkflowExecutionTarget;
+};
+
+const DEFAULT_GENERATOR_ITERATION_INFO: GeneratorIterationInfo = {
+  hasIterator: false,
+  iterations: 1,
+  mismatchedIterators: false,
+};
+
+function failPlanning(message: string, cause?: unknown): never {
+  throw new WorkflowExecutionPlanningError({ message, cause });
+}
+
+export function toWorkflowValidationError(
+  error: WorkflowExecutionPlanningError,
+) {
+  return new WorkflowValidationError({
+    message: error.message,
+    cause: error.cause,
+  });
+}
+
+function getNodeOutputValueType(
+  node: WorkflowDocument["nodes"][number],
+): WorkflowValueType | null {
+  switch (node.kind) {
+    case "list":
+    case "prompt":
+    case "llmGenerator":
+      return "text";
+    case "asset":
+      return node.assetKind;
+    case "outputReorder":
+      return node.valueType;
+    case "imageGenerator":
+      return "image";
+    case "videoGenerator":
+      return "video";
+  }
+}
+
+function isGeneratorNode(node: WorkflowDocument["nodes"][number] | undefined) {
+  return node ? isGeneratorNodeKind(node.kind) : false;
+}
+
+function resolveTargetNodeIds(request: PlanningRequest) {
+  if (request.target.type === "node") {
+    return [request.target.nodeId];
+  }
+
+  const selectedSet = new Set(request.selectionNodeIds ?? []);
+  const selectedGeneratorIds = request.document.nodes
+    .filter(
+      (node) => selectedSet.has(node.id) && isGeneratorNodeKind(node.kind),
+    )
+    .map((node) => node.id);
+
+  return selectedGeneratorIds.length
+    ? selectedGeneratorIds
+    : request.document.nodes
+        .filter((node) => isGeneratorNodeKind(node.kind))
+        .map((node) => node.id);
+}
+
+function validateTargetNodes(
+  document: WorkflowDocument,
+  targetNodeIds: string[],
+) {
+  if (!targetNodeIds.length) {
+    failPlanning("Add a generator first.");
+  }
+
+  const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
+  for (const targetId of targetNodeIds) {
+    const node = nodeMap.get(targetId);
+    if (!node) {
+      failPlanning(`Node ${targetId} not found.`);
+    }
+    if (!isGeneratorNode(node)) {
+      failPlanning("Only generator nodes can be executed.");
+    }
+  }
+}
+
+function toGeneratorIterationInfo(
+  values: readonly PlannedValue[],
+): GeneratorIterationInfo {
+  const outputCounts = values.map((value) => value.outputCount);
+  const hasNestedMismatch = values.some((value) => value.mismatched);
+
+  if (!outputCounts.length) {
+    return DEFAULT_GENERATOR_ITERATION_INFO;
+  }
+
+  try {
+    const iterations = getAlignedOutputCount(outputCounts);
+    return {
+      hasIterator: iterations > 1,
+      iterations,
+      mismatchedIterators: hasNestedMismatch,
+    };
+  } catch {
+    return {
+      hasIterator: true,
+      iterations: Math.max(...outputCounts),
+      mismatchedIterators: true,
+    };
+  }
+}
+
+function mergePlannedValues(
+  type: WorkflowValueType,
+  values: readonly PlannedValue[],
+): PlannedValue | null {
+  const filteredValues = values.filter((value) => value.type === type);
+  if (!filteredValues.length) {
+    return null;
+  }
+
+  const info = toGeneratorIterationInfo(filteredValues);
+  return {
+    type,
+    outputCount: info.iterations,
+    mismatched: info.mismatchedIterators,
+  };
+}
+
+function hasPromptStaticText(
+  node: Extract<WorkflowDocument["nodes"][number], { kind: "prompt" }>,
+) {
+  const variableKeys = new Set(node.variables.map((variable) => variable.key));
+  return Boolean(
+    node.prompt
+      .replace(PROMPT_VARIABLE_PATTERN, (match, key) =>
+        variableKeys.has(key) ? "" : match,
+      )
+      .trim(),
+  );
+}
+
+function resolveTextHandlePlan(
+  context: PlanningContext,
+  targetId: string,
+  handleId: string,
+  path: ReadonlySet<string>,
+) {
+  return mergePlannedValues(
+    "text",
+    getIncomingEdgesForHandle(context.incomingByTarget, targetId, handleId)
+      .map((edge) =>
+        resolveNodePlan(context, edge.source, path, edge.sourceHandle),
+      )
+      .filter((value): value is PlannedValue => Boolean(value)),
+  );
+}
+
+function resolvePromptPlan(
+  context: PlanningContext,
+  node: Extract<WorkflowDocument["nodes"][number], { kind: "prompt" }>,
+  path: ReadonlySet<string>,
+): PlannedValue | null {
+  const variableValues = getPromptNodeReferencedVariableKeys(node)
+    .map((key) => resolveTextHandlePlan(context, node.id, key, path))
+    .filter((value): value is PlannedValue => Boolean(value));
+
+  if (!variableValues.length) {
+    return hasPromptStaticText(node)
+      ? { outputCount: 1, mismatched: false, type: "text" }
+      : null;
+  }
+
+  const info = toGeneratorIterationInfo(variableValues);
+  return {
+    type: "text",
+    outputCount: info.iterations,
+    mismatched: info.mismatchedIterators,
+  };
+}
+
+function resolveGeneratorInputPlans(
+  context: PlanningContext,
+  nodeId: string,
+  path: ReadonlySet<string>,
+) {
+  return getGeneratorInputHandles(context.document, nodeId).flatMap((handle) =>
+    getIncomingEdgesForHandle(context.incomingByTarget, nodeId, handle.id)
+      .map((edge) =>
+        resolveNodePlan(context, edge.source, path, edge.sourceHandle),
+      )
+      .filter(
+        (value): value is PlannedValue =>
+          value !== null && value.type === handle.valueType,
+      ),
+  );
+}
+
+function planGeneratorNode(
+  context: PlanningContext,
+  node: Extract<
+    WorkflowDocument["nodes"][number],
+    { kind: "imageGenerator" | "videoGenerator" | "llmGenerator" }
+  >,
+  path: ReadonlySet<string>,
+) {
+  const existing = context.generatorIterationById.get(node.id);
+  if (existing) {
+    return existing;
+  }
+
+  context.executableNodeIds.push(node.id);
+  context.generatorIterationById.set(node.id, DEFAULT_GENERATOR_ITERATION_INFO);
+
+  const inputInfo = toGeneratorIterationInfo(
+    resolveGeneratorInputPlans(context, node.id, path),
+  );
+  const reviewOutputCount = getReviewOutputCount(node);
+  const info = {
+    ...inputInfo,
+    hasIterator: inputInfo.hasIterator || reviewOutputCount > 1,
+    iterations: Math.max(inputInfo.iterations, reviewOutputCount),
+  };
+  context.generatorIterationById.set(node.id, info);
+  return info;
+}
+
+function resolveNodePlan(
+  context: PlanningContext,
+  nodeId: string,
+  path: ReadonlySet<string>,
+  _sourceHandleId?: string | null,
+): PlannedValue | null {
+  if (path.has(nodeId)) {
+    return null;
+  }
+
+  const node = context.nodeMap.get(nodeId);
+  if (!node) {
+    return null;
+  }
+
+  context.requiredNodeIds.add(node.id);
+  const outputType = getNodeOutputValueType(node);
+  if (!outputType) {
+    return null;
+  }
+
+  const nextPath = new Set(path);
+  nextPath.add(node.id);
+
+  switch (node.kind) {
+    case "list": {
+      const outputCount = node.items.filter((item) => item.trim()).length;
+      return outputCount
+        ? { outputCount, mismatched: false, type: "text" }
+        : null;
+    }
+    case "asset":
+      return node.assetKind && node.assets.length
+        ? {
+            outputCount: node.assets.length,
+            mismatched: false,
+            type: node.assetKind,
+          }
+        : null;
+    case "outputReorder": {
+      const incomingEdges = getIncomingEdgesForHandle(
+        context.incomingByTarget,
+        node.id,
+        OUTPUT_REORDER_INPUT_HANDLE_ID,
+      );
+      if (incomingEdges.length !== 1) {
+        return null;
+      }
+
+      const [incomingEdge] = incomingEdges;
+      if (!incomingEdge) {
+        return null;
+      }
+
+      const value = resolveNodePlan(
+        context,
+        incomingEdge.source,
+        nextPath,
+        incomingEdge.sourceHandle,
+      );
+      return value?.type === node.valueType ? value : null;
+    }
+    case "prompt":
+      return resolvePromptPlan(context, node, nextPath);
+    case "imageGenerator":
+    case "videoGenerator":
+    case "llmGenerator": {
+      const storedOutput = getWorkflowGeneratorOutputRuntimeValue(node);
+      if (storedOutput && !context.targetNodeIdSet.has(node.id)) {
+        return {
+          outputCount: storedOutput.items.length,
+          mismatched: false,
+          type: storedOutput.type,
+        };
+      }
+
+      const awaitingReviewOutput =
+        getWorkflowGeneratorAwaitingReviewRuntimeValue(node);
+      const reviewOutputCount = getReviewOutputCount(node);
+      if (awaitingReviewOutput && !context.targetNodeIdSet.has(node.id)) {
+        context.reviewBarrierNodeIds.add(node.id);
+        return {
+          outputCount: Math.max(
+            awaitingReviewOutput.items.length,
+            reviewOutputCount,
+          ),
+          mismatched: false,
+          type: awaitingReviewOutput.type,
+        };
+      }
+
+      if (reviewOutputCount > 0 && !context.targetNodeIdSet.has(node.id)) {
+        context.reviewBarrierNodeIds.add(node.id);
+        return {
+          outputCount: reviewOutputCount,
+          mismatched: false,
+          type: node.review.valueType ?? outputType,
+        };
+      }
+
+      const info = planGeneratorNode(context, node, nextPath);
+      return {
+        outputCount: info.iterations,
+        mismatched: info.mismatchedIterators,
+        type: outputType,
+      };
+    }
+  }
+}
+
+function buildPlan(
+  document: WorkflowDocument,
+  targetNodeIds: readonly string[],
+) {
+  const context: PlanningContext = {
+    document,
+    executableNodeIds: [],
+    generatorIterationById: new Map(),
+    incomingByTarget: buildIncomingByTarget(document.edges),
+    nodeMap: new Map(document.nodes.map((node) => [node.id, node])),
+    reviewBarrierNodeIds: new Set(),
+    requiredNodeIds: new Set(),
+    targetNodeIdSet: new Set(targetNodeIds),
+  };
+
+  for (const targetNodeId of targetNodeIds) {
+    resolveNodePlan(context, targetNodeId, new Set());
+  }
+
+  return {
+    targetNodeIds: [...targetNodeIds],
+    requiredNodeIds: context.requiredNodeIds,
+    executableNodeIds: context.executableNodeIds,
+    reviewBarrierNodeIds: Array.from(context.reviewBarrierNodeIds),
+    generatorIterationById: context.generatorIterationById,
+  } satisfies WorkflowExecutionPlan;
+}
+
+function getPlannedOutputCount(params: {
+  document: WorkflowDocument;
+  generatorIterationById?: ReadonlyMap<string, { iterations: number }>;
+  nodeId: string;
+  sourceHandleId?: string | null;
+}) {
+  const seededGeneratorIterations = new Map(
+    Array.from(params.generatorIterationById ?? new Map(), ([id, info]) => [
+      id,
+      {
+        hasIterator: info.iterations > 1,
+        iterations: info.iterations,
+        mismatchedIterators: false,
+      } satisfies GeneratorIterationInfo,
+    ]),
+  );
+  const context: PlanningContext = {
+    document: params.document,
+    executableNodeIds: [],
+    generatorIterationById: seededGeneratorIterations,
+    incomingByTarget: buildIncomingByTarget(params.document.edges),
+    nodeMap: new Map(params.document.nodes.map((node) => [node.id, node])),
+    reviewBarrierNodeIds: new Set(),
+    requiredNodeIds: new Set(),
+    targetNodeIdSet: new Set([params.nodeId]),
+  };
+
+  return (
+    resolveNodePlan(context, params.nodeId, new Set(), params.sourceHandleId)
+      ?.outputCount ?? 1
+  );
+}
+
+function validatePlan(document: WorkflowDocument, plan: WorkflowExecutionPlan) {
+  const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
+  const incomingByTarget = buildIncomingByTarget(document.edges);
+  const executableNodeIds = new Set(plan.executableNodeIds);
+
+  for (const nodeId of plan.requiredNodeIds) {
+    const node = nodeMap.get(nodeId);
+    if (!node) {
+      failPlanning(`Node ${nodeId} not found.`);
+    }
+
+    switch (node.kind) {
+      case "list":
+        if (!node.items.some((value) => value.trim())) {
+          failPlanning("List node is empty.");
+        }
+        break;
+      case "prompt":
+        if (
+          !resolvePromptNodeTextBatch(node, (key) =>
+            getIncomingEdgesForHandle(incomingByTarget, node.id, key).length
+              ? { type: "text", items: [key] }
+              : null,
+          )
+        ) {
+          failPlanning("Prompt node is empty.");
+        }
+        break;
+      case "asset":
+        if (!node.assetKind || !node.assets.length) {
+          failPlanning("Asset node is empty.");
+        }
+        break;
+      case "outputReorder": {
+        const inputEdges = getIncomingEdgesForHandle(
+          incomingByTarget,
+          node.id,
+          OUTPUT_REORDER_INPUT_HANDLE_ID,
+        );
+        if (inputEdges.length !== 1) {
+          failPlanning("Output Reorder needs exactly one input.");
+        }
+
+        const inputValue = getOutputReorderInputValue(document, node.id);
+        if (inputValue && inputValue.type !== node.valueType) {
+          failPlanning(
+            "Output Reorder input type does not match its output type.",
+          );
+        }
+
+        if (node.mode === "manual" && inputValue) {
+          const message = getOutputPermutationValidationMessage(
+            node.order,
+            inputValue.items.length,
+          );
+          if (message) {
+            failPlanning(message);
+          }
+        }
+        break;
+      }
+      case "imageGenerator":
+      case "videoGenerator":
+      case "llmGenerator": {
+        if (!executableNodeIds.has(node.id)) {
+          break;
+        }
+
+        for (const handle of getGeneratorInputHandles(document, node.id).filter(
+          (handle) => handle.required,
+        )) {
+          if (
+            getIncomingEdgesForHandle(incomingByTarget, node.id, handle.id)
+              .length
+          ) {
+            continue;
+          }
+
+          failPlanning(
+            `Connect ${handle.label.toLowerCase()} ${handle.valueType}.`,
+          );
+        }
+
+        if (plan.generatorIterationById.get(node.id)?.mismatchedIterators) {
+          failPlanning("Connected input output counts do not match.");
+        }
+        break;
+      }
+    }
+  }
+}
+
+function extractSubgraph(
+  document: WorkflowDocument,
+  requiredNodeIds: ReadonlySet<string>,
+) {
+  return {
+    ...document,
+    nodes: document.nodes.filter((node) => requiredNodeIds.has(node.id)),
+    edges: document.edges.filter(
+      (edge) =>
+        requiredNodeIds.has(edge.source) && requiredNodeIds.has(edge.target),
+    ),
+  } satisfies WorkflowDocument;
+}
+
+function collectDownstreamGeneratorNodeIds(params: {
+  allowedNodeIds?: ReadonlySet<string>;
+  document: WorkflowDocument;
+  sourceNodeId: string;
+}) {
+  const outgoingBySource = buildOutgoingBySource(params.document.edges);
+  const nodeById = new Map(
+    params.document.nodes.map((node) => [node.id, node]),
+  );
+  const visited = new Set<string>();
+  const stack = (outgoingBySource.get(params.sourceNodeId) ?? []).map(
+    (edge) => edge.target,
+  );
+  const generatorIds: string[] = [];
+
+  while (stack.length) {
+    const nodeId = stack.shift();
+    if (!nodeId || visited.has(nodeId)) {
+      continue;
+    }
+
+    visited.add(nodeId);
+    const node = nodeById.get(nodeId);
+    if (
+      node &&
+      isGeneratorNodeKind(node.kind) &&
+      (!params.allowedNodeIds || params.allowedNodeIds.has(node.id))
+    ) {
+      generatorIds.push(node.id);
+    }
+
+    for (const edge of outgoingBySource.get(nodeId) ?? []) {
+      stack.push(edge.target);
+    }
+  }
+
+  return generatorIds;
+}
+
+function planRequest(
+  request: PlanningRequest,
+  validateExecutionInputs: boolean,
+) {
+  const targetNodeIds = resolveTargetNodeIds(request);
+  validateTargetNodes(request.document, targetNodeIds);
+  const plan = buildPlan(request.document, targetNodeIds);
+  if (validateExecutionInputs) {
+    validatePlan(request.document, plan);
+  }
+  return plan;
+}
+
+export const WorkflowExecutionPlanner = {
+  forQuote(request: PlanningRequest) {
+    const plan = planRequest(request, false);
+    return {
+      ...plan,
+      priceNodeIds: plan.executableNodeIds,
+    };
+  },
+
+  forStart(request: PlanningRequest) {
+    const plan = planRequest(request, true);
+    return {
+      ...plan,
+      artifactNodeIds: Array.from(
+        new Set([...plan.executableNodeIds, ...plan.reviewBarrierNodeIds]),
+      ),
+      document: extractSubgraph(request.document, plan.requiredNodeIds),
+    };
+  },
+
+  forRuntime(request: PlanningRequest) {
+    const plan = planRequest(request, true);
+    return {
+      ...plan,
+      artifactNodeIds: Array.from(
+        new Set([...plan.executableNodeIds, ...plan.reviewBarrierNodeIds]),
+      ),
+    };
+  },
+
+  forTaskScheduling(params: {
+    document: WorkflowDocument;
+    targetNodeIds: readonly string[];
+  }) {
+    const plan = buildPlan(params.document, params.targetNodeIds);
+    validateTargetNodes(params.document, plan.targetNodeIds);
+    return {
+      ...plan,
+      artifactNodeIds: Array.from(
+        new Set([...plan.executableNodeIds, ...plan.reviewBarrierNodeIds]),
+      ),
+      getOutputCount: (nodeId: string, sourceHandleId?: string | null) =>
+        getPlannedOutputCount({
+          document: params.document,
+          generatorIterationById: plan.generatorIterationById,
+          nodeId,
+          sourceHandleId,
+        }),
+    };
+  },
+
+  collectDownstreamGeneratorNodeIds,
+  extractSubgraph(
+    document: WorkflowDocument,
+    targetNodeIds: readonly string[],
+  ) {
+    return extractSubgraph(
+      document,
+      buildPlan(document, targetNodeIds).requiredNodeIds,
+    );
+  },
+  getGeneratorIterationPreview(document: WorkflowDocument, targetId: string) {
+    return (
+      buildPlan(document, [targetId]).generatorIterationById.get(targetId) ??
+      DEFAULT_GENERATOR_ITERATION_INFO
+    );
+  },
+  getPlannedOutputCount,
+  planTargetNodes(
+    document: WorkflowDocument,
+    targetNodeIds: readonly string[],
+  ) {
+    return buildPlan(document, targetNodeIds);
+  },
+  resolveTargetNodeIds,
+  validatePlan,
+  validateTargetNodes,
+};

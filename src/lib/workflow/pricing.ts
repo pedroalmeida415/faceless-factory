@@ -2,12 +2,12 @@ import type {
   WorkflowDocument,
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
-import { WorkflowValidationError } from "~/lib/workflow/errors";
 import {
-  buildWorkflowExecutionPlan,
   type GeneratorIterationInfo,
-} from "~/lib/workflow/execution/subgraph";
-import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target-resolution";
+  toWorkflowValidationError,
+  WorkflowExecutionPlanner,
+  WorkflowExecutionPlanningError,
+} from "~/lib/workflow/execution/planning";
 import type { StartWorkflowExecutionRequest } from "~/lib/workflow/execution/types";
 import {
   getImageGeneratorModelCreditCost,
@@ -93,30 +93,13 @@ function buildWorkflowExecutionPriceLineItem(
   }
 }
 
-function resolveQuotedTargetIds(request: StartWorkflowExecutionRequest) {
-  const targetIds = resolveWorkflowExecutionTargets(
-    request.document,
-    request.selection?.nodeIds ?? [],
-    request.target,
-  );
-
-  if (!targetIds.length) {
-    throw new WorkflowValidationError({
-      message: "Add a generator first.",
-    });
-  }
-
-  return targetIds;
-}
-
 function buildWorkflowExecutionPriceQuote(
   document: WorkflowDocument,
-  targetIds: string[],
+  executionPlan: ReturnType<typeof WorkflowExecutionPlanner.forQuote>,
   options?: WorkflowExecutionEstimateOptions,
 ): WorkflowExecutionPriceQuote {
   const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
-  const executionPlan = buildWorkflowExecutionPlan(document, targetIds);
-  const lineItems = executionPlan.executableNodeIds
+  const lineItems = executionPlan.priceNodeIds
     .map((nodeId) => nodeMap.get(nodeId))
     .flatMap((node) =>
       node
@@ -160,6 +143,20 @@ export function estimateWorkflowExecution(
   request: StartWorkflowExecutionRequest,
   options?: WorkflowExecutionEstimateOptions,
 ): WorkflowExecutionPriceQuote {
-  const targetIds = resolveQuotedTargetIds(request);
-  return buildWorkflowExecutionPriceQuote(request.document, targetIds, options);
+  try {
+    return buildWorkflowExecutionPriceQuote(
+      request.document,
+      WorkflowExecutionPlanner.forQuote({
+        document: request.document,
+        selectionNodeIds: request.selection?.nodeIds ?? [],
+        target: request.target,
+      }),
+      options,
+    );
+  } catch (error) {
+    if (error instanceof WorkflowExecutionPlanningError) {
+      throw toWorkflowValidationError(error);
+    }
+    throw error;
+  }
 }

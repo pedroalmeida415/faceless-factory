@@ -20,7 +20,7 @@ import {
   getWorkflowOutputKey,
   getWorkflowOutputSettlement,
 } from "~/lib/workflow/execution/output-dependencies";
-import { buildWorkflowExecutionPlan } from "~/lib/workflow/execution/subgraph";
+import { WorkflowExecutionPlanner } from "~/lib/workflow/execution/planning";
 import type {
   NodeOutputArtifact,
   WorkflowOutputArtifacts,
@@ -62,10 +62,10 @@ function executionOutputPlan(params: {
   document: WorkflowDocument;
   targetNodeIds: string[];
 }) {
-  const executionPlan = buildWorkflowExecutionPlan(
-    params.document,
-    params.targetNodeIds,
-  );
+  const executionPlan = WorkflowExecutionPlanner.forTaskScheduling({
+    document: params.document,
+    targetNodeIds: params.targetNodeIds,
+  });
   return buildWorkflowOutputDependencyPlan({
     document: params.document,
     generatorIterationById: executionPlan.generatorIterationById,

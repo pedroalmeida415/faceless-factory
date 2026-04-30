@@ -1,18 +1,9 @@
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import { WorkflowValidationError } from "~/lib/workflow/errors";
-import { buildWorkflowExecutionPlan } from "~/lib/workflow/execution/subgraph";
 import {
-  buildIncomingByTarget,
   buildOutgoingBySource,
-  getGeneratorInputHandles,
-  getIncomingEdgesForHandle,
-  getOutputReorderInputValue,
   isValidWorkflowEdge,
-  resolvePromptNodeTextBatch,
 } from "~/lib/workflow/graph";
-import { OUTPUT_REORDER_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
-import { getOutputPermutationValidationMessage } from "~/lib/workflow/runtime-values";
-import { isGeneratorNodeKind } from "~/lib/workflow/types";
 
 function failValidation(message: string): never {
   throw new WorkflowValidationError({ message });
@@ -42,112 +33,6 @@ function validateDocumentAcyclic(document: WorkflowDocument) {
 
   for (const node of document.nodes) {
     visitNode(node.id);
-  }
-}
-
-function validateExecutionPlanNodes(
-  document: WorkflowDocument,
-  targetIds: string[],
-) {
-  const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
-  const incomingByTarget = buildIncomingByTarget(document.edges);
-  const executionPlan = buildWorkflowExecutionPlan(document, targetIds);
-  const executableNodeIds = new Set(executionPlan.executableNodeIds);
-
-  for (const nodeId of executionPlan.requiredNodeIds) {
-    const node = nodeMap.get(nodeId);
-
-    if (!node) {
-      failValidation(`Node ${nodeId} not found.`);
-    }
-
-    switch (node.kind) {
-      case "list":
-        if (!node.items.some((value) => value.trim())) {
-          failValidation("List node is empty.");
-        }
-        break;
-      case "prompt":
-        if (
-          !resolvePromptNodeTextBatch(node, (key) =>
-            getIncomingEdgesForHandle(incomingByTarget, node.id, key).length
-              ? {
-                  type: "text",
-                  items: [key],
-                }
-              : null,
-          )
-        ) {
-          failValidation("Prompt node is empty.");
-        }
-        break;
-      case "asset":
-        if (!node.assetKind || !node.assets.length) {
-          failValidation("Asset node is empty.");
-        }
-        break;
-      case "outputReorder": {
-        const inputEdges = getIncomingEdgesForHandle(
-          incomingByTarget,
-          node.id,
-          OUTPUT_REORDER_INPUT_HANDLE_ID,
-        );
-
-        if (inputEdges.length !== 1) {
-          failValidation("Output Reorder needs exactly one input.");
-        }
-
-        const inputValue = getOutputReorderInputValue(document, node.id);
-        if (inputValue && inputValue.type !== node.valueType) {
-          failValidation(
-            "Output Reorder input type does not match its output type.",
-          );
-        }
-
-        if (node.mode === "manual" && inputValue) {
-          const message = getOutputPermutationValidationMessage(
-            node.order,
-            inputValue.items.length,
-          );
-          if (message) {
-            failValidation(message);
-          }
-        }
-        break;
-      }
-      case "imageGenerator":
-      case "videoGenerator":
-      case "llmGenerator": {
-        if (!executableNodeIds.has(node.id)) {
-          break;
-        }
-
-        const requiredHandles = getGeneratorInputHandles(
-          document,
-          node.id,
-        ).filter((handle) => handle.required);
-
-        for (const handle of requiredHandles) {
-          if (
-            getIncomingEdgesForHandle(incomingByTarget, node.id, handle.id)
-              .length
-          ) {
-            continue;
-          }
-
-          failValidation(
-            `Connect ${handle.label.toLowerCase()} ${handle.valueType}.`,
-          );
-        }
-
-        if (
-          executionPlan.generatorIterationById.get(node.id)?.mismatchedIterators
-        ) {
-          failValidation("Connected input output counts do not match.");
-        }
-        break;
-      }
-    }
   }
 }
 
@@ -193,27 +78,5 @@ export const WorkflowGraphValidator = {
     }
 
     validateDocumentAcyclic(document);
-  },
-
-  validateQuoteTargets(document: WorkflowDocument, targetIds: string[]) {
-    this.validateDocument(document);
-
-    const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
-
-    for (const targetId of targetIds) {
-      const targetNode = nodeMap.get(targetId);
-      if (!targetNode) {
-        failValidation(`Node ${targetId} not found.`);
-      }
-
-      if (!isGeneratorNodeKind(targetNode.kind)) {
-        failValidation("Only generator nodes can be executed.");
-      }
-    }
-  },
-
-  validateExecutionTargets(document: WorkflowDocument, targetIds: string[]) {
-    this.validateQuoteTargets(document, targetIds);
-    validateExecutionPlanNodes(document, targetIds);
   },
 };

@@ -26,15 +26,15 @@ import {
   replaceTextOutputOutput,
 } from "~/lib/workflow/execution/node-outputs";
 import {
+  toWorkflowValidationError,
+  WorkflowExecutionPlanner,
+  WorkflowExecutionPlanningError,
+} from "~/lib/workflow/execution/planning";
+import {
   buildWorkflowExecutionStatusResponse,
   createWorkflowExecutionRuntimeState,
   syncWorkflowExecutionRuntimeState,
 } from "~/lib/workflow/execution/runtime-state";
-import {
-  buildWorkflowExecutionPlan,
-  getWorkflowPlannedOutputCount,
-} from "~/lib/workflow/execution/subgraph";
-import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target-resolution";
 import type {
   StartWorkflowExecutionRequest,
   WorkflowExecutionPortError,
@@ -296,11 +296,11 @@ function getBroadcastOutputIndex(
   sourceHandleId: string | null | undefined,
   requestedOutputIndex: number,
 ) {
-  return getWorkflowPlannedOutputCount(
+  return WorkflowExecutionPlanner.getPlannedOutputCount({
     document,
-    sourceNodeId,
+    nodeId: sourceNodeId,
     sourceHandleId,
-  ) === 1
+  }) === 1
     ? 0
     : requestedOutputIndex;
 }
@@ -862,20 +862,26 @@ export function executeWorkflow(params: {
   executionId: string;
   ports: WorkflowExecutionPorts;
 }) {
-  const targetNodeIds = resolveWorkflowExecutionTargets(
-    params.request.document,
-    params.request.selection?.nodeIds ?? [],
-    params.request.target,
-  );
-  const executionPlan = buildWorkflowExecutionPlan(
-    params.request.document,
-    targetNodeIds,
-  );
+  let executionPlan: ReturnType<typeof WorkflowExecutionPlanner.forRuntime>;
+  try {
+    WorkflowGraphValidator.validateDocument(params.request.document);
+    executionPlan = WorkflowExecutionPlanner.forRuntime({
+      document: params.request.document,
+      selectionNodeIds: params.request.selection?.nodeIds ?? [],
+      target: params.request.target,
+    });
+  } catch (error) {
+    if (error instanceof WorkflowExecutionPlanningError) {
+      return Effect.fail(toWorkflowValidationError(error));
+    }
+    if (error instanceof WorkflowValidationError) {
+      return Effect.fail(error);
+    }
+    throw error;
+  }
+  const targetNodeIds = executionPlan.targetNodeIds;
   const targetNodeIdSet = new Set(targetNodeIds);
-  const executedNodeIds = executionPlan.executableNodeIds;
-  const artifactNodeIds = Array.from(
-    new Set([...executedNodeIds, ...executionPlan.reviewBarrierNodeIds]),
-  );
+  const artifactNodeIds = executionPlan.artifactNodeIds;
   const executionOutputIndex = getExecutionOutputIndex(params.request);
 
   const state: ExecutionState = {
@@ -1156,14 +1162,14 @@ export function executeWorkflow(params: {
                 outputCount:
                   typeof activeOutputIndex === "number"
                     ? (params.request.executionOutputFilter?.outputCount ??
-                      getWorkflowPlannedOutputCount(
-                        params.request.document,
-                        currentId,
-                      ))
-                    : getWorkflowPlannedOutputCount(
-                        params.request.document,
-                        currentId,
-                      ),
+                      WorkflowExecutionPlanner.getPlannedOutputCount({
+                        document: params.request.document,
+                        nodeId: currentId,
+                      }))
+                    : WorkflowExecutionPlanner.getPlannedOutputCount({
+                        document: params.request.document,
+                        nodeId: currentId,
+                      }),
                 mode: node.mode,
                 order: node.order,
                 shift: node.shift,
@@ -1800,11 +1806,6 @@ export function executeWorkflow(params: {
         }),
       );
     }
-
-    WorkflowGraphValidator.validateExecutionTargets(
-      state.document,
-      targetNodeIds,
-    );
 
     state.status = params.request.reviewOutputFilter
       ? "waiting_for_review"

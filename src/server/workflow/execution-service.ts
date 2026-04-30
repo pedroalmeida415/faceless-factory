@@ -34,15 +34,15 @@ import {
   selectReusableWorkflowOutputs,
 } from "~/lib/workflow/execution/output-result-reuse";
 import {
+  toWorkflowValidationError,
+  WorkflowExecutionPlanner,
+  WorkflowExecutionPlanningError,
+} from "~/lib/workflow/execution/planning";
+import {
   buildWorkflowExecutionStatusResponse,
   createWorkflowExecutionRuntimeState,
 } from "~/lib/workflow/execution/runtime-state";
-import {
-  buildWorkflowExecutionPlan,
-  collectDownstreamWorkflowGeneratorNodeIds,
-  extractWorkflowExecutionSubgraph,
-} from "~/lib/workflow/execution/subgraph";
-import { resolveWorkflowExecutionTargets } from "~/lib/workflow/execution/target-resolution";
+import { collectDownstreamWorkflowGeneratorNodeIds } from "~/lib/workflow/execution/subgraph";
 import type {
   StartWorkflowExecutionRequest,
   WorkflowExecutionPortError,
@@ -238,7 +238,10 @@ export class WorkflowExecutionService extends Context.Tag(
         document: StartWorkflowExecutionRequest["document"],
         targetNodeIds: string[],
       ) => {
-        const plan = buildWorkflowExecutionPlan(document, targetNodeIds);
+        const plan = WorkflowExecutionPlanner.forTaskScheduling({
+          document,
+          targetNodeIds,
+        });
         return Math.max(
           1,
           ...plan.executableNodeIds.map(
@@ -252,7 +255,10 @@ export class WorkflowExecutionService extends Context.Tag(
         document: StartWorkflowExecutionRequest["document"],
         targetNodeIds: readonly string[],
       ) => {
-        const plan = buildWorkflowExecutionPlan(document, [...targetNodeIds]);
+        const plan = WorkflowExecutionPlanner.forTaskScheduling({
+          document,
+          targetNodeIds,
+        });
         return buildWorkflowOutputDependencyPlan({
           document,
           generatorIterationById: plan.generatorIterationById,
@@ -264,13 +270,11 @@ export class WorkflowExecutionService extends Context.Tag(
         document: StartWorkflowExecutionRequest["document"],
         targetNodeIds: readonly string[],
       ) => {
-        const seedPlan = buildWorkflowExecutionPlan(document, [
-          ...targetNodeIds,
-        ]);
-        const artifactNodeIds = new Set([
-          ...seedPlan.executableNodeIds,
-          ...seedPlan.reviewBarrierNodeIds,
-        ]);
+        const seedPlan = WorkflowExecutionPlanner.forTaskScheduling({
+          document,
+          targetNodeIds,
+        });
+        const artifactNodeIds = new Set(seedPlan.artifactNodeIds);
         let changed = true;
 
         while (changed) {
@@ -323,6 +327,11 @@ export class WorkflowExecutionService extends Context.Tag(
               ownerUserId: params.ownerUserId,
               projectId: params.projectId,
             });
+          const isRecoveringFailedRequestedOutput = priorResultCandidates.some(
+            (candidate) =>
+              candidate.status === "error" &&
+              requestedTargetNodeIds.has(candidate.nodeId),
+          );
 
           return selectReusableWorkflowOutputs({
             candidates: priorResultCandidates,
@@ -348,6 +357,7 @@ export class WorkflowExecutionService extends Context.Tag(
                   ]
                 : [];
             }),
+            reuseRequestedTargets: isRecoveringFailedRequestedOutput,
           });
         });
 
@@ -405,16 +415,24 @@ export class WorkflowExecutionService extends Context.Tag(
             );
           }
 
-          const targetNodeIds = resolveWorkflowExecutionTargets(
-            projectDocument,
-            request.selection?.nodeIds ?? [],
-            request.target,
-          );
-          WorkflowGraphValidator.validateQuoteTargets(
-            projectDocument,
-            targetNodeIds,
-          );
-          const document = extractWorkflowExecutionSubgraph(
+          WorkflowGraphValidator.validateDocument(projectDocument);
+          const quotePlan = yield* Effect.try({
+            try: () =>
+              WorkflowExecutionPlanner.forQuote({
+                document: projectDocument,
+                selectionNodeIds: request.selection?.nodeIds ?? [],
+                target: request.target,
+              }),
+            catch: (error) =>
+              error instanceof WorkflowExecutionPlanningError
+                ? toWorkflowValidationError(error)
+                : new WorkflowValidationError({
+                    message: getErrorMessage(error),
+                    cause: error,
+                  }),
+          });
+          const targetNodeIds = quotePlan.targetNodeIds;
+          const document = WorkflowExecutionPlanner.extractSubgraph(
             projectDocument,
             targetNodeIds,
           );
@@ -422,10 +440,10 @@ export class WorkflowExecutionService extends Context.Tag(
             document,
             targetNodeIds,
           );
-          const executionPlan = buildWorkflowExecutionPlan(
+          const executionPlan = WorkflowExecutionPlanner.forTaskScheduling({
             document,
-            artifactNodeIds,
-          );
+            targetNodeIds: artifactNodeIds,
+          });
           const reusableOutputs = yield* getReusablePriorOutputs({
             document,
             ownerUserId: userId,
@@ -597,10 +615,10 @@ export class WorkflowExecutionService extends Context.Tag(
         outputIndex: number,
         artifacts: WorkflowOutputArtifacts,
       ) => {
-        const plan = buildWorkflowExecutionPlan(
-          run.document,
-          run.targetNodeIds,
-        );
+        const plan = WorkflowExecutionPlanner.forTaskScheduling({
+          document: run.document,
+          targetNodeIds: run.targetNodeIds,
+        });
         const expectedNodeIds = run.targetNodeIds.filter(
           (nodeId) =>
             (plan.generatorIterationById.get(nodeId)?.iterations ?? 1) >
@@ -659,10 +677,10 @@ export class WorkflowExecutionService extends Context.Tag(
           (node) => node.id === reviewNodeId,
         );
         const plannedOutputCount =
-          buildWorkflowExecutionPlan(
-            run.document,
-            run.targetNodeIds,
-          ).generatorIterationById.get(reviewNodeId)?.iterations ?? 0;
+          WorkflowExecutionPlanner.forTaskScheduling({
+            document: run.document,
+            targetNodeIds: run.targetNodeIds,
+          }).generatorIterationById.get(reviewNodeId)?.iterations ?? 0;
         const artifactOutputCount = getLatestOutputReviewArtifacts(artifacts)
           .filter((output) => output.nodeId === reviewNodeId)
           .reduce(
@@ -1931,34 +1949,38 @@ export class WorkflowExecutionService extends Context.Tag(
           }
 
           const executionId = randomUUID();
-          const targetNodeIds = resolveWorkflowExecutionTargets(
-            projectDocument,
-            request.selection?.nodeIds ?? [],
-            request.target,
-          );
-
-          WorkflowGraphValidator.validateExecutionTargets(
-            projectDocument,
-            targetNodeIds,
-          );
+          WorkflowGraphValidator.validateDocument(projectDocument);
+          const startPlan = yield* Effect.try({
+            try: () =>
+              WorkflowExecutionPlanner.forStart({
+                document: projectDocument,
+                selectionNodeIds: request.selection?.nodeIds ?? [],
+                target: request.target,
+              }),
+            catch: (error) =>
+              error instanceof WorkflowExecutionPlanningError
+                ? toWorkflowValidationError(error)
+                : new WorkflowValidationError({
+                    message: getErrorMessage(error),
+                    cause: error,
+                  }),
+          });
+          const targetNodeIds = startPlan.targetNodeIds;
 
           const submittedRequest = {
             ...request,
             documentRevision: project.documentRevision,
-            document: extractWorkflowExecutionSubgraph(
-              projectDocument,
-              targetNodeIds,
-            ),
+            document: startPlan.document,
             projectId,
           } satisfies StartWorkflowExecutionRequest;
           const artifactNodeIds = getExecutionArtifactNodeIds(
             submittedRequest.document,
             targetNodeIds,
           );
-          const executionPlan = buildWorkflowExecutionPlan(
-            submittedRequest.document,
-            artifactNodeIds,
-          );
+          const executionPlan = WorkflowExecutionPlanner.forTaskScheduling({
+            document: submittedRequest.document,
+            targetNodeIds: artifactNodeIds,
+          });
           const reusableOutputs = yield* getReusablePriorOutputs({
             document: submittedRequest.document,
             excludeExecutionId: executionId,
@@ -2075,11 +2097,10 @@ export class WorkflowExecutionService extends Context.Tag(
           if (!readyJobs.length) {
             const settlement = getWorkflowOutputSettlement({
               artifacts,
-              plan: buildWorkflowOutputDependencyPlan({
-                document: submittedRequest.document,
-                generatorIterationById: executionPlan.generatorIterationById,
-                targetNodeIds: artifactNodeIds,
-              }),
+              plan: getExecutionDependencyPlan(
+                submittedRequest.document,
+                artifactNodeIds,
+              ),
             });
             if (settlement.settled && !settlement.failedOutputs.size) {
               const settledRun = {

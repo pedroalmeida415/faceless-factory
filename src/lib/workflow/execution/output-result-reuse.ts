@@ -55,6 +55,7 @@ function compareCandidateRecency(
 function isReusableOutput(
   candidate: ReusableWorkflowOutputCandidate,
   expected: ExpectedReusableWorkflowOutput,
+  options?: { reuseRequestedTargets?: boolean },
 ): candidate is ReusableWorkflowOutputCandidate & NodeOutputArtifact {
   return (
     candidate.status === "success" &&
@@ -62,14 +63,15 @@ function isReusableOutput(
     candidate.outputIndex === expected.outputIndex &&
     candidate.value.type === expected.valueType &&
     hasMaterializedWorkflowOutputValue(candidate.value) &&
-    (!expected.reviewEnabled ||
-      (!expected.isRequestedTarget && candidate.reviewStatus === "approved"))
+    (!expected.isRequestedTarget || Boolean(options?.reuseRequestedTargets)) &&
+    (!expected.reviewEnabled || candidate.reviewStatus === "approved")
   );
 }
 
 export function selectReusableWorkflowOutputs(params: {
   candidates: readonly ReusableWorkflowOutputCandidate[];
   expectedOutputs: readonly ExpectedReusableWorkflowOutput[];
+  reuseRequestedTargets?: boolean;
 }) {
   const expectedByOutput = new Map(
     params.expectedOutputs.map((output) => [
@@ -93,6 +95,8 @@ export function selectReusableWorkflowOutputs(params: {
 
   return Array.from(latestByOutput.entries()).flatMap(([key, candidate]) => {
     const expected = expectedByOutput.get(key);
-    return expected && isReusableOutput(candidate, expected) ? [candidate] : [];
+    return expected && isReusableOutput(candidate, expected, params)
+      ? [candidate]
+      : [];
   });
 }
