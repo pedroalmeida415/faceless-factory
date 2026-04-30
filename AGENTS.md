@@ -219,7 +219,7 @@ These rules are strict and non-negotiable:
 * **Distributed Tracing:** All background jobs (BullMQ) and node executions must emit standard observability events. The agent must ensure that every complex Effect pipeline includes appropriate logging of input/output data (stripped of sensitive info) for every node execution.
 * **Error Bubbling:** Do not swallow errors at the node level. Propagate specific domain errors (e.g., `NodeExecutionError`, `InvalidInputError`) up to the orchestrator so the UI can highlight the specific failing node.
 * **Strict Error Modeling:** Never throw errors from domain or runtime logic. Use `Effect.fail` with tagged union errors for predictable, type-safe recovery paths.
-* **No Mega-Files:** Do not add or leave a file over 500 lines unless it is generated code, schema declarations, static data, or there is a documented architectural reason. Split by concern before finishing the task.
+* **No Mega-Files:** Do not add or leave a file over 1000 lines unless it is generated code, schema declarations, static data, or there is a documented architectural reason. Split by concern before finishing the task.
 * **No Route-Level Implementations:** Next.js route files (`page.tsx`, `layout.tsx`, route handlers) must not contain feature implementations beyond composition, data loading, and seam wiring.
 * **No Mixed Concerns:** UI rendering, domain state transitions, persistence schemas, queue/job orchestration, and mock/demo data must not live in the same file.
 * **No Fake Completion:** Do not present local state simulations, placeholder engines, or non-persistent demos as completed implementations when the in-scope feature includes persistence, execution, scheduling, or worker behavior.
