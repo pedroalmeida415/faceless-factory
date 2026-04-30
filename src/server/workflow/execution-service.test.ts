@@ -167,6 +167,81 @@ function outputError(outputIndex, executionId, updatedAt) {
   };
 }
 
+describe("WorkflowExecutionService quoteExecution", () => {
+  test("quotes generator targets before upstream inputs are runnable", async () => {
+    const list = { ...createWorkflowNode("list", 0), id: "list", items: [] };
+    const prompt = {
+      ...createWorkflowNode("prompt", 1),
+      id: "prompt",
+      prompt: "{{variable1}}",
+      variables: [{ key: "variable1", label: "Variable 1" }],
+    };
+    const image = {
+      ...createWorkflowNode("imageGenerator", 2),
+      id: "image",
+    };
+    const document = {
+      edges: [
+        {
+          id: "list-prompt",
+          source: "list",
+          sourceHandle: "text",
+          target: "prompt",
+          targetHandle: "variable1",
+        },
+        {
+          id: "prompt-image",
+          source: "prompt",
+          sourceHandle: "text",
+          target: "image",
+          targetHandle: "prompt",
+        },
+      ],
+      nodes: [list, prompt, image],
+      version: WORKFLOW_DOCUMENT_VERSION,
+    };
+
+    const TestLayer = WorkflowExecutionService.Live.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(WorkflowProjectStore, {
+            getProject: () =>
+              Effect.succeed({
+                document: toWorkflowGraphDocument(document),
+                documentRevision: 1,
+                id: "project",
+                name: "Project",
+              }),
+          }),
+          Layer.succeed(WorkflowArtifactStore, {
+            getProjectOutputReuseCandidates: () => Effect.succeed([]),
+          }),
+          Layer.succeed(WorkflowCreditsService, {}),
+          Layer.succeed(WorkflowExecutionStore, {}),
+          Layer.succeed(VertexAi, {}),
+        ),
+      ),
+    );
+
+    const quote = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* WorkflowExecutionService;
+        return yield* service.quoteExecution("user", {
+          documentRevision: 1,
+          projectId: "project",
+          target: { type: "node", nodeId: "image" },
+        });
+      }).pipe(Effect.provide(TestLayer)),
+    );
+
+    assert.deepEqual(
+      quote.lineItems.map((lineItem) => [lineItem.nodeId, lineItem.kind]),
+      [["image", "imageGenerator"]],
+    );
+    assert.equal(quote.totalCost > 0, true);
+  });
+});
+
 describe("WorkflowExecutionService startExecution output recovery", () => {
   test("starts a new run without upfront debit and queues only missing outputs", async () => {
     enqueuedJobs.length = 0;

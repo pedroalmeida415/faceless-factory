@@ -410,7 +410,7 @@ export class WorkflowExecutionService extends Context.Tag(
             request.selection?.nodeIds ?? [],
             request.target,
           );
-          WorkflowGraphValidator.validateExecutionTargets(
+          WorkflowGraphValidator.validateQuoteTargets(
             projectDocument,
             targetNodeIds,
           );
