@@ -32,6 +32,7 @@ import {
 import {
   getGeneratorOutputValueType,
   selectReusableWorkflowOutputs,
+  type WorkflowOutputReusePolicy,
 } from "~/lib/workflow/execution/output-result-reuse";
 import {
   toWorkflowValidationError,
@@ -302,6 +303,7 @@ export class WorkflowExecutionService extends Context.Tag(
         ownerUserId: string;
         projectId: string;
         requestedTargetNodeIds: readonly string[];
+        reusePolicy: WorkflowOutputReusePolicy;
         targetNodeIds: readonly string[];
       }) =>
         Effect.gen(function* () {
@@ -327,11 +329,6 @@ export class WorkflowExecutionService extends Context.Tag(
               ownerUserId: params.ownerUserId,
               projectId: params.projectId,
             });
-          const isRecoveringFailedRequestedOutput = priorResultCandidates.some(
-            (candidate) =>
-              candidate.status === "error" &&
-              requestedTargetNodeIds.has(candidate.nodeId),
-          );
 
           return selectReusableWorkflowOutputs({
             candidates: priorResultCandidates,
@@ -350,14 +347,16 @@ export class WorkflowExecutionService extends Context.Tag(
                 ? [
                     {
                       ...job,
-                      isRequestedTarget: requestedTargetNodeIds.has(job.nodeId),
+                      role: requestedTargetNodeIds.has(job.nodeId)
+                        ? "requested-target"
+                        : "dependency",
                       reviewEnabled,
                       valueType,
                     },
                   ]
                 : [];
             }),
-            reuseRequestedTargets: isRecoveringFailedRequestedOutput,
+            reusePolicy: params.reusePolicy,
           });
         });
 
@@ -449,6 +448,7 @@ export class WorkflowExecutionService extends Context.Tag(
             ownerUserId: userId,
             projectId,
             requestedTargetNodeIds: targetNodeIds,
+            reusePolicy: { type: "dependencies-only" },
             targetNodeIds: artifactNodeIds,
           });
 
@@ -1987,6 +1987,7 @@ export class WorkflowExecutionService extends Context.Tag(
             ownerUserId: userId,
             projectId,
             requestedTargetNodeIds: targetNodeIds,
+            reusePolicy: { type: "recover-requested-targets" },
             targetNodeIds: artifactNodeIds,
           });
           const executionRequest = {

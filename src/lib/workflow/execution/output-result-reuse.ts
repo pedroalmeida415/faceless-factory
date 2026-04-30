@@ -13,8 +13,14 @@ export type ReusableWorkflowOutputCandidate = WorkflowOutputResultArtifact & {
   updatedAt: string;
 };
 
+export type WorkflowOutputReuseRole = "dependency" | "requested-target";
+
+export type WorkflowOutputReusePolicy =
+  | { type: "dependencies-only" }
+  | { type: "recover-requested-targets" };
+
 export type ExpectedReusableWorkflowOutput = WorkflowOutputIdentity & {
-  isRequestedTarget: boolean;
+  role: WorkflowOutputReuseRole;
   reviewEnabled: boolean;
   valueType: RuntimeValue["type"];
 };
@@ -55,15 +61,18 @@ function compareCandidateRecency(
 function isReusableOutput(
   candidate: ReusableWorkflowOutputCandidate,
   expected: ExpectedReusableWorkflowOutput,
-  options?: { reuseRequestedTargets?: boolean },
+  canReuseRequestedTargets: boolean,
 ): candidate is ReusableWorkflowOutputCandidate & NodeOutputArtifact {
+  const canReuseForRole =
+    expected.role === "dependency" || canReuseRequestedTargets;
+
   return (
     candidate.status === "success" &&
     candidate.nodeId === expected.nodeId &&
     candidate.outputIndex === expected.outputIndex &&
     candidate.value.type === expected.valueType &&
     hasMaterializedWorkflowOutputValue(candidate.value) &&
-    (!expected.isRequestedTarget || Boolean(options?.reuseRequestedTargets)) &&
+    canReuseForRole &&
     (!expected.reviewEnabled || candidate.reviewStatus === "approved")
   );
 }
@@ -71,7 +80,7 @@ function isReusableOutput(
 export function selectReusableWorkflowOutputs(params: {
   candidates: readonly ReusableWorkflowOutputCandidate[];
   expectedOutputs: readonly ExpectedReusableWorkflowOutput[];
-  reuseRequestedTargets?: boolean;
+  reusePolicy: WorkflowOutputReusePolicy;
 }) {
   const expectedByOutput = new Map(
     params.expectedOutputs.map((output) => [
@@ -79,6 +88,14 @@ export function selectReusableWorkflowOutputs(params: {
       output,
     ]),
   );
+  const canReuseRequestedTargets =
+    params.reusePolicy.type === "recover-requested-targets" &&
+    params.candidates.some((candidate) => {
+      const expected = expectedByOutput.get(getWorkflowOutputKey(candidate));
+      return (
+        expected?.role === "requested-target" && candidate.status === "error"
+      );
+    });
   const latestByOutput = new Map<string, ReusableWorkflowOutputCandidate>();
 
   for (const candidate of params.candidates) {
@@ -95,7 +112,8 @@ export function selectReusableWorkflowOutputs(params: {
 
   return Array.from(latestByOutput.entries()).flatMap(([key, candidate]) => {
     const expected = expectedByOutput.get(key);
-    return expected && isReusableOutput(candidate, expected, params)
+    return expected &&
+      isReusableOutput(candidate, expected, canReuseRequestedTargets)
       ? [candidate]
       : [];
   });

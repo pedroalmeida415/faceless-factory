@@ -243,6 +243,102 @@ describe("WorkflowExecutionService quoteExecution", () => {
 });
 
 describe("WorkflowExecutionService startExecution output recovery", () => {
+  test("starts a normal run without copying successful requested target outputs", async () => {
+    enqueuedJobs.length = 0;
+    const priorResults = [
+      success(0, "old-success-run", "2026-01-01T00:00:00.000Z"),
+      success(1, "old-success-run", "2026-01-02T00:00:00.000Z"),
+      success(2, "old-success-run", "2026-01-03T00:00:00.000Z"),
+    ];
+    const copiedOutputs = [];
+    const outputDebits = [];
+    const document = workflowDocument();
+
+    const TestLayer = WorkflowExecutionService.Live.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(WorkflowProjectStore, {
+            getProject: () =>
+              Effect.succeed({
+                document: toWorkflowGraphDocument(document),
+                documentRevision: 1,
+                id: "project",
+                name: "Project",
+              }),
+          }),
+          Layer.succeed(WorkflowArtifactStore, {
+            copyReusableOutputs: ({ outputs }) => {
+              copiedOutputs.push(...outputs);
+              return Effect.succeed(outputs.length);
+            },
+            getActiveOutputKeys: () => Effect.succeed([]),
+            getProjectOutputReuseCandidates: () => Effect.succeed(priorResults),
+            getOutputArtifacts: () =>
+              Effect.succeed({
+                outputResults: copiedOutputs.map((output) => ({
+                  ...output,
+                  status: "success",
+                })),
+              }),
+          }),
+          Layer.succeed(WorkflowCreditsService, {
+            debitExecutionOutput: (params) => {
+              outputDebits.push(params);
+              return Effect.succeed({
+                available: 1000,
+                reserved: 0,
+                totalCost: params.amount,
+                used: params.amount,
+              });
+            },
+            getBalanceSummary: () =>
+              Effect.succeed({
+                available: 1000,
+                reserved: 0,
+                totalCost: 0,
+                used: 0,
+              }),
+            getExecutionSummary: () =>
+              Effect.succeed({
+                available: 1000,
+                reserved: 0,
+                totalCost: 0,
+                used: 0,
+              }),
+          }),
+          Layer.succeed(WorkflowExecutionStore, {
+            createExecution: ({ run }) => Effect.succeed(run),
+            updateExecution: (run) => Effect.succeed(run),
+          }),
+          Layer.succeed(VertexAi, {}),
+        ),
+      ),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* WorkflowExecutionService;
+        return yield* service.startExecution("user", {
+          document,
+          documentRevision: 1,
+          projectId: "project",
+          target: { type: "node", nodeId: "llm" },
+        });
+      }).pipe(Effect.provide(TestLayer)),
+    );
+
+    assert.deepEqual(copiedOutputs, []);
+    assert.equal(outputDebits.length, 0);
+    assert.deepEqual(
+      enqueuedJobs.map(({ job }) => job.taskRunId.split(":").slice(1)),
+      [
+        ["llm", "0"],
+        ["llm", "1"],
+        ["llm", "2"],
+      ],
+    );
+  });
+
   test("starts a new run without upfront debit and queues only missing outputs", async () => {
     enqueuedJobs.length = 0;
     const oldFailedExecutionId = "old-failed-run";

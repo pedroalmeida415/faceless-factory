@@ -77,26 +77,27 @@ describe("workflow output result reuse", () => {
         expectedOutputs: [
           {
             outputIndex: 0,
-            isRequestedTarget: true,
             nodeId: "llm",
+            role: "requested-target",
             reviewEnabled: false,
             valueType: "text",
           },
           {
             outputIndex: 1,
-            isRequestedTarget: true,
             nodeId: "llm",
+            role: "requested-target",
             reviewEnabled: false,
             valueType: "text",
           },
           {
             outputIndex: 2,
-            isRequestedTarget: true,
             nodeId: "llm",
+            role: "requested-target",
             reviewEnabled: false,
             valueType: "image",
           },
         ],
+        reusePolicy: { type: "dependencies-only" },
       }),
       [],
     );
@@ -120,12 +121,13 @@ describe("workflow output result reuse", () => {
         expectedOutputs: [
           {
             outputIndex: 0,
-            isRequestedTarget: true,
             nodeId: "llm",
+            role: "requested-target",
             reviewEnabled: false,
             valueType: "text",
           },
         ],
+        reusePolicy: { type: "dependencies-only" },
       }),
       [],
     );
@@ -149,18 +151,63 @@ describe("workflow output result reuse", () => {
         expectedOutputs: [
           {
             outputIndex: 0,
-            isRequestedTarget: false,
             nodeId: "llm",
+            role: "dependency",
             reviewEnabled: false,
             valueType: "text",
           },
         ],
+        reusePolicy: { type: "dependencies-only" },
       }),
       [output],
     );
   });
 
   test("reuses direct target outputs only when requested for recovery", () => {
+    const output = {
+      ...textOutput(),
+      status: "success" as const,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const failedRequestedOutput = {
+      attempt: 0,
+      error: "failed",
+      failedAt: "2026-01-02T00:00:00.000Z",
+      outputIndex: 1,
+      nodeId: "llm",
+      ownerUserId: "user",
+      projectId: "project",
+      executionId: "failed-run",
+      status: "error" as const,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    };
+
+    assert.deepEqual(
+      selectReusableWorkflowOutputs({
+        candidates: [output, failedRequestedOutput],
+        expectedOutputs: [
+          {
+            outputIndex: 0,
+            nodeId: "llm",
+            role: "requested-target",
+            reviewEnabled: false,
+            valueType: "text",
+          },
+          {
+            outputIndex: 1,
+            nodeId: "llm",
+            role: "requested-target",
+            reviewEnabled: false,
+            valueType: "text",
+          },
+        ],
+        reusePolicy: { type: "recover-requested-targets" },
+      }),
+      [output],
+    );
+  });
+
+  test("does not recover requested targets without a failed requested output", () => {
     const output = {
       ...textOutput(),
       status: "success" as const,
@@ -173,15 +220,15 @@ describe("workflow output result reuse", () => {
         expectedOutputs: [
           {
             outputIndex: 0,
-            isRequestedTarget: true,
             nodeId: "llm",
+            role: "requested-target",
             reviewEnabled: false,
             valueType: "text",
           },
         ],
-        reuseRequestedTargets: true,
+        reusePolicy: { type: "recover-requested-targets" },
       }),
-      [output],
+      [],
     );
   });
 
@@ -198,12 +245,13 @@ describe("workflow output result reuse", () => {
         expectedOutputs: [
           {
             outputIndex: 0,
-            isRequestedTarget: false,
             nodeId: "llm",
+            role: "dependency",
             reviewEnabled: true,
             valueType: "text",
           },
         ],
+        reusePolicy: { type: "dependencies-only" },
       }),
       [output],
     );
@@ -222,12 +270,13 @@ describe("workflow output result reuse", () => {
         expectedOutputs: [
           {
             outputIndex: 0,
-            isRequestedTarget: true,
             nodeId: "llm",
+            role: "requested-target",
             reviewEnabled: true,
             valueType: "text",
           },
         ],
+        reusePolicy: { type: "dependencies-only" },
       }),
       [],
     );
@@ -246,12 +295,13 @@ describe("workflow output result reuse", () => {
         expectedOutputs: [
           {
             outputIndex: 0,
-            isRequestedTarget: false,
             nodeId: "llm",
+            role: "dependency",
             reviewEnabled: true,
             valueType: "text",
           },
         ],
+        reusePolicy: { type: "dependencies-only" },
       }),
       [],
     );
