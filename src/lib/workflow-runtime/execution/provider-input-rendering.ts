@@ -1,13 +1,35 @@
-import type { WorkflowDefinitionDocumentNode } from "~/lib/workflow/document";
+import type {
+  WorkflowDefinitionDocumentNode,
+  WorkflowDefinitionGraphDocument,
+} from "~/lib/workflow/document";
 import {
   buildImageGenerationRequest,
   buildVideoGenerationRequest,
+  getImageGeneratorHandleDefinitions,
+  getVideoGeneratorHandleDefinitions,
 } from "~/lib/workflow/generator-models";
 import {
+  buildIncomingByTarget,
+  buildTextRuntimeValue,
+  getIncomingEdgesForHandle,
+  getPromptNodeReferencedVariableKeys,
+} from "~/lib/workflow/graph";
+import {
   buildLlmGenerationRequest,
+  getLlmGeneratorHandleDefinitions,
   SYSTEM_PROMPT_INPUT_HANDLE_ID,
 } from "~/lib/workflow/llm-models";
-import { PROMPT_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
+import {
+  OUTPUT_REORDER_INPUT_HANDLE_ID,
+  PROMPT_INPUT_HANDLE_ID,
+  PROMPT_VARIABLE_PATTERN,
+} from "~/lib/workflow/node-definitions";
+import {
+  getBroadcastOutput,
+  type RuntimeValue,
+  reorderRuntimeValue,
+  resolveOutputPermutation,
+} from "~/lib/workflow/runtime-values";
 import type {
   GenerateImageRequest,
   GenerateLlmRequest,
@@ -55,17 +77,21 @@ export type RenderTaskRunProviderInputCommand = {
   readonly itemIndex: number;
   readonly idempotencyKey: string;
   readonly resolvedParentTaskRuns: readonly ResolvedParentTaskRunInputSnapshot[];
+  readonly workflowDefinition?: WorkflowDefinitionGraphDocument;
 };
 
 export function renderTaskRunProviderInput(
   command: RenderTaskRunProviderInputCommand,
 ): TaskRunProviderInputRenderingResult {
-  const prompt = renderPrompt(command.resolvedParentTaskRuns);
-  const systemPrompt = renderSystemPrompt(command.resolvedParentTaskRuns);
-  const imageInputsByHandle = renderImageInputsByHandle(
-    command.resolvedParentTaskRuns,
-  );
-  void command.itemIndex;
+  const prompt = command.workflowDefinition
+    ? renderTextInput(command, PROMPT_INPUT_HANDLE_ID)
+    : renderPrompt(command.resolvedParentTaskRuns);
+  const systemPrompt = command.workflowDefinition
+    ? renderTextInput(command, SYSTEM_PROMPT_INPUT_HANDLE_ID) || null
+    : renderSystemPrompt(command.resolvedParentTaskRuns);
+  const imageInputsByHandle = command.workflowDefinition
+    ? renderWorkflowImageInputsByHandle(command)
+    : renderImageInputsByHandle(command.resolvedParentTaskRuns);
 
   switch (command.targetNodeConfig.kind) {
     case "imageGenerator":
@@ -157,6 +183,254 @@ function joinTextOutputs(
     .map((text) => text.trim())
     .filter(Boolean)
     .join("\n\n");
+}
+
+function renderTextInput(
+  command: RenderTaskRunProviderInputCommand,
+  handleId: string,
+) {
+  const workflowDefinition = command.workflowDefinition;
+  if (!workflowDefinition) {
+    return "";
+  }
+
+  const incomingByTarget = buildIncomingByTarget(workflowDefinition.edges);
+  const incomingEdges = getIncomingEdgesForHandle(
+    incomingByTarget,
+    command.targetNodeConfig.id,
+    handleId,
+  );
+  if (!incomingEdges.length) {
+    return handleId === SYSTEM_PROMPT_INPUT_HANDLE_ID
+      ? (renderSystemPrompt(command.resolvedParentTaskRuns) ?? "")
+      : renderPrompt(command.resolvedParentTaskRuns);
+  }
+
+  const values = incomingEdges.flatMap((edge) => {
+    const value = resolveWorkflowNodeRuntimeValue({
+      command,
+      incomingByTarget,
+      nodeId: edge.source,
+      path: new Set(),
+      workflowDefinition,
+    });
+    return value?.type === "text" ? [value] : [];
+  });
+  const value = buildTextRuntimeValue(values);
+  return value
+    ? (getBroadcastOutput(value.items, command.itemIndex) ?? "")
+    : "";
+}
+
+function renderWorkflowImageInputsByHandle(
+  command: RenderTaskRunProviderInputCommand,
+): Record<string, WorkflowAsset[]> {
+  const workflowDefinition = command.workflowDefinition;
+  if (!workflowDefinition) {
+    return {};
+  }
+
+  const incomingByTarget = buildIncomingByTarget(workflowDefinition.edges);
+  const imageInputsByHandle: Record<string, WorkflowAsset[]> = {};
+  for (const handle of getTargetGeneratorInputHandles(command)) {
+    if (handle.valueType !== "image") {
+      continue;
+    }
+
+    const assets = getIncomingEdgesForHandle(
+      incomingByTarget,
+      command.targetNodeConfig.id,
+      handle.id,
+    ).flatMap((edge) => {
+      const value = resolveWorkflowNodeRuntimeValue({
+        command,
+        incomingByTarget,
+        nodeId: edge.source,
+        path: new Set(),
+        workflowDefinition,
+      });
+      if (value?.type !== "image") {
+        return [];
+      }
+
+      return getBroadcastOutput(value.items, command.itemIndex) ?? [];
+    });
+
+    if (assets.length) {
+      imageInputsByHandle[handle.id] = assets;
+    }
+  }
+
+  return imageInputsByHandle;
+}
+
+function getTargetGeneratorInputHandles(
+  command: RenderTaskRunProviderInputCommand,
+) {
+  const edges = command.workflowDefinition?.edges ?? [];
+  switch (command.targetNodeConfig.kind) {
+    case "imageGenerator":
+      return getImageGeneratorHandleDefinitions(
+        command.targetNodeConfig,
+        edges,
+        command.targetNodeConfig.id,
+      );
+    case "videoGenerator":
+      return getVideoGeneratorHandleDefinitions(
+        command.targetNodeConfig,
+        edges,
+        command.targetNodeConfig.id,
+      );
+    case "llmGenerator":
+      return getLlmGeneratorHandleDefinitions(
+        command.targetNodeConfig,
+        edges,
+        command.targetNodeConfig.id,
+      );
+    default:
+      return [];
+  }
+}
+
+function resolveWorkflowNodeRuntimeValue(input: {
+  readonly command: RenderTaskRunProviderInputCommand;
+  readonly incomingByTarget: ReturnType<typeof buildIncomingByTarget>;
+  readonly nodeId: string;
+  readonly path: ReadonlySet<string>;
+  readonly workflowDefinition: WorkflowDefinitionGraphDocument;
+}): RuntimeValue | null {
+  if (input.path.has(input.nodeId)) {
+    return null;
+  }
+
+  const node = input.workflowDefinition.nodes.find(
+    (candidate) => candidate.id === input.nodeId,
+  );
+  if (!node) {
+    return null;
+  }
+
+  const nextPath = new Set(input.path);
+  nextPath.add(input.nodeId);
+
+  switch (node.kind) {
+    case "list": {
+      const items = node.items.map((item) => item.trim()).filter(Boolean);
+      return items.length ? { items, type: "text" } : null;
+    }
+    case "asset":
+      return node.assetKind && node.assets.length
+        ? { items: node.assets.map((asset) => [asset]), type: node.assetKind }
+        : null;
+    case "prompt":
+      return resolvePromptRuntimeValue({ ...input, node, path: nextPath });
+    case "outputReorder": {
+      const inputEdge = getIncomingEdgesForHandle(
+        input.incomingByTarget,
+        node.id,
+        OUTPUT_REORDER_INPUT_HANDLE_ID,
+      )[0];
+      if (!inputEdge) {
+        return null;
+      }
+      const value = resolveWorkflowNodeRuntimeValue({
+        ...input,
+        nodeId: inputEdge.source,
+        path: nextPath,
+      });
+      return value && value.type === node.valueType
+        ? reorderRuntimeValue(
+            value,
+            resolveOutputPermutation({
+              mode: node.mode,
+              order: node.order,
+              outputCount: value.items.length,
+              shift: node.shift,
+            }),
+          )
+        : null;
+    }
+    case "imageGenerator":
+    case "videoGenerator":
+    case "llmGenerator":
+      return resolveParentTaskRunRuntimeValue(input.command, node.id);
+  }
+}
+
+function resolvePromptRuntimeValue(input: {
+  readonly command: RenderTaskRunProviderInputCommand;
+  readonly incomingByTarget: ReturnType<typeof buildIncomingByTarget>;
+  readonly node: Extract<WorkflowDefinitionDocumentNode, { kind: "prompt" }>;
+  readonly nodeId: string;
+  readonly path: ReadonlySet<string>;
+  readonly workflowDefinition: WorkflowDefinitionGraphDocument;
+}): RuntimeValue | null {
+  const variableKeys = getPromptNodeReferencedVariableKeys(input.node);
+  const resolvedVariables = variableKeys.flatMap((key) => {
+    const values = getIncomingEdgesForHandle(
+      input.incomingByTarget,
+      input.node.id,
+      key,
+    ).flatMap((edge) => {
+      const value = resolveWorkflowNodeRuntimeValue({
+        ...input,
+        nodeId: edge.source,
+      });
+      return value?.type === "text" ? [value] : [];
+    });
+    const value = buildTextRuntimeValue(values);
+    return value ? [[key, value.items] as const] : [];
+  });
+  const outputCount = Math.max(
+    1,
+    ...resolvedVariables.map(([, items]) => items.length),
+  );
+  const variableKeysSet = new Set(
+    input.node.variables.map((variable) => variable.key),
+  );
+  const prompts = Array.from({ length: outputCount }, (_, index) => {
+    const prompt = input.node.prompt.replace(
+      PROMPT_VARIABLE_PATTERN,
+      (match, key: string) => {
+        if (!variableKeysSet.has(key)) {
+          return match;
+        }
+        const items = resolvedVariables.find(
+          ([candidate]) => candidate === key,
+        )?.[1];
+        return items ? (getBroadcastOutput(items, index) ?? "") : "";
+      },
+    );
+    return prompt.trim();
+  }).filter(Boolean);
+
+  return prompts.length ? { items: prompts, type: "text" } : null;
+}
+
+function resolveParentTaskRunRuntimeValue(
+  command: RenderTaskRunProviderInputCommand,
+  nodeId: string,
+): RuntimeValue | null {
+  const parents = command.resolvedParentTaskRuns.filter(
+    (parent) => parent.sourceNodeId === nodeId,
+  );
+  const textItems = parents.flatMap((parent) =>
+    parent.output?.kind === "inline-text-asset" ? [parent.output.text] : [],
+  );
+  if (textItems.length) {
+    return { items: textItems, type: "text" };
+  }
+
+  const mediaItems = parents.flatMap((parent) => {
+    const output = parent.output;
+    if (!output || output.kind !== "cdn-asset") {
+      return [];
+    }
+    const asset = renderWorkflowImageAsset(parent);
+    return asset ? [[asset]] : [];
+  });
+
+  return mediaItems.length ? { items: mediaItems, type: "image" } : null;
 }
 
 function renderImageInputsByHandle(

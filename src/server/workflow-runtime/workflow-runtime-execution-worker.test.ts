@@ -361,5 +361,10 @@ function inputSnapshot(
     targetNodeConfig,
     taskRunId,
     version: 1,
+    workflowDefinition: {
+      edges: [],
+      nodes: [targetNodeConfig],
+      version: 9,
+    },
   };
 }

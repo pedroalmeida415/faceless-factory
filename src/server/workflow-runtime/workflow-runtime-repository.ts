@@ -182,6 +182,7 @@ type RejectedTaskRunRow = {
   readonly targetReason: string;
   readonly targetNodeConfig: TaskRunInputSnapshot["targetNodeConfig"];
   readonly taskRunId: string;
+  readonly workflowDefinition: TaskRunInputSnapshot["workflowDefinition"];
   readonly workflowId: string;
 };
 
@@ -302,6 +303,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
                     resolvedParents: [],
                     targetNodeConfig: taskRun.targetNodeConfig,
                     taskRunId: taskRun.id,
+                    workflowDefinition: plan.workflowDefinition,
                   })
                 : null;
 
@@ -744,6 +746,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               resolvedParents,
               targetNodeConfig: rejectedTaskRun.targetNodeConfig,
               taskRunId: command.newTaskRunId,
+              workflowDefinition: rejectedTaskRun.workflowDefinition,
             })
           : null;
         const renderingFailure =
@@ -1159,6 +1162,7 @@ function rejectedTaskRunFromRow(row: QueryRow): RejectedTaskRunRow {
     targetReason: requireString(row.targetReason),
     targetNodeConfig: inputSnapshot.targetNodeConfig,
     taskRunId: requireString(row.taskRunId),
+    workflowDefinition: inputSnapshot.workflowDefinition,
     workflowId: requireString(row.workflowId),
   };
 }
@@ -1289,6 +1293,7 @@ function buildRepositoryInputSnapshot(input: {
   readonly resolvedParents: readonly ResolvedParentTaskRunSnapshot[] | null;
   readonly targetNodeConfig: TaskRunInputSnapshot["targetNodeConfig"];
   readonly taskRunId: string;
+  readonly workflowDefinition: TaskRunInputSnapshot["workflowDefinition"];
 }): TaskRunInputSnapshot {
   return buildTaskRunInputSnapshot({
     attempt: input.attempt,
@@ -1298,6 +1303,7 @@ function buildRepositoryInputSnapshot(input: {
     resolvedParentTaskRuns: input.resolvedParents ?? [],
     targetNodeConfig: input.targetNodeConfig,
     taskRunId: input.taskRunId,
+    workflowDefinition: input.workflowDefinition,
   });
 }
 
@@ -1447,6 +1453,7 @@ async function buildQueuedTaskRunFreezes(
         resolvedParents,
         targetNodeConfig: taskRun.targetNodeConfig,
         taskRunId: taskRun.id,
+        workflowDefinition: plan.workflowDefinition,
       }),
       resolvedParentTaskRunByDependencyId,
     });

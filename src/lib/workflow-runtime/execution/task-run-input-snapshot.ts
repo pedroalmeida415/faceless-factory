@@ -1,4 +1,8 @@
-import type { WorkflowDefinitionDocumentNode } from "~/lib/workflow/document";
+import {
+  WORKFLOW_DOCUMENT_VERSION,
+  type WorkflowDefinitionDocumentNode,
+  type WorkflowDefinitionGraphDocument,
+} from "~/lib/workflow/document";
 import { buildTaskRunIdempotencyKey } from "~/lib/workflow-runtime/domain/task-run-state";
 import {
   type RenderedTaskRunProviderInput,
@@ -31,6 +35,7 @@ export type TaskRunInputSnapshot = {
   readonly attempt: number;
   readonly idempotencyKey: string;
   readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
+  readonly workflowDefinition: WorkflowDefinitionGraphDocument;
   readonly resolvedParentTaskRuns: readonly ResolvedParentTaskRunInputSnapshot[];
   readonly providerInput: TaskRunProviderInput;
 };
@@ -46,12 +51,16 @@ export function buildTaskRunInputSnapshot(input: {
   readonly itemIndex: number;
   readonly attempt: number;
   readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
+  readonly workflowDefinition?: WorkflowDefinitionGraphDocument;
   readonly resolvedParentTaskRuns: readonly ResolvedParentTaskRunInputSnapshot[];
 }): TaskRunInputSnapshot {
   const idempotencyKey = buildTaskRunIdempotencyKey({
     attempt: input.attempt,
     taskRunId: input.taskRunId,
   });
+  const workflowDefinition =
+    input.workflowDefinition ??
+    workflowDefinitionFromTarget(input.targetNodeConfig);
 
   return {
     attempt: input.attempt,
@@ -65,11 +74,13 @@ export function buildTaskRunInputSnapshot(input: {
       itemIndex: input.itemIndex,
       resolvedParentTaskRuns: input.resolvedParentTaskRuns,
       targetNodeConfig: input.targetNodeConfig,
+      workflowDefinition,
     }).providerInput,
     resolvedParentTaskRuns: input.resolvedParentTaskRuns,
     targetNodeConfig: input.targetNodeConfig,
     taskRunId: input.taskRunId,
     version: 1,
+    workflowDefinition,
   };
 }
 
@@ -87,9 +98,32 @@ export function isTaskRunInputSnapshot(
     typeof value.itemIndex === "number" &&
     typeof value.attempt === "number" &&
     isWorkflowDefinitionDocumentNode(value.targetNodeConfig) &&
+    isWorkflowDefinitionGraphDocument(value.workflowDefinition) &&
     Array.isArray(value.resolvedParentTaskRuns) &&
     value.resolvedParentTaskRuns.every(isResolvedParentTaskRunInputSnapshot) &&
     isTaskRunProviderInput(value.providerInput)
+  );
+}
+
+function workflowDefinitionFromTarget(
+  targetNodeConfig: WorkflowDefinitionDocumentNode,
+): WorkflowDefinitionGraphDocument {
+  return {
+    edges: [],
+    nodes: [targetNodeConfig],
+    version: WORKFLOW_DOCUMENT_VERSION,
+  };
+}
+
+function isWorkflowDefinitionGraphDocument(
+  value: unknown,
+): value is WorkflowDefinitionGraphDocument {
+  return (
+    isRecord(value) &&
+    value.version === WORKFLOW_DOCUMENT_VERSION &&
+    Array.isArray(value.nodes) &&
+    value.nodes.every(isWorkflowDefinitionDocumentNode) &&
+    Array.isArray(value.edges)
   );
 }
 

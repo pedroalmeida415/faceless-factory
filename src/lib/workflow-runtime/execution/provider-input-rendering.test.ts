@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { createWorkflowNode } from "~/lib/workflow/document";
+import {
+  createWorkflowNode,
+  toWorkflowDefinitionGraphDocument,
+  WORKFLOW_DOCUMENT_VERSION,
+  type WorkflowDocument,
+} from "~/lib/workflow/document";
 import { SYSTEM_PROMPT_INPUT_HANDLE_ID } from "~/lib/workflow/llm-models";
 import { PROMPT_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
 import type { WorkflowAsset } from "~/lib/workflow/types";
@@ -97,6 +102,33 @@ describe("renderTaskRunProviderInput", () => {
     ]);
   });
 
+  test("folds prompt-node variables into generator provider input from upstream Task Run outputs", () => {
+    const document = promptVariableDocument();
+    const targetNodeConfig = document.nodes.find(
+      (node) => node.id === "script",
+    );
+    assert.equal(targetNodeConfig?.kind, "llmGenerator");
+
+    const result = renderTaskRunProviderInput({
+      idempotencyKey: "task_run:script-task:attempt:0",
+      itemIndex: 0,
+      resolvedParentTaskRuns: [
+        {
+          ...textParent("clockwork birds", "topic"),
+          sourceNodeId: "topic-source",
+        },
+      ],
+      targetNodeConfig,
+      workflowDefinition: toWorkflowDefinitionGraphDocument(document),
+    });
+
+    assert.equal(result.kind, "executable");
+    assert.equal(
+      result.providerInput.request.prompt,
+      "Describe clockwork birds",
+    );
+  });
+
   test("returns a typed non-executable result for unsupported node kinds", () => {
     const node = { ...createWorkflowNode("list", 0), id: "list-node" };
 
@@ -179,5 +211,41 @@ function renderedWorkflowImageAsset(id: string): WorkflowAsset {
     createdAt: "",
     fileName: id,
     size: 0,
+  };
+}
+
+function promptVariableDocument(): WorkflowDocument {
+  const prompt = createWorkflowNode("prompt", 0);
+  if (prompt.kind !== "prompt") {
+    throw new Error("Expected prompt node");
+  }
+  return {
+    version: WORKFLOW_DOCUMENT_VERSION,
+    nodes: [
+      { ...createWorkflowNode("llmGenerator", 0), id: "topic-source" },
+      {
+        ...prompt,
+        id: "prompt",
+        prompt: "Describe {{topic}}",
+        variables: [{ key: "topic", label: "Topic" }],
+      },
+      { ...createWorkflowNode("llmGenerator", 0), id: "script" },
+    ],
+    edges: [
+      {
+        id: "source-to-prompt",
+        source: "topic-source",
+        sourceHandle: "text",
+        target: "prompt",
+        targetHandle: "topic",
+      },
+      {
+        id: "prompt-to-script",
+        source: "prompt",
+        sourceHandle: "text",
+        target: "script",
+        targetHandle: PROMPT_INPUT_HANDLE_ID,
+      },
+    ],
   };
 }

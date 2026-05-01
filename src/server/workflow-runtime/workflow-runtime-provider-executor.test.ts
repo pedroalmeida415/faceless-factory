@@ -293,6 +293,11 @@ function inputSnapshot(input: {
     targetNodeConfig,
     taskRunId: "task-run-1",
     version: 1,
+    workflowDefinition: {
+      edges: [],
+      nodes: [targetNodeConfig],
+      version: 9,
+    },
   };
 }
 

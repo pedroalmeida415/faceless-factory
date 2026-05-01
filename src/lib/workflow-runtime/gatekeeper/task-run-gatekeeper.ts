@@ -307,7 +307,15 @@ function buildInputSnapshot(
     }),
     targetNodeConfig: child.targetNodeConfig,
     taskRunId: child.id,
+    workflowDefinition: requireInputSnapshot(child).workflowDefinition,
   });
+}
+
+function requireInputSnapshot(child: TaskRunGatekeeperTaskRun) {
+  if (!child.inputSnapshot) {
+    throw new TypeError(`Missing input snapshot for Task Run ${child.id}`);
+  }
+  return child.inputSnapshot;
 }
 
 function findWaitingChildren(

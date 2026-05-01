@@ -82,6 +82,41 @@ function makeGeneratorInputDocument(): WorkflowDocument {
   };
 }
 
+function makeOutputReorderDependencyDocument(): WorkflowDocument {
+  const reorder = makeNode("outputReorder", "reorder");
+  return {
+    version: WORKFLOW_DOCUMENT_VERSION,
+    nodes: [
+      makeNode("llmGenerator", "source"),
+      reorder.kind === "outputReorder"
+        ? {
+            ...reorder,
+            mode: "manual" as const,
+            order: [1, 0],
+            valueType: "text" as const,
+          }
+        : reorder,
+      makeNode("llmGenerator", "script"),
+    ],
+    edges: [
+      {
+        id: "source-to-reorder",
+        source: "source",
+        sourceHandle: "text",
+        target: "reorder",
+        targetHandle: "input",
+      },
+      {
+        id: "reorder-to-script",
+        source: "reorder",
+        sourceHandle: "output",
+        target: "script",
+        targetHandle: "prompt",
+      },
+    ],
+  };
+}
+
 function unwrap<T>(
   result: { ok: true; value: T } | { ok: false; error: unknown },
 ) {
@@ -124,7 +159,7 @@ describe("WorkflowRunPlanner", () => {
 
     assert.deepEqual(
       plan.nodeExecutionsToCreate.map((execution) => execution.nodeId),
-      ["topic", "prompt", "script"],
+      ["script"],
     );
     assert.deepEqual(
       plan.taskRunsToCreate.map((taskRun) => ({
@@ -134,46 +169,15 @@ describe("WorkflowRunPlanner", () => {
         status: taskRun.status,
       })),
       [
-        { attempt: 0, itemIndex: 0, nodeId: "topic", status: "QUEUED" },
-        {
-          attempt: 0,
-          itemIndex: 0,
-          nodeId: "prompt",
-          status: "WAITING_UPSTREAM",
-        },
         {
           attempt: 0,
           itemIndex: 0,
           nodeId: "script",
-          status: "WAITING_UPSTREAM",
+          status: "QUEUED",
         },
       ],
     );
-    assert.deepEqual(
-      plan.taskDependenciesToCreate.map((dependency) => ({
-        childNodeId: dependency.childNodeId,
-        childTaskRunId: dependency.childTaskRunId,
-        parentItemIndex: dependency.parentItemIndex,
-        parentNodeExecutionId: dependency.parentNodeExecutionId,
-        parentNodeId: dependency.parentNodeId,
-      })),
-      [
-        {
-          childNodeId: "prompt",
-          childTaskRunId: "planned-task-run-2",
-          parentItemIndex: 0,
-          parentNodeExecutionId: "planned-node-execution-1",
-          parentNodeId: "topic",
-        },
-        {
-          childNodeId: "script",
-          childTaskRunId: "planned-task-run-3",
-          parentItemIndex: 0,
-          parentNodeExecutionId: "planned-node-execution-2",
-          parentNodeId: "prompt",
-        },
-      ],
-    );
+    assert.deepEqual(plan.taskDependenciesToCreate, []);
   });
 
   test("carries estimated credit costs onto planned Task Runs", () => {
@@ -196,16 +200,10 @@ describe("WorkflowRunPlanner", () => {
         status: taskRun.status,
       })),
       [
-        { estimatedCreditCost: 1, nodeId: "topic", status: "QUEUED" },
-        {
-          estimatedCreditCost: 3,
-          nodeId: "prompt",
-          status: "WAITING_UPSTREAM",
-        },
         {
           estimatedCreditCost: 8,
           nodeId: "script",
-          status: "WAITING_UPSTREAM",
+          status: "QUEUED",
         },
       ],
     );
@@ -230,11 +228,7 @@ describe("WorkflowRunPlanner", () => {
         nodeId: taskRun.nodeId,
         targetNodeConfig: taskRun.targetNodeConfig,
       })),
-      [
-        { nodeId: "topic", targetNodeConfig: definition.nodes[0] },
-        { nodeId: "prompt", targetNodeConfig: definition.nodes[1] },
-        { nodeId: "script", targetNodeConfig: definition.nodes[2] },
-      ],
+      [{ nodeId: "script", targetNodeConfig: definition.nodes[2] }],
     );
   });
 
@@ -257,40 +251,16 @@ describe("WorkflowRunPlanner", () => {
 
     assert.deepEqual(
       plan.nodeExecutionsToCreate.map((execution) => execution.id),
-      ["node-execution-1", "node-execution-2", "node-execution-3"],
+      ["node-execution-1"],
     );
     assert.deepEqual(
       plan.taskRunsToCreate.map((taskRun) => taskRun.id),
-      ["task-run-1", "task-run-2", "task-run-3"],
+      ["task-run-1"],
     );
-    assert.deepEqual(
-      plan.taskDependenciesToCreate.map((dependency) => ({
-        childNodeExecutionId: dependency.childNodeExecutionId,
-        childNodeId: dependency.childNodeId,
-        childTaskRunId: dependency.childTaskRunId,
-        parentNodeExecutionId: dependency.parentNodeExecutionId,
-        parentNodeId: dependency.parentNodeId,
-      })),
-      [
-        {
-          childNodeExecutionId: "node-execution-2",
-          childNodeId: "prompt",
-          childTaskRunId: "task-run-2",
-          parentNodeExecutionId: "node-execution-1",
-          parentNodeId: "topic",
-        },
-        {
-          childNodeExecutionId: "node-execution-3",
-          childNodeId: "script",
-          childTaskRunId: "task-run-3",
-          parentNodeExecutionId: "node-execution-2",
-          parentNodeId: "prompt",
-        },
-      ],
-    );
+    assert.deepEqual(plan.taskDependenciesToCreate, []);
   });
 
-  test("plans dependency address handles for prompt and media generator inputs", () => {
+  test("does not create Task Dependencies for static prompt and asset inputs", () => {
     const plan = unwrap(
       planWorkflowRun({
         command: { type: "run-target", targetNodeIds: ["image"] },
@@ -311,18 +281,48 @@ describe("WorkflowRunPlanner", () => {
           targetHandle: dependency.targetHandle,
           targetNodeId: dependency.targetNodeId,
         })),
+      [],
+    );
+  });
+
+  test("maps output-reorder item indexes onto provider-backed Task Dependencies", () => {
+    const plan = unwrap(
+      planWorkflowRun({
+        command: { type: "run-target", targetNodeIds: ["script"] },
+        document: makeOutputReorderDependencyDocument(),
+        latestNodeExecutions: [],
+        latestTaskRuns: [],
+        ownerId: "owner-1",
+        plannedItemCountByNodeId: { script: 2, source: 2 },
+        workflowId: "workflow-1",
+      }),
+    );
+
+    assert.deepEqual(
+      plan.taskDependenciesToCreate.map((dependency) => ({
+        childNodeId: dependency.childNodeId,
+        childTaskRunId: dependency.childTaskRunId,
+        parentItemIndex: dependency.parentItemIndex,
+        parentNodeId: dependency.parentNodeId,
+        sourceHandle: dependency.sourceHandle,
+        targetHandle: dependency.targetHandle,
+      })),
       [
         {
-          parentNodeId: "prompt",
+          childNodeId: "script",
+          childTaskRunId: "planned-task-run-3",
+          parentItemIndex: 1,
+          parentNodeId: "source",
           sourceHandle: "text",
           targetHandle: "prompt",
-          targetNodeId: "image",
         },
         {
-          parentNodeId: "reference",
-          sourceHandle: "asset",
-          targetHandle: "image-input-0",
-          targetNodeId: "image",
+          childNodeId: "script",
+          childTaskRunId: "planned-task-run-4",
+          parentItemIndex: 0,
+          parentNodeId: "source",
+          sourceHandle: "text",
+          targetHandle: "prompt",
         },
       ],
     );
@@ -354,10 +354,7 @@ describe("WorkflowRunPlanner", () => {
       }),
     );
 
-    assert.deepEqual(plan.nodeExecutionsToReuse, [
-      { id: "topic-execution", nodeId: "topic" },
-      { id: "prompt-execution", nodeId: "prompt" },
-    ]);
+    assert.deepEqual(plan.nodeExecutionsToReuse, []);
     assert.deepEqual(plan.nodeExecutionsToCreate, [
       {
         id: "planned-node-execution-1",
@@ -418,22 +415,10 @@ describe("WorkflowRunPlanner", () => {
       })),
       [
         {
-          attempt: 3,
-          nodeExecutionId: "topic-execution",
-          nodeId: "topic",
-          status: "QUEUED",
-        },
-        {
-          attempt: 1,
-          nodeExecutionId: "prompt-execution",
-          nodeId: "prompt",
-          status: "WAITING_UPSTREAM",
-        },
-        {
           attempt: 0,
           nodeExecutionId: "planned-node-execution-1",
           nodeId: "script",
-          status: "WAITING_UPSTREAM",
+          status: "QUEUED",
         },
       ],
     );
@@ -469,7 +454,7 @@ describe("WorkflowRunPlanner", () => {
       plan.taskRunsToCreate.map((taskRun) => taskRun.nodeId),
       ["script"],
     );
-    assert.equal(plan.taskRunsToCreate[0]?.status, "WAITING_UPSTREAM");
+    assert.equal(plan.taskRunsToCreate[0]?.status, "QUEUED");
   });
 
   test("run-target rejects when the target latest Node Execution has active Task Runs", () => {
@@ -529,10 +514,7 @@ describe("WorkflowRunPlanner", () => {
       }),
     );
 
-    assert.deepEqual(plan.nodeExecutionsToReuse, [
-      { id: "topic-execution", nodeId: "topic" },
-      { id: "prompt-execution", nodeId: "prompt" },
-    ]);
+    assert.deepEqual(plan.nodeExecutionsToReuse, []);
     assert.deepEqual(plan.nodeExecutionsToCreate, [
       {
         id: "planned-node-execution-1",
@@ -562,22 +544,22 @@ describe("WorkflowRunPlanner", () => {
   test("rerun-node creates a new Node Execution with fresh Attempt 0 Task Runs", () => {
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "rerun-node", nodeId: "prompt" },
+        command: { type: "rerun-node", nodeId: "script" },
         document: makeDocument(),
         latestNodeExecutions: [
-          latestNodeExecution("prompt-execution", "prompt"),
+          latestNodeExecution("script-execution", "script"),
         ],
         latestTaskRuns: [
           latestTaskRun({
             attempt: 4,
-            id: "prompt-task",
+            id: "script-task",
             itemIndex: 0,
-            nodeExecutionId: "prompt-execution",
+            nodeExecutionId: "script-execution",
             status: "FAILED",
           }),
         ],
         ownerId: "owner-1",
-        plannedItemCountByNodeId: { prompt: 2 },
+        plannedItemCountByNodeId: { script: 2 },
         workflowId: "workflow-1",
       }),
     );
@@ -585,7 +567,7 @@ describe("WorkflowRunPlanner", () => {
     assert.deepEqual(plan.nodeExecutionsToCreate, [
       {
         id: "planned-node-execution-1",
-        nodeId: "prompt",
+        nodeId: "script",
         ownerId: "owner-1",
         workflowId: "workflow-1",
       },
@@ -597,21 +579,21 @@ describe("WorkflowRunPlanner", () => {
         status: taskRun.status,
       })),
       [
-        { attempt: 0, itemIndex: 0, status: "WAITING_UPSTREAM" },
-        { attempt: 0, itemIndex: 1, status: "WAITING_UPSTREAM" },
+        { attempt: 0, itemIndex: 0, status: "QUEUED" },
+        { attempt: 0, itemIndex: 1, status: "QUEUED" },
       ],
     );
   });
 
   test("rerun-node rejects when the latest Node Execution has active Task Runs", () => {
     const result = planWorkflowRun({
-      command: { type: "rerun-node", nodeId: "prompt" },
+      command: { type: "rerun-node", nodeId: "script" },
       document: makeDocument(),
-      latestNodeExecutions: [latestNodeExecution("prompt-execution", "prompt")],
+      latestNodeExecutions: [latestNodeExecution("script-execution", "script")],
       latestTaskRuns: [
         latestTaskRun({
-          id: "prompt-task",
-          nodeExecutionId: "prompt-execution",
+          id: "script-task",
+          nodeExecutionId: "script-execution",
           status: "QUEUED",
         }),
       ],
@@ -623,7 +605,7 @@ describe("WorkflowRunPlanner", () => {
     assert.deepEqual(result.error, {
       _tag: "WorkflowRunPlannerError",
       message:
-        "Cannot rerun node prompt because its latest Node Execution has active Task Runs.",
+        "Cannot rerun node script because its latest Node Execution has active Task Runs.",
     });
   });
 
@@ -632,24 +614,26 @@ describe("WorkflowRunPlanner", () => {
       planWorkflowRun({
         command: {
           itemIndexes: [1],
-          nodeExecutionId: "topic-execution",
+          nodeExecutionId: "script-execution",
           type: "regenerate-item",
         },
         document: makeDocument(),
-        latestNodeExecutions: [latestNodeExecution("topic-execution", "topic")],
+        latestNodeExecutions: [
+          latestNodeExecution("script-execution", "script"),
+        ],
         latestTaskRuns: [
           latestTaskRun({
             attempt: 2,
-            id: "topic-task-0",
+            id: "script-task-0",
             itemIndex: 0,
-            nodeExecutionId: "topic-execution",
+            nodeExecutionId: "script-execution",
             status: "APPROVED",
           }),
           latestTaskRun({
             attempt: 3,
-            id: "topic-task-1",
+            id: "script-task-1",
             itemIndex: 1,
-            nodeExecutionId: "topic-execution",
+            nodeExecutionId: "script-execution",
             status: "CANCELLED",
           }),
         ],
@@ -660,7 +644,7 @@ describe("WorkflowRunPlanner", () => {
 
     assert.deepEqual(plan.nodeExecutionsToCreate, []);
     assert.deepEqual(plan.nodeExecutionsToReuse, [
-      { id: "topic-execution", nodeId: "topic" },
+      { id: "script-execution", nodeId: "script" },
     ]);
     assert.deepEqual(
       plan.taskRunsToCreate.map((taskRun) => ({
@@ -673,8 +657,8 @@ describe("WorkflowRunPlanner", () => {
         {
           attempt: 4,
           itemIndex: 1,
-          nodeExecutionId: "topic-execution",
-          nodeId: "topic",
+          nodeExecutionId: "script-execution",
+          nodeId: "script",
         },
       ],
     );
@@ -685,36 +669,38 @@ describe("WorkflowRunPlanner", () => {
       planWorkflowRun({
         command: {
           itemIndexes: [0],
-          nodeExecutionId: "prompt-execution",
+          nodeExecutionId: "script-execution",
           type: "regenerate-item",
         },
-        document: makeDocument(),
+        document: makeOutputReorderDependencyDocument(),
         latestNodeExecutions: [
-          latestNodeExecution("topic-execution", "topic"),
-          latestNodeExecution("prompt-execution", "prompt"),
+          latestNodeExecution("source-execution", "source"),
+          latestNodeExecution("script-execution", "script"),
         ],
         latestTaskRuns: [
           latestTaskRun({
             attempt: 0,
-            id: "topic-task-0",
-            nodeExecutionId: "topic-execution",
+            id: "source-task-0",
+            itemIndex: 1,
+            nodeExecutionId: "source-execution",
             status: "APPROVED",
           }),
           latestTaskRun({
             attempt: 2,
-            id: "prompt-task-0",
-            nodeExecutionId: "prompt-execution",
+            id: "script-task-0",
+            nodeExecutionId: "script-execution",
             status: "APPROVED",
           }),
         ],
         ownerId: "owner-1",
+        plannedItemCountByNodeId: { script: 2, source: 2 },
         workflowId: "workflow-1",
       }),
     );
 
     assert.deepEqual(plan.nodeExecutionsToReuse, [
-      { id: "prompt-execution", nodeId: "prompt" },
-      { id: "topic-execution", nodeId: "topic" },
+      { id: "script-execution", nodeId: "script" },
+      { id: "source-execution", nodeId: "source" },
     ]);
     assert.deepEqual(
       plan.taskRunsToCreate.map((taskRun) => ({
@@ -728,23 +714,23 @@ describe("WorkflowRunPlanner", () => {
         {
           attempt: 3,
           id: "planned-task-run-1",
-          nodeExecutionId: "prompt-execution",
-          nodeId: "prompt",
+          nodeExecutionId: "script-execution",
+          nodeId: "script",
           status: "QUEUED",
         },
       ],
     );
     assert.deepEqual(plan.taskDependenciesToCreate, [
       {
-        childNodeExecutionId: "prompt-execution",
-        childNodeId: "prompt",
+        childNodeExecutionId: "script-execution",
+        childNodeId: "script",
         childTaskRunId: "planned-task-run-1",
-        parentItemIndex: 0,
-        parentNodeExecutionId: "topic-execution",
-        parentNodeId: "topic",
+        parentItemIndex: 1,
+        parentNodeExecutionId: "source-execution",
+        parentNodeId: "source",
         sourceHandle: "text",
-        targetHandle: "topic",
-        targetNodeId: "prompt",
+        targetHandle: "prompt",
+        targetNodeId: "script",
       },
     ]);
   });
@@ -753,16 +739,16 @@ describe("WorkflowRunPlanner", () => {
     const result = planWorkflowRun({
       command: {
         itemIndexes: [0],
-        nodeExecutionId: "prompt-execution",
+        nodeExecutionId: "script-execution",
         type: "regenerate-item",
       },
       document: makeDocument(),
-      latestNodeExecutions: [latestNodeExecution("prompt-execution", "prompt")],
+      latestNodeExecutions: [latestNodeExecution("script-execution", "script")],
       latestTaskRuns: [
         latestTaskRun({
-          id: "prompt-task",
+          id: "script-task",
           itemIndex: 0,
-          nodeExecutionId: "prompt-execution",
+          nodeExecutionId: "script-execution",
           status: "RUNNING",
         }),
       ],
@@ -774,7 +760,7 @@ describe("WorkflowRunPlanner", () => {
     assert.deepEqual(result.error, {
       _tag: "WorkflowRunPlannerError",
       message:
-        "Cannot regenerate item 0 for Node Execution prompt-execution because the latest Attempt is active.",
+        "Cannot regenerate item 0 for Node Execution script-execution because the latest Attempt is active.",
     });
   });
 });

@@ -2659,15 +2659,28 @@ type WorkflowRunPlanInput = Partial<
 };
 
 function workflowRunPlan(input: WorkflowRunPlanInput): WorkflowRunPlan {
+  const taskRunsToCreate = (input.taskRunsToCreate ?? []).map((taskRun) => ({
+    ...taskRun,
+    targetNodeConfig:
+      taskRun.targetNodeConfig ?? defaultTargetNodeConfig(taskRun.nodeId),
+  }));
   return {
     nodeExecutionsToCreate: input.nodeExecutionsToCreate ?? [],
     nodeExecutionsToReuse: input.nodeExecutionsToReuse ?? [],
     taskDependenciesToCreate: input.taskDependenciesToCreate ?? [],
-    taskRunsToCreate: (input.taskRunsToCreate ?? []).map((taskRun) => ({
-      ...taskRun,
-      targetNodeConfig:
-        taskRun.targetNodeConfig ?? defaultTargetNodeConfig(taskRun.nodeId),
-    })),
+    taskRunsToCreate,
+    workflowDefinition: input.workflowDefinition ?? {
+      edges: [],
+      nodes: Array.from(
+        new Map(
+          taskRunsToCreate.map((taskRun) => [
+            taskRun.targetNodeConfig.id,
+            taskRun.targetNodeConfig,
+          ]),
+        ).values(),
+      ),
+      version: 9,
+    },
   };
 }
 
@@ -2709,6 +2722,11 @@ function inputSnapshot(
     targetNodeConfig,
     taskRunId,
     version: 1,
+    workflowDefinition: {
+      edges: [],
+      nodes: [targetNodeConfig],
+      version: 9,
+    },
   };
 }
 

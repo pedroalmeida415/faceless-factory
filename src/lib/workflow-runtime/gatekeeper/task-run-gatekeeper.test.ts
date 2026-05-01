@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
 import { createWorkflowNode } from "~/lib/workflow/document";
+import { buildTaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
 import {
   recordDirectTaskRunFailure,
   type TaskRunGatekeeperDependency,
@@ -88,6 +89,7 @@ describe("TaskRunGatekeeper", () => {
       targetNodeConfig: child.targetNodeConfig,
       taskRunId: child.id,
       version: 1,
+      workflowDefinition: child.inputSnapshot?.workflowDefinition,
     });
     assert.deepEqual(result.executionJobs, [
       {
@@ -381,7 +383,7 @@ describe("TaskRunGatekeeper", () => {
     );
     assert.equal(
       requireTaskRun(result.state, child.id).inputSnapshot,
-      undefined,
+      child.inputSnapshot,
     );
     assert.equal(result.state.creditBalance, 10);
     assert.equal(
@@ -415,15 +417,25 @@ function taskRun(
   overrides: Partial<TaskRunGatekeeperTaskRun> &
     Pick<TaskRunGatekeeperTaskRun, "id" | "nodeExecutionId" | "status">,
 ): TaskRunGatekeeperTaskRun {
+  const targetNodeConfig = {
+    ...createWorkflowNode("llmGenerator", 0),
+    id: `node-${overrides.id}`,
+  };
   return {
     attempt: 0,
     estimatedCreditCost: 1,
+    inputSnapshot: buildTaskRunInputSnapshot({
+      attempt: 0,
+      itemIndex: 0,
+      nodeExecutionId: overrides.nodeExecutionId,
+      nodeId: targetNodeConfig.id,
+      resolvedParentTaskRuns: [],
+      targetNodeConfig,
+      taskRunId: overrides.id,
+    }),
     itemIndex: 0,
     nodeId: `node-${overrides.id}`,
-    targetNodeConfig: {
-      ...createWorkflowNode("llmGenerator", 0),
-      id: `node-${overrides.id}`,
-    },
+    targetNodeConfig,
     ...overrides,
   };
 }

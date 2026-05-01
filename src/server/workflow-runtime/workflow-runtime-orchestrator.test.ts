@@ -271,7 +271,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
         },
         {
           createdNodeExecutions: [],
-          reusedNodeExecutions: ["script-execution", "prompt-execution"],
+          reusedNodeExecutions: ["script-execution"],
           taskAttempts: [1],
         },
       ],
