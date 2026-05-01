@@ -108,11 +108,18 @@ function requireString(value: unknown): string {
 }
 
 function requireNumber(value: unknown): number {
-  if (typeof value !== "number" || !Number.isInteger(value)) {
-    throw new TypeError("Expected integer database number value");
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
   }
 
-  return value;
+  if (typeof value === "string" && /^-?\d+$/.test(value)) {
+    const parsed = Number(value);
+    if (Number.isSafeInteger(parsed)) {
+      return parsed;
+    }
+  }
+
+  throw new TypeError("Expected integer database number value");
 }
 
 function requireTaskRunStatus(value: unknown): ExistingTaskRun["status"] {

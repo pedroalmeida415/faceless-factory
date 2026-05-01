@@ -24,8 +24,14 @@ import {
   type WorkflowRuntimeExecutionJobPayload,
 } from "~/server/workflow-runtime/workflow-runtime-queue";
 
-type DbLike = {
+type DbExecutor = {
   readonly execute: (query: SQL) => Promise<unknown>;
+};
+
+type DbLike = DbExecutor & {
+  readonly transaction: <T>(
+    callback: (tx: DbExecutor) => Promise<T>,
+  ) => Promise<T>;
 };
 
 export type WakeUpTaskRunChildrenRepositoryCommand = {
@@ -60,17 +66,15 @@ export async function wakeUpTaskRunChildrenInRepository(
   db: DbLike,
   command: WakeUpTaskRunChildrenRepositoryCommand,
 ): Promise<WakeUpTaskRunChildrenRepositoryResult> {
-  await db.execute(sql`begin`);
-  try {
-    const parent = await loadGatekeeperParentTaskRun(db, command);
+  return db.transaction(async (tx) => {
+    const parent = await loadGatekeeperParentTaskRun(tx, command);
     if (!parent) {
-      await db.execute(sql`commit`);
       return { executionJobs: [], taskStatusEvents: [] };
     }
 
-    const taskRuns = await loadGatekeeperTaskRuns(db, parent);
-    const dependencies = await loadGatekeeperDependencies(db, parent);
-    const creditBalance = await loadOwnerCreditBalance(db, command.ownerUserId);
+    const taskRuns = await loadGatekeeperTaskRuns(tx, parent);
+    const dependencies = await loadGatekeeperDependencies(tx, parent);
+    const creditBalance = await loadOwnerCreditBalance(tx, command.ownerUserId);
     const gatekeeperTaskRuns = taskRuns.map(projectGatekeeperTaskRun);
     const initialTaskRuns = new Map(
       gatekeeperTaskRuns.map((taskRun) => [taskRun.id, taskRun]),
@@ -86,14 +90,13 @@ export async function wakeUpTaskRunChildrenInRepository(
       { settledParentTaskRunId: command.settledParentTaskRunId },
     );
 
-    const persistedTaskRunIds = await persistGatekeeperResult(db, {
+    const persistedTaskRunIds = await persistGatekeeperResult(tx, {
       initialDependencies,
       initialTaskRuns,
       ownerUserId: command.ownerUserId,
       resultState: result.state,
       taskRunRows: taskRuns,
     });
-    await db.execute(sql`commit`);
 
     const taskRunRowsById = new Map(
       taskRuns.map((taskRun) => [taskRun.taskRunId, taskRun]),
@@ -117,14 +120,11 @@ export async function wakeUpTaskRunChildrenInRepository(
         persistedTaskRunIds.has(event.taskRunId),
       ),
     };
-  } catch (error) {
-    await db.execute(sql`rollback`);
-    throw error;
-  }
+  });
 }
 
 async function loadGatekeeperParentTaskRun(
-  db: DbLike,
+  db: DbExecutor,
   command: WakeUpTaskRunChildrenRepositoryCommand,
 ): Promise<{
   readonly ownerUserId: string;
@@ -152,7 +152,7 @@ async function loadGatekeeperParentTaskRun(
 }
 
 async function loadGatekeeperTaskRuns(
-  db: DbLike,
+  db: DbExecutor,
   scope: { readonly ownerUserId: string; readonly workflowId: string },
 ): Promise<readonly GatekeeperTaskRunRow[]> {
   const rows = rowsFromResult(
@@ -202,7 +202,7 @@ async function loadGatekeeperTaskRuns(
 }
 
 async function loadGatekeeperDependencies(
-  db: DbLike,
+  db: DbExecutor,
   scope: { readonly ownerUserId: string; readonly workflowId: string },
 ): Promise<readonly TaskRunGatekeeperDependency[]> {
   const rows = rowsFromResult(
@@ -243,7 +243,7 @@ async function loadGatekeeperDependencies(
 }
 
 async function loadOwnerCreditBalance(
-  db: DbLike,
+  db: DbExecutor,
   ownerUserId: string,
 ): Promise<number> {
   const rows = rowsFromResult(
@@ -263,7 +263,7 @@ async function loadOwnerCreditBalance(
 }
 
 async function loadGeneratedOutputsForTaskRuns(
-  db: DbLike,
+  db: DbExecutor,
   taskRunIds: readonly string[],
 ): Promise<ReadonlyMap<string, TaskRunGatekeeperTaskRun["output"]>> {
   const outputs = new Map<string, TaskRunGatekeeperTaskRun["output"]>();
@@ -317,7 +317,7 @@ async function loadGeneratedOutputsForTaskRuns(
 }
 
 async function persistGatekeeperResult(
-  db: DbLike,
+  db: DbExecutor,
   input: {
     readonly initialDependencies: ReadonlyMap<
       string,
@@ -386,7 +386,7 @@ async function persistGatekeeperResult(
 }
 
 async function updateGatekeeperTaskRun(
-  db: DbLike,
+  db: DbExecutor,
   initial: TaskRunGatekeeperTaskRun,
   taskRun: TaskRunGatekeeperTaskRun,
 ): Promise<boolean> {
@@ -396,7 +396,7 @@ async function updateGatekeeperTaskRun(
     set
       runtime_status = ${taskRun.status},
       reserved_credits = ${taskRun.reservedCredits ?? null},
-      input_snapshot = ${taskRun.inputSnapshot ?? null},
+      input_snapshot = ${inputSnapshotJson(taskRun.inputSnapshot ?? null)}::jsonb,
       failure_reason = ${taskRun.failureReason?.type ?? null},
       error = ${taskRun.failureReason ? failureReasonError(taskRun.failureReason) : null},
       queued_at = case when ${taskRun.status} = 'QUEUED' then now() else queued_at end,
@@ -412,7 +412,7 @@ async function updateGatekeeperTaskRun(
 }
 
 async function reserveTaskRunCredits(
-  db: DbLike,
+  db: DbExecutor,
   input: {
     readonly amount: number;
     readonly ownerUserId: string;
@@ -443,7 +443,8 @@ async function reserveTaskRunCredits(
       amount,
       balance_after,
       reason,
-      source_key
+      source_key,
+      created_at
     ) values (
       ${sourceKey},
       ${input.ownerUserId},
@@ -452,9 +453,16 @@ async function reserveTaskRunCredits(
       ${input.amount},
       ${requireNumber(row.creditBalance)},
       'task_run_credit_reservation',
-      ${sourceKey}
+      ${sourceKey},
+      now()
     )
   `);
+}
+
+function inputSnapshotJson(
+  snapshot: TaskRunInputSnapshot | null,
+): string | null {
+  return snapshot ? JSON.stringify(snapshot) : null;
 }
 
 function projectGatekeeperTaskRun(
@@ -556,11 +564,18 @@ function optionalString(value: unknown): string | null {
 }
 
 function requireNumber(value: unknown): number {
-  if (typeof value !== "number" || !Number.isInteger(value)) {
-    throw new TypeError("Expected integer database number value");
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
   }
 
-  return value;
+  if (typeof value === "string" && /^-?\d+$/.test(value)) {
+    const parsed = Number(value);
+    if (Number.isSafeInteger(parsed)) {
+      return parsed;
+    }
+  }
+
+  throw new TypeError("Expected integer database number value");
 }
 
 function optionalNumber(value: unknown): number | null {

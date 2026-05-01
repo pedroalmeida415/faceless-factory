@@ -9,6 +9,7 @@ import { createWorkflowNode } from "~/lib/workflow/document";
 import type { TaskRunStatus } from "~/lib/workflow-runtime/domain/task-run-state";
 import type { TaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
 import type { WorkflowRunPlan } from "~/lib/workflow-runtime/planning/workflow-run-planner";
+import { wakeUpTaskRunChildrenInRepository } from "~/server/workflow-runtime/workflow-runtime-gatekeeper-repository";
 import { createWorkflowRuntimeRepository } from "~/server/workflow-runtime/workflow-runtime-repository";
 
 describe("WorkflowRuntimeRepository", () => {
@@ -23,6 +24,51 @@ describe("WorkflowRuntimeRepository", () => {
 
   afterEach(async () => {
     await client.close();
+  });
+
+  test("commits Workflow Run plans through the database transaction API", async () => {
+    const calls: string[] = [];
+    const repository = createWorkflowRuntimeRepository({
+      execute: async () => {
+        throw new Error("manual transaction SQL escaped the transaction API");
+      },
+      transaction: async (callback) => {
+        calls.push("transaction");
+        return callback({
+          execute: async () => {
+            throw new Error("empty plan should not execute SQL");
+          },
+        });
+      },
+    });
+
+    const result = await repository.commitWorkflowRunPlan(workflowRunPlan({}));
+
+    assert.deepEqual(result, {
+      executionJobs: [],
+      taskStatusEvents: [],
+      wakeUpJobs: [],
+    });
+    assert.deepEqual(calls, ["transaction"]);
+  });
+
+  test("runs Wake-Up Calls through the database transaction API", async () => {
+    const calls: string[] = [];
+    const result = await wakeUpTaskRunChildrenInRepository(
+      {
+        execute: async () => {
+          throw new Error("manual transaction SQL escaped the transaction API");
+        },
+        transaction: async (callback) => {
+          calls.push("transaction");
+          return callback({ execute: async () => [] });
+        },
+      },
+      { ownerUserId: "owner-user", settledParentTaskRunId: "missing-parent" },
+    );
+
+    assert.deepEqual(result, { executionJobs: [], taskStatusEvents: [] });
+    assert.deepEqual(calls, ["transaction"]);
   });
 
   test("claims a queued Task Run and returns the post-commit Running Task Status Event with the input snapshot", async () => {

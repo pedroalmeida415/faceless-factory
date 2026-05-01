@@ -100,6 +100,42 @@ describe("getPlanningStateForWorkflow", () => {
       ],
     });
   });
+
+  test("accepts bigint values returned as strings by postgres-js", async () => {
+    let callIndex = 0;
+    const state = await getPlanningStateForWorkflow(
+      {
+        execute: async () => {
+          callIndex += 1;
+          return callIndex === 1
+            ? [{ id: "node-execution", nodeId: "node" }]
+            : [
+                {
+                  attempt: "4",
+                  id: "task-run",
+                  itemIndex: "2",
+                  nodeExecutionId: "node-execution",
+                  status: "APPROVED",
+                },
+              ];
+        },
+      },
+      { ownerUserId: "owner-user", workflowId: "workflow-id" },
+    );
+
+    assert.deepEqual(state, {
+      latestNodeExecutions: [{ id: "node-execution", nodeId: "node" }],
+      latestTaskRuns: [
+        {
+          attempt: 4,
+          id: "task-run",
+          itemIndex: 2,
+          nodeExecutionId: "node-execution",
+          status: "APPROVED",
+        },
+      ],
+    });
+  });
 });
 
 async function setupPlanningStateTables(db: PgliteDatabase) {

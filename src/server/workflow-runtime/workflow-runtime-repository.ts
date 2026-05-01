@@ -27,8 +27,14 @@ import {
   type WorkflowRuntimeWakeUpJobPayload,
 } from "~/server/workflow-runtime/workflow-runtime-queue";
 
-type DbLike = {
+type DbExecutor = {
   readonly execute: (query: SQL) => Promise<unknown>;
+};
+
+type DbLike = DbExecutor & {
+  readonly transaction: <T>(
+    callback: (tx: DbExecutor) => Promise<T>,
+  ) => Promise<T>;
 };
 
 type ClaimQueuedTaskRunCommand = {
@@ -200,17 +206,16 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
     async commitWorkflowRunPlan(
       plan: WorkflowRunPlan,
     ): Promise<CommitWorkflowRunPlanResult> {
-      const nodeExecutionById = new Map<string, NodeExecutionIdentity>();
+      return db.transaction(async (tx) => {
+        const nodeExecutionById = new Map<string, NodeExecutionIdentity>();
 
-      await db.execute(sql`begin`);
-      try {
         for (const nodeExecution of plan.nodeExecutionsToCreate) {
           nodeExecutionById.set(nodeExecution.id, {
             id: nodeExecution.id,
             ownerUserId: nodeExecution.ownerId,
             workflowId: nodeExecution.workflowId,
           });
-          await db.execute(sql`
+          await tx.execute(sql`
             insert into node_executions (
               id,
               workflow_id,
@@ -220,7 +225,9 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               document_revision,
               status,
               output_count,
-              target_reason
+              target_reason,
+              created_at,
+              updated_at
             ) values (
               ${nodeExecution.id},
               ${nodeExecution.workflowId},
@@ -230,7 +237,9 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               null,
               'pending',
               ${countPlannedTaskRunsForNodeExecution(plan, nodeExecution.id)},
-              'node_run'
+              'node_run',
+              now(),
+              now()
             )
           `);
         }
@@ -241,12 +250,12 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           if (!nodeExecutionById.has(nodeExecutionId)) {
             nodeExecutionById.set(
               nodeExecutionId,
-              await loadNodeExecutionIdentity(db, nodeExecutionId),
+              await loadNodeExecutionIdentity(tx, nodeExecutionId),
             );
           }
         }
 
-        const queuedTaskRunFreezes = await buildQueuedTaskRunFreezes(db, plan);
+        const queuedTaskRunFreezes = await buildQueuedTaskRunFreezes(tx, plan);
         const committedTaskRuns: CommittedPlanTaskRun[] = [];
 
         for (const taskRun of plan.taskRunsToCreate) {
@@ -260,7 +269,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             renderingFailureReasonFromFreeze(freeze);
           const hasReservedCredits =
             taskRun.status === "QUEUED" && !renderingFailureReason
-              ? await reserveInitialQueuedTaskRunCredits(db, {
+              ? await reserveInitialQueuedTaskRunCredits(tx, {
                   amount: estimatedCreditCost,
                   ownerUserId: nodeExecution.ownerUserId,
                   taskRunId: taskRun.id,
@@ -281,8 +290,22 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
                   status: "FAILED",
                 };
           committedTaskRuns.push(committedTaskRun);
+          const inputSnapshot =
+            committedTaskRun.status === "QUEUED" && hasReservedCredits
+              ? (freeze?.inputSnapshot ?? null)
+              : committedTaskRun.status === "WAITING_UPSTREAM"
+                ? buildRepositoryInputSnapshot({
+                    attempt: taskRun.attempt,
+                    itemIndex: taskRun.itemIndex,
+                    nodeExecutionId: taskRun.nodeExecutionId,
+                    nodeId: taskRun.nodeId,
+                    resolvedParents: [],
+                    targetNodeConfig: taskRun.targetNodeConfig,
+                    taskRunId: taskRun.id,
+                  })
+                : null;
 
-          await db.execute(sql`
+          await tx.execute(sql`
             insert into task_runs (
               id,
               node_execution_id,
@@ -303,7 +326,9 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               failure_reason,
               input_snapshot,
               queued_at,
-              failed_at
+              failed_at,
+              created_at,
+              updated_at
             ) values (
               ${taskRun.id},
               ${taskRun.nodeExecutionId},
@@ -322,29 +347,17 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               ${estimatedCreditCost},
               ${hasReservedCredits ? estimatedCreditCost : null},
               ${committedTaskRun.failureReason ?? null},
-              ${
-                committedTaskRun.status === "QUEUED" && hasReservedCredits
-                  ? (freeze?.inputSnapshot ?? null)
-                  : committedTaskRun.status === "WAITING_UPSTREAM"
-                    ? buildRepositoryInputSnapshot({
-                        attempt: taskRun.attempt,
-                        itemIndex: taskRun.itemIndex,
-                        nodeExecutionId: taskRun.nodeExecutionId,
-                        nodeId: taskRun.nodeId,
-                        resolvedParents: [],
-                        targetNodeConfig: taskRun.targetNodeConfig,
-                        taskRunId: taskRun.id,
-                      })
-                    : null
-              },
+              ${inputSnapshotJson(inputSnapshot)}::jsonb,
               ${hasReservedCredits ? sql`now()` : sql`null`},
-              ${committedTaskRun.status === "FAILED" ? sql`now()` : sql`null`}
+              ${committedTaskRun.status === "FAILED" ? sql`now()` : sql`null`},
+              now(),
+              now()
             )
           `);
         }
 
         for (const dependency of plan.taskDependenciesToCreate) {
-          await db.execute(sql`
+          await tx.execute(sql`
             insert into task_dependencies (
               id,
               child_task_run_id,
@@ -354,7 +367,8 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               source_handle,
               target_handle,
               target_node_id,
-              resolved_parent_task_run_id
+              resolved_parent_task_run_id,
+              created_at
             ) values (
               ${buildTaskDependencyId(dependency)},
               ${dependency.childTaskRunId},
@@ -370,7 +384,8 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
                   ?.resolvedParentTaskRunByDependencyId.get(
                     buildTaskDependencyId(dependency),
                   ) ?? null
-              }
+              },
+              now()
             )
           `);
           if (
@@ -380,15 +395,13 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
                 buildTaskDependencyId(dependency),
               )
           ) {
-            await db.execute(sql`
+            await tx.execute(sql`
               update task_dependencies
               set resolved_at = now()
               where id = ${buildTaskDependencyId(dependency)}
             `);
           }
         }
-
-        await db.execute(sql`commit`);
 
         return {
           executionJobs: committedTaskRuns.flatMap((taskRun) => {
@@ -437,10 +450,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             });
           }),
         };
-      } catch (error) {
-        await db.execute(sql`rollback`);
-        throw error;
-      }
+      });
     },
 
     async claimQueuedTaskRun(
@@ -498,10 +508,9 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
       const assetId = command.generatedAsset.assetId;
       const assetIdsJson = JSON.stringify([assetId]);
 
-      await db.execute(sql`begin`);
-      try {
+      return db.transaction(async (tx) => {
         const rows = rowsFromResult(
-          await db.execute(sql`
+          await tx.execute(sql`
             update task_runs
             set
               runtime_status = ${finalStatus},
@@ -526,17 +535,16 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
         const row = rows[0];
 
         if (!row) {
-          await db.execute(sql`rollback`);
           return { settled: false };
         }
 
-        await insertGeneratedAsset(db, {
+        await insertGeneratedAsset(tx, {
           asset: command.generatedAsset,
           ownerUserId: requireString(row.ownerUserId),
           taskRunId: requireString(row.taskRunId),
           workflowId: requireString(row.workflowId),
         });
-        await refundTaskRunReservedCredits(db, {
+        await refundTaskRunReservedCredits(tx, {
           amount: refundableReservedCredits(
             optionalNumber(row.reservedCredits),
             command.finalCostCredits,
@@ -545,7 +553,6 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           taskRunId: requireString(row.taskRunId),
           workflowId: requireString(row.workflowId),
         });
-        await db.execute(sql`commit`);
 
         const wakeUpJob =
           finalStatus === "APPROVED"
@@ -568,10 +575,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           }),
           wakeUpJob,
         };
-      } catch (error) {
-        await db.execute(sql`rollback`);
-        throw error;
-      }
+      });
     },
 
     async settleTaskRunFailure(
@@ -582,11 +586,10 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           ? command.failureReason.message
           : null;
 
-      await db.execute(sql`begin`);
-      try {
+      return db.transaction(async (tx) => {
         const finalCostCredits = command.finalCostCredits ?? 0;
         const rows = rowsFromResult(
-          await db.execute(sql`
+          await tx.execute(sql`
             update task_runs
             set
               runtime_status = 'FAILED',
@@ -612,11 +615,10 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
         const row = rows[0];
 
         if (!row) {
-          await db.execute(sql`rollback`);
           return { settled: false };
         }
 
-        await refundTaskRunReservedCredits(db, {
+        await refundTaskRunReservedCredits(tx, {
           amount: refundableReservedCredits(
             optionalNumber(row.reservedCredits),
             finalCostCredits,
@@ -625,7 +627,6 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           taskRunId: requireString(row.taskRunId),
           workflowId: requireString(row.workflowId),
         });
-        await db.execute(sql`commit`);
 
         return {
           settled: true,
@@ -643,10 +644,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             workflowId: requireString(row.workflowId),
           }),
         };
-      } catch (error) {
-        await db.execute(sql`rollback`);
-        throw error;
-      }
+      });
     },
 
     async approveTaskRun(
@@ -697,10 +695,9 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
     async rejectTaskRunAndCreateRegeneration(
       command: RejectTaskRunAndCreateRegenerationCommand,
     ): Promise<RejectTaskRunAndCreateRegenerationResult> {
-      await db.execute(sql`begin`);
-      try {
+      return db.transaction(async (tx) => {
         const rows = rowsFromResult(
-          await db.execute(sql`
+          await tx.execute(sql`
             update task_runs
             set runtime_status = 'REJECTED', finished_at = now(), updated_at = now()
             where id = ${command.taskRunId}
@@ -724,17 +721,16 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
         const row = rows[0];
 
         if (!row) {
-          await db.execute(sql`rollback`);
           return { rejected: false };
         }
 
         const rejectedTaskRun = rejectedTaskRunFromRow(row);
         const dependencies = await loadTaskDependencyRequirements(
-          db,
+          tx,
           rejectedTaskRun.taskRunId,
         );
         const resolvedParents = await resolveLatestApprovedParents(
-          db,
+          tx,
           dependencies,
         );
         const nextAttempt = rejectedTaskRun.attempt + 1;
@@ -754,7 +750,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           inputSnapshot?.providerInput.kind === "non-executable-node";
         const hasReservedCredits =
           queueable && !renderingFailure
-            ? await reserveInitialQueuedTaskRunCredits(db, {
+            ? await reserveInitialQueuedTaskRunCredits(tx, {
                 amount: rejectedTaskRun.estimatedCreditCost,
                 ownerUserId: rejectedTaskRun.ownerUserId,
                 taskRunId: command.newTaskRunId,
@@ -774,7 +770,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             ? "INSUFFICIENT_CREDITS"
             : null;
 
-        await db.execute(sql`
+        await tx.execute(sql`
           insert into task_runs (
             id,
             node_execution_id,
@@ -795,7 +791,9 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             failure_reason,
             input_snapshot,
             queued_at,
-            failed_at
+            failed_at,
+            created_at,
+            updated_at
           ) values (
             ${command.newTaskRunId},
             ${rejectedTaskRun.nodeExecutionId},
@@ -814,9 +812,11 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             ${rejectedTaskRun.estimatedCreditCost},
             ${hasReservedCredits ? rejectedTaskRun.estimatedCreditCost : null},
             ${failureReason},
-            ${newStatus === "QUEUED" ? inputSnapshot : null},
+            ${inputSnapshotJson(newStatus === "QUEUED" ? inputSnapshot : null)}::jsonb,
             ${newStatus === "QUEUED" ? sql`now()` : sql`null`},
-            ${newStatus === "FAILED" ? sql`now()` : sql`null`}
+            ${newStatus === "FAILED" ? sql`now()` : sql`null`},
+            now(),
+            now()
           )
         `);
 
@@ -830,7 +830,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
                     parent.itemIndex === dependency.requiredParentItemIndex,
                 )?.taskRunId
               : null;
-          await db.execute(sql`
+          await tx.execute(sql`
             insert into task_dependencies (
               id,
               child_task_run_id,
@@ -841,6 +841,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               target_handle,
               target_node_id,
               resolved_parent_task_run_id,
+              created_at,
               resolved_at
             ) values (
               ${buildTaskDependencyId({
@@ -858,12 +859,11 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               ${dependency.targetHandle},
               ${dependency.targetNodeId},
               ${resolvedParentTaskRunId ?? null},
+              now(),
               ${resolvedParentTaskRunId ? sql`now()` : sql`null`}
             )
           `);
         }
-
-        await db.execute(sql`commit`);
 
         const newTaskEvent = buildTaskStatusEvent({
           attempt: nextAttempt,
@@ -898,19 +898,15 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             newTaskEvent,
           ],
         };
-      } catch (error) {
-        await db.execute(sql`rollback`);
-        throw error;
-      }
+      });
     },
 
     async cancelTaskRun(
       command: DecideTaskRunReviewCommand,
     ): Promise<DecideTaskRunReviewResult> {
-      await db.execute(sql`begin`);
-      try {
+      return db.transaction(async (tx) => {
         const rows = rowsFromResult(
-          await db.execute(sql`
+          await tx.execute(sql`
             update task_runs
             set runtime_status = 'CANCELLED', finished_at = now(), updated_at = now()
             where id = ${command.taskRunId}
@@ -936,12 +932,11 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
         const row = rows[0];
 
         if (!row) {
-          await db.execute(sql`rollback`);
           return { decided: false };
         }
 
         const taskRunId = requireString(row.taskRunId);
-        await refundTaskRunReservedCredits(db, {
+        await refundTaskRunReservedCredits(tx, {
           amount: refundableReservedCredits(
             optionalNumber(row.reservedCredits),
             requireNumber(row.costCredits),
@@ -950,7 +945,6 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           taskRunId,
           workflowId: requireString(row.workflowId),
         });
-        await db.execute(sql`commit`);
 
         return {
           decided: true,
@@ -967,10 +961,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             workflowId: requireString(row.workflowId),
           }),
         };
-      } catch (error) {
-        await db.execute(sql`rollback`);
-        throw error;
-      }
+      });
     },
 
     async listQueuedTaskRunJobs(
@@ -1180,8 +1171,14 @@ function renderingFailureReasonFromFreeze(
     : undefined;
 }
 
+function inputSnapshotJson(
+  snapshot: TaskRunInputSnapshot | null,
+): string | null {
+  return snapshot ? JSON.stringify(snapshot) : null;
+}
+
 async function loadTaskDependencyRequirements(
-  db: DbLike,
+  db: DbExecutor,
   childTaskRunId: string,
 ): Promise<readonly TaskDependencyRow[]> {
   const rows = rowsFromResult(
@@ -1220,7 +1217,7 @@ async function loadTaskDependencyRequirements(
 }
 
 async function resolveLatestApprovedParents(
-  db: DbLike,
+  db: DbExecutor,
   dependencies: readonly TaskDependencyRow[],
 ): Promise<readonly ResolvedParentTaskRunSnapshot[] | null> {
   const parents: ResolvedParentTaskRunSnapshot[] = [];
@@ -1244,7 +1241,7 @@ async function resolveLatestApprovedParents(
 }
 
 async function loadLatestParentTaskRun(
-  db: DbLike,
+  db: DbExecutor,
   dependency: TaskDependencyRow,
 ): Promise<
   (ResolvedParentTaskRunSnapshot & { readonly runtimeStatus: string }) | null
@@ -1337,7 +1334,7 @@ function nodeExecutionIdsRequiredByTaskRuns(plan: WorkflowRunPlan) {
 }
 
 async function loadNodeExecutionIdentity(
-  db: DbLike,
+  db: DbExecutor,
   nodeExecutionId: string,
 ): Promise<NodeExecutionIdentity> {
   const rows = rowsFromResult(
@@ -1392,7 +1389,7 @@ function buildTaskDependencyId(input: {
 }
 
 async function buildQueuedTaskRunFreezes(
-  db: DbLike,
+  db: DbExecutor,
   plan: WorkflowRunPlan,
 ): Promise<ReadonlyMap<string, QueuedTaskRunFreeze>> {
   const dependenciesByChildTaskRunId = new Map<
@@ -1459,7 +1456,7 @@ async function buildQueuedTaskRunFreezes(
 }
 
 async function loadLatestApprovedParentTaskRunForCommit(
-  db: DbLike,
+  db: DbExecutor,
   input: {
     readonly childTaskRunId: string;
     readonly parentItemIndex: number;
@@ -1505,7 +1502,7 @@ async function loadLatestApprovedParentTaskRunForCommit(
 }
 
 async function loadGeneratedOutputForTaskRun(
-  db: DbLike,
+  db: DbExecutor,
   taskRunId: string,
 ): Promise<ResolvedParentTaskRunSnapshot["output"] | undefined> {
   const rows = rowsFromResult(
@@ -1555,7 +1552,7 @@ async function loadGeneratedOutputForTaskRun(
 }
 
 async function insertGeneratedAsset(
-  db: DbLike,
+  db: DbExecutor,
   input: {
     readonly asset: GeneratedPrimaryAssetInput;
     readonly ownerUserId: string;
@@ -1580,7 +1577,8 @@ async function insertGeneratedAsset(
       file_name,
       size_bytes,
       model,
-      external_uri
+      external_uri,
+      created_at
     ) values (
       ${asset.assetId},
       ${input.ownerUserId},
@@ -1596,13 +1594,14 @@ async function insertGeneratedAsset(
       ${asset.fileName},
       ${asset.sizeBytes},
       ${asset.model ?? null},
-      ${asset.externalUri ?? null}
+      ${asset.externalUri ?? null},
+      now()
     )
   `);
 }
 
 async function reserveInitialQueuedTaskRunCredits(
-  db: DbLike,
+  db: DbExecutor,
   input: {
     readonly amount: number;
     readonly ownerUserId: string;
@@ -1653,7 +1652,8 @@ async function reserveInitialQueuedTaskRunCredits(
       amount,
       balance_after,
       reason,
-      source_key
+      source_key,
+      created_at
     ) values (
       ${sourceKey},
       ${input.ownerUserId},
@@ -1662,7 +1662,8 @@ async function reserveInitialQueuedTaskRunCredits(
       ${input.amount},
       ${requireNumber(row.creditBalance)},
       'task_run_credit_reservation',
-      ${sourceKey}
+      ${sourceKey},
+      now()
     )
   `);
 
@@ -1670,7 +1671,7 @@ async function reserveInitialQueuedTaskRunCredits(
 }
 
 async function refundTaskRunReservedCredits(
-  db: DbLike,
+  db: DbExecutor,
   input: {
     readonly amount: number;
     readonly ownerUserId: string;
@@ -1729,7 +1730,8 @@ async function refundTaskRunReservedCredits(
       amount,
       balance_after,
       reason,
-      source_key
+      source_key,
+      created_at
     ) values (
       ${sourceKey},
       ${input.ownerUserId},
@@ -1738,7 +1740,8 @@ async function refundTaskRunReservedCredits(
       ${input.amount},
       ${requireNumber(row.creditBalance)},
       'task_run_credit_refund',
-      ${sourceKey}
+      ${sourceKey},
+      now()
     ) on conflict (source_key) do nothing
   `);
 }
@@ -1787,11 +1790,18 @@ function optionalString(value: unknown): string | null {
 }
 
 function requireNumber(value: unknown): number {
-  if (typeof value !== "number" || !Number.isInteger(value)) {
-    throw new TypeError("Expected integer database number value");
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
   }
 
-  return value;
+  if (typeof value === "string" && /^-?\d+$/.test(value)) {
+    const parsed = Number(value);
+    if (Number.isSafeInteger(parsed)) {
+      return parsed;
+    }
+  }
+
+  throw new TypeError("Expected integer database number value");
 }
 
 function optionalNumber(value: unknown): number | null {

@@ -70,6 +70,41 @@ describe("getTaskRunProjectionForWorkflow", () => {
     ]);
   });
 
+  test("accepts bigint values returned as strings by postgres-js", async () => {
+    const projection = await getTaskRunProjectionForWorkflow(
+      {
+        execute: async () => [
+          {
+            assetId: null,
+            assetKind: null,
+            attempt: "2",
+            cdnUrl: null,
+            contentType: null,
+            failureReason: null,
+            itemIndex: "3",
+            nodeExecutionId: "node-execution-string-bigints",
+            nodeId: "node-string-bigints",
+            status: "APPROVED",
+            taskRunId: "task-run-string-bigints",
+            text: null,
+          },
+        ],
+      },
+      { ownerUserId: "owner-user", workflowId: "workflow-id" },
+    );
+
+    assert.deepEqual(projection, [
+      {
+        attempt: 2,
+        itemIndex: 3,
+        nodeExecutionId: "node-execution-string-bigints",
+        nodeId: "node-string-bigints",
+        status: "APPROVED",
+        taskRunId: "task-run-string-bigints",
+      },
+    ]);
+  });
+
   test("includes renderable output payloads for generated text and media Assets", async () => {
     await insertNodeExecution(db, {
       id: "node-execution-assets",
