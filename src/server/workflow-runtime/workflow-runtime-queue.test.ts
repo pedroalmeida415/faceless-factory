@@ -23,7 +23,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
       {
         attempt: 2,
         itemIndex: 4,
-        jobId: "task-run:task-run-1:attempt:2:execute",
+        jobId: "task-run~task-run-1~attempt~2~execute",
         nodeExecutionId: "node-execution-1",
         ownerUserId: "owner-user-1",
         taskRunId: "task-run-1",
@@ -63,7 +63,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
           storageProvider: "inline",
           text: "hello",
         },
-        jobId: "task-run:task-run-1:attempt:2:orchestrator:completion",
+        jobId: "task-run~task-run-1~attempt~2~orchestrator~completion",
         ownerUserId: "owner-user-1",
         reviewRequired: false,
         taskRunId: "task-run-1",
@@ -84,7 +84,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
       {
         attempt: 2,
         failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
-        jobId: "task-run:task-run-1:attempt:2:orchestrator:failure",
+        jobId: "task-run~task-run-1~attempt~2~orchestrator~failure",
         ownerUserId: "owner-user-1",
         taskRunId: "task-run-1",
         workflowId: "workflow-1",
@@ -100,7 +100,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
         workflowId: "workflow-1",
       }),
       {
-        jobId: "wake-up:parent-task-run-1",
+        jobId: "wake-up~parent-task-run-1",
         ownerUserId: "owner-user-1",
         parentTaskRunId: "parent-task-run-1",
         workflowId: "workflow-1",
@@ -127,7 +127,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
     assert.deepEqual(queue.added, [
       {
         name: "execute-task-run",
-        options: { jobId: "task-run:task-run-1:attempt:1:execute" },
+        options: { jobId: "task-run~task-run-1~attempt~1~execute" },
         payload: job,
       },
     ]);
@@ -147,7 +147,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
     assert.deepEqual(queue.added, [
       {
         name: "wake-up-task-run-children",
-        options: { jobId: "wake-up:parent-task-run-1" },
+        options: { jobId: "wake-up~parent-task-run-1" },
         payload: job,
       },
     ]);
@@ -180,7 +180,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
       {
         name: "settle-task-run-completion",
         options: {
-          jobId: "task-run:task-run-1:attempt:1:orchestrator:completion",
+          jobId: "task-run~task-run-1~attempt~1~orchestrator~completion",
         },
         payload: job,
       },
@@ -204,7 +204,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
       {
         name: "settle-task-run-failure",
         options: {
-          jobId: "task-run:task-run-1:attempt:1:orchestrator:failure",
+          jobId: "task-run~task-run-1~attempt~1~orchestrator~failure",
         },
         payload: job,
       },

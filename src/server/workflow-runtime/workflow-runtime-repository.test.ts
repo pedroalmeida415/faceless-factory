@@ -261,7 +261,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunId: "task-run-approved-complete",
       },
       wakeUpJob: {
-        jobId: "wake-up:task-run-approved-complete",
+        jobId: "wake-up~task-run-approved-complete",
         ownerUserId: "owner-user",
         parentTaskRunId: "task-run-approved-complete",
         workflowId: "workflow-id",
@@ -292,7 +292,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunId: "task-run-review-approved",
       },
       wakeUpJob: {
-        jobId: "wake-up:task-run-review-approved",
+        jobId: "wake-up~task-run-review-approved",
         ownerUserId: "owner-user",
         parentTaskRunId: "task-run-review-approved",
         workflowId: "workflow-id",
@@ -347,7 +347,7 @@ describe("WorkflowRuntimeRepository", () => {
       executionJob: {
         attempt: 3,
         itemIndex: 0,
-        jobId: "task-run:task-run-review-regenerated:attempt:3:execute",
+        jobId: "task-run~task-run-review-regenerated~attempt~3~execute",
         nodeExecutionId: "node-execution-rejected",
         ownerUserId: "owner-user",
         taskRunId: "task-run-review-regenerated",
@@ -670,7 +670,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunId: "task-run-review-cancelled",
       },
       wakeUpJob: {
-        jobId: "wake-up:task-run-review-cancelled",
+        jobId: "wake-up~task-run-review-cancelled",
         ownerUserId: "owner-user",
         parentTaskRunId: "task-run-review-cancelled",
         workflowId: "workflow-id",
@@ -799,7 +799,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunId: "task-run-failed",
       },
       wakeUpJob: {
-        jobId: "wake-up:task-run-failed",
+        jobId: "wake-up~task-run-failed",
         ownerUserId: "owner-user",
         parentTaskRunId: "task-run-failed",
         workflowId: "workflow-id",
@@ -1024,7 +1024,7 @@ describe("WorkflowRuntimeRepository", () => {
       {
         attempt: 1,
         itemIndex: 0,
-        jobId: "task-run:task-run-a:attempt:1:execute",
+        jobId: "task-run~task-run-a~attempt~1~execute",
         nodeExecutionId: "node-execution-task-run-a",
         ownerUserId: "owner-user",
         taskRunId: "task-run-a",
@@ -1033,7 +1033,7 @@ describe("WorkflowRuntimeRepository", () => {
       {
         attempt: 2,
         itemIndex: 0,
-        jobId: "task-run:task-run-b:attempt:2:execute",
+        jobId: "task-run~task-run-b~attempt~2~execute",
         nodeExecutionId: "node-execution-task-run-b",
         ownerUserId: "owner-user",
         taskRunId: "task-run-b",
@@ -1079,7 +1079,7 @@ describe("WorkflowRuntimeRepository", () => {
       {
         attempt: 0,
         itemIndex: 0,
-        jobId: "task-run:child-ready:attempt:0:execute",
+        jobId: "task-run~child-ready~attempt~0~execute",
         nodeExecutionId: "node-execution-child-ready",
         ownerUserId: "owner-user",
         taskRunId: "child-ready",
@@ -1396,7 +1396,7 @@ describe("WorkflowRuntimeRepository", () => {
         {
           attempt: 0,
           itemIndex: 0,
-          jobId: "task-run:task-run-source-0:attempt:0:execute",
+          jobId: "task-run~task-run-source-0~attempt~0~execute",
           nodeExecutionId: "node-execution-source",
           ownerUserId: "owner-user",
           taskRunId: "task-run-source-0",
@@ -1405,7 +1405,7 @@ describe("WorkflowRuntimeRepository", () => {
         {
           attempt: 0,
           itemIndex: 1,
-          jobId: "task-run:task-run-source-1:attempt:0:execute",
+          jobId: "task-run~task-run-source-1~attempt~0~execute",
           nodeExecutionId: "node-execution-source",
           ownerUserId: "owner-user",
           taskRunId: "task-run-source-1",
@@ -1571,7 +1571,7 @@ describe("WorkflowRuntimeRepository", () => {
       {
         attempt: 0,
         itemIndex: 0,
-        jobId: "task-run:task-run-funded-source:attempt:0:execute",
+        jobId: "task-run~task-run-funded-source~attempt~0~execute",
         nodeExecutionId: "node-execution-funded-source",
         ownerUserId: "owner-user",
         taskRunId: "task-run-funded-source",
@@ -1641,7 +1641,7 @@ describe("WorkflowRuntimeRepository", () => {
       ],
       wakeUpJobs: [
         {
-          jobId: "wake-up:task-run-unfunded-source",
+          jobId: "wake-up~task-run-unfunded-source",
           ownerUserId: "owner-user",
           parentTaskRunId: "task-run-unfunded-source",
           workflowId: "workflow-id",
@@ -1731,7 +1731,7 @@ describe("WorkflowRuntimeRepository", () => {
       {
         attempt: 0,
         itemIndex: 0,
-        jobId: "task-run:task-run-child-commit-ready:attempt:0:execute",
+        jobId: "task-run~task-run-child-commit-ready~attempt~0~execute",
         nodeExecutionId: "node-execution-child-commit-ready",
         ownerUserId: "owner-user",
         taskRunId: "task-run-child-commit-ready",

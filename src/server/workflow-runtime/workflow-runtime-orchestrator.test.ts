@@ -68,7 +68,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.equal(result.ok, true);
     assert.deepEqual(sideEffects, [
       "commit:task-run-1",
-      "enqueue:task-run:task-run-1:attempt:0:execute",
+      "enqueue:task-run~task-run-1~attempt~0~execute",
       "publish:workflow-1:task-run-1",
     ]);
     assert.deepEqual(
@@ -100,7 +100,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.equal(result.ok, true);
     assert.deepEqual(sideEffects, [
       "commit:task-run-1",
-      "enqueue-wake-up:wake-up:task-run-1",
+      "enqueue-wake-up~wake-up~task-run-1",
       "publish:workflow-1:task-run-1",
     ]);
   });
@@ -196,7 +196,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.equal(result.error.cause, eventPublisher.publishError);
     assert.deepEqual(sideEffects, [
       "commit:task-run-1",
-      "enqueue:task-run:task-run-1:attempt:0:execute",
+      "enqueue:task-run~task-run-1~attempt~0~execute",
       "publish-attempt:workflow-1",
     ]);
   });
@@ -299,7 +299,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.deepEqual(repository.completionCommands, [command]);
     assert.deepEqual(sideEffects, [
       "settle-completion:task-run-1",
-      "enqueue-wake-up:wake-up:task-run-1",
+      "enqueue-wake-up~wake-up~task-run-1",
       "publish:workflow-1:task-run-1",
     ]);
   });
@@ -374,7 +374,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.equal(result.error.cause, queue.enqueueWakeUpError);
     assert.deepEqual(sideEffects, [
       "settle-completion:task-run-1",
-      "enqueue-wake-up-attempt",
+      "enqueue-wake-up~attempt",
     ]);
   });
 
@@ -399,7 +399,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.deepEqual(repository.approveCommands, [command]);
     assert.deepEqual(sideEffects, [
       "approve:task-run-1",
-      "enqueue-wake-up:wake-up:task-run-1",
+      "enqueue-wake-up~wake-up~task-run-1",
       "publish:workflow-1:task-run-1",
     ]);
   });
@@ -443,7 +443,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.deepEqual(repository.cancelCommands, [command]);
     assert.deepEqual(sideEffects, [
       "cancel:task-run-1",
-      "enqueue-wake-up:wake-up:task-run-1",
+      "enqueue-wake-up~wake-up~task-run-1",
       "publish:workflow-1:task-run-1",
     ]);
   });
@@ -475,7 +475,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     ]);
     assert.deepEqual(sideEffects, [
       "reject:task-run-1",
-      "enqueue:task-run:task-run-1:attempt:0:execute",
+      "enqueue:task-run~task-run-1~attempt~0~execute",
       "publish:workflow-1:task-run-1",
       "publish:workflow-1:task-run-2",
     ]);
@@ -525,7 +525,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.equal(result.error.cause, queue.enqueueWakeUpError);
     assert.deepEqual(sideEffects, [
       "cancel:task-run-1",
-      "enqueue-wake-up-attempt",
+      "enqueue-wake-up~attempt",
     ]);
   });
 
@@ -550,7 +550,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.deepEqual(repository.failureCommands, [command]);
     assert.deepEqual(sideEffects, [
       "settle-failure:task-run-1",
-      "enqueue-wake-up:wake-up:task-run-1",
+      "enqueue-wake-up~wake-up~task-run-1",
       "publish:workflow-1:task-run-1",
     ]);
   });
@@ -591,8 +591,8 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.deepEqual(result.value, repository.wakeUpResult);
     assert.deepEqual(repository.wakeUpCommands, [command]);
     assert.deepEqual(sideEffects, [
-      "wake-up:task-run-1",
-      "enqueue:task-run:task-run-1:attempt:0:execute",
+      "wake-up~task-run-1",
+      "enqueue:task-run~task-run-1~attempt~0~execute",
       "publish:workflow-1:task-run-1",
     ]);
   });
@@ -612,7 +612,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
       executionJobs: [],
       taskStatusEvents: [],
     });
-    assert.deepEqual(sideEffects, ["wake-up:task-run-1"]);
+    assert.deepEqual(sideEffects, ["wake-up~task-run-1"]);
   });
 
   test("returns Wake-Up Call repository failures without enqueueing or publishing", async () => {
@@ -631,7 +631,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.equal(result.error._tag, "WorkflowRuntimeCommitError");
     assert.equal(result.error.committed, false);
     assert.equal(result.error.cause, repository.wakeUpError);
-    assert.deepEqual(sideEffects, ["wake-up-attempt:task-run-1"]);
+    assert.deepEqual(sideEffects, ["wake-up~attempt:task-run-1"]);
   });
 
   test("returns Wake-Up Call enqueue failures as committed post-commit failures without publishing", async () => {
@@ -656,7 +656,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.equal(result.error.committed, true);
     assert.equal(result.error.sideEffect, "enqueue-execution-jobs");
     assert.equal(result.error.cause, queue.enqueueError);
-    assert.deepEqual(sideEffects, ["wake-up:task-run-1", "enqueue-attempt"]);
+    assert.deepEqual(sideEffects, ["wake-up~task-run-1", "enqueue-attempt"]);
   });
 
   test("returns Wake-Up Call publish failures as committed post-commit failures after enqueueing", async () => {
@@ -682,8 +682,8 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.equal(result.error.sideEffect, "publish-task-status-events");
     assert.equal(result.error.cause, eventPublisher.publishError);
     assert.deepEqual(sideEffects, [
-      "wake-up:task-run-1",
-      "enqueue:task-run:task-run-1:attempt:0:execute",
+      "wake-up~task-run-1",
+      "enqueue:task-run~task-run-1~attempt~0~execute",
       "publish-attempt:workflow-1",
     ]);
   });
@@ -777,7 +777,7 @@ function makeTaskStatusEvent(
 
 function makeWakeUpJob(): WorkflowRuntimeWakeUpJobPayload {
   return {
-    jobId: "wake-up:task-run-1",
+    jobId: "wake-up~task-run-1",
     ownerUserId: "owner-1",
     parentTaskRunId: "task-run-1",
     workflowId: "workflow-1",
@@ -788,7 +788,7 @@ function makeExecutionJob(): WorkflowRuntimeExecutionJobPayload {
   return {
     attempt: 0,
     itemIndex: 0,
-    jobId: "task-run:task-run-1:attempt:0:execute",
+    jobId: "task-run~task-run-1~attempt~0~execute",
     nodeExecutionId: "node-execution-1",
     ownerUserId: "owner-1",
     taskRunId: "task-run-1",
@@ -930,7 +930,7 @@ class FakeRepository {
               {
                 attempt: taskRun.attempt,
                 itemIndex: taskRun.itemIndex,
-                jobId: `task-run:${taskRun.id}:attempt:${taskRun.attempt}:execute`,
+                jobId: `task-run~${taskRun.id}~attempt~${taskRun.attempt}~execute`,
                 nodeExecutionId: taskRun.nodeExecutionId,
                 ownerUserId: "owner-1",
                 taskRunId: taskRun.id,
@@ -994,12 +994,12 @@ class FakeRepository {
     this.wakeUpCommands.push(command);
     if (this.wakeUpError) {
       this.sideEffects.push(
-        `wake-up-attempt:${command.settledParentTaskRunId}`,
+        `wake-up~attempt:${command.settledParentTaskRunId}`,
       );
       throw this.wakeUpError;
     }
 
-    this.sideEffects.push(`wake-up:${command.settledParentTaskRunId}`);
+    this.sideEffects.push(`wake-up~${command.settledParentTaskRunId}`);
 
     return this.wakeUpResult;
   }
@@ -1026,12 +1026,12 @@ class FakeQueue {
 
   async enqueueWakeUpJobs(jobs: readonly WorkflowRuntimeWakeUpJobPayload[]) {
     if (this.enqueueWakeUpError) {
-      this.sideEffects.push("enqueue-wake-up-attempt");
+      this.sideEffects.push("enqueue-wake-up~attempt");
       throw this.enqueueWakeUpError;
     }
 
     for (const job of jobs) {
-      this.sideEffects.push(`enqueue-wake-up:${job.jobId}`);
+      this.sideEffects.push(`enqueue-wake-up~${job.jobId}`);
     }
   }
 }

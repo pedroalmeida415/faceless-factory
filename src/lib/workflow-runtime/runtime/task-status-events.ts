@@ -57,11 +57,11 @@ export function buildExecutionJobId(input: {
   taskRunId: string;
   attempt: number;
 }) {
-  return `task-run:${input.taskRunId}:attempt:${input.attempt}:execute`;
+  return `task-run~${input.taskRunId}~attempt~${input.attempt}~execute`;
 }
 
 export function buildWakeUpJobId(input: { parentTaskRunId: string }) {
-  return `wake-up:${input.parentTaskRunId}`;
+  return `wake-up~${input.parentTaskRunId}`;
 }
 
 export function buildOrchestratorEventId(input: {
@@ -69,7 +69,7 @@ export function buildOrchestratorEventId(input: {
   attempt: number;
   kind: OrchestratorEventKind;
 }) {
-  return `task-run:${input.taskRunId}:attempt:${input.attempt}:orchestrator:${input.kind}`;
+  return `task-run~${input.taskRunId}~attempt~${input.attempt}~orchestrator~${input.kind}`;
 }
 
 export function buildTaskStatusEvent(input: TaskStatusEvent) {

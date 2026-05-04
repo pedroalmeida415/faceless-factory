@@ -41,11 +41,11 @@ describe("workflow runtime Task Status Event contracts", () => {
   test("builds deterministic queue job identities from concrete Task Run attempts", () => {
     assert.equal(
       buildExecutionJobId({ attempt: 2, taskRunId: "task-run-123" }),
-      "task-run:task-run-123:attempt:2:execute",
+      "task-run~task-run-123~attempt~2~execute",
     );
     assert.equal(
       buildWakeUpJobId({ parentTaskRunId: "parent-456" }),
-      "wake-up:parent-456",
+      "wake-up~parent-456",
     );
   });
 
@@ -56,7 +56,7 @@ describe("workflow runtime Task Status Event contracts", () => {
         kind: "completion",
         taskRunId: "task-run-789",
       }),
-      "task-run:task-run-789:attempt:3:orchestrator:completion",
+      "task-run~task-run-789~attempt~3~orchestrator~completion",
     );
     assert.equal(
       buildOrchestratorEventId({
@@ -64,7 +64,7 @@ describe("workflow runtime Task Status Event contracts", () => {
         kind: "failure",
         taskRunId: "task-run-789",
       }),
-      "task-run:task-run-789:attempt:3:orchestrator:failure",
+      "task-run~task-run-789~attempt~3~orchestrator~failure",
     );
     assert.equal(
       buildOrchestratorEventId({
@@ -72,7 +72,7 @@ describe("workflow runtime Task Status Event contracts", () => {
         kind: "review",
         taskRunId: "task-run-789",
       }),
-      "task-run:task-run-789:attempt:3:orchestrator:review",
+      "task-run~task-run-789~attempt~3~orchestrator~review",
     );
   });
 

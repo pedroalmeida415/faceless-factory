@@ -75,7 +75,7 @@ function executionJob(taskRunId = "task-run-1", attempt = 0) {
   return {
     attempt,
     itemIndex: attempt,
-    jobId: `task-run:${taskRunId}:attempt:${attempt}:execute`,
+    jobId: `task-run~${taskRunId}~attempt~${attempt}~execute`,
     nodeExecutionId: `node-execution-${attempt}`,
     ownerUserId: "owner-1",
     taskRunId,
@@ -96,7 +96,7 @@ function completionJob() {
       storageProvider: "inline",
       text: "hello",
     },
-    jobId: "task-run:task-run-1:attempt:0:orchestrator:completion",
+    jobId: "task-run~task-run-1~attempt~0~orchestrator~completion",
     ownerUserId: "owner-1",
     reviewRequired: false,
     taskRunId: "task-run-1",
@@ -111,7 +111,7 @@ function failureJob() {
       message: "provider failed",
       type: "PROVIDER_FAILED" as const,
     },
-    jobId: "task-run:task-run-1:attempt:0:orchestrator:failure",
+    jobId: "task-run~task-run-1~attempt~0~orchestrator~failure",
     ownerUserId: "owner-1",
     taskRunId: "task-run-1",
     workflowId: "workflow-1",
@@ -120,7 +120,7 @@ function failureJob() {
 
 function wakeUpJob() {
   return {
-    jobId: "wake-up:parent-task-run-1",
+    jobId: "wake-up~parent-task-run-1",
     ownerUserId: "owner-1",
     parentTaskRunId: "parent-task-run-1",
     workflowId: "workflow-1",

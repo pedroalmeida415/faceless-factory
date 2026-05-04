@@ -95,7 +95,7 @@ describe("WorkflowRuntimeExecutionWorker", () => {
         attempt: 0,
         finalCostCredits: 2,
         generatedAsset: providerCompletion().generatedAsset,
-        jobId: "task-run:task-run-1:attempt:0:orchestrator:completion",
+        jobId: "task-run~task-run-1~attempt~0~orchestrator~completion",
         ownerUserId: "owner-1",
         reviewRequired: false,
         taskRunId: "task-run-1",
@@ -134,7 +134,7 @@ describe("WorkflowRuntimeExecutionWorker", () => {
         attempt: 0,
         failureReason: { message: "provider timeout", type: "PROVIDER_FAILED" },
         finalCostCredits: 1,
-        jobId: "task-run:task-run-1:attempt:0:orchestrator:failure",
+        jobId: "task-run~task-run-1~attempt~0~orchestrator~failure",
         ownerUserId: "owner-1",
         taskRunId: "task-run-1",
         workflowId: "workflow-1",
@@ -163,7 +163,7 @@ describe("WorkflowRuntimeExecutionWorker", () => {
       {
         attempt: 0,
         failureReason: { message: "sdk exploded", type: "PROVIDER_FAILED" },
-        jobId: "task-run:task-run-1:attempt:0:orchestrator:failure",
+        jobId: "task-run~task-run-1~attempt~0~orchestrator~failure",
         ownerUserId: "owner-1",
         taskRunId: "task-run-1",
         workflowId: "workflow-1",
@@ -187,7 +187,7 @@ describe("WorkflowRuntimeExecutionWorker", () => {
     const result = await worker.execute({
       ...executionJob(),
       attempt: 1,
-      jobId: "task-run:task-run-1:attempt:1:execute",
+      jobId: "task-run~task-run-1~attempt~1~execute",
     });
 
     assert.deepEqual(result, { claimed: false });
@@ -288,7 +288,7 @@ function executionJob(): WorkflowRuntimeExecutionJobPayload {
   return {
     attempt: 0,
     itemIndex: 0,
-    jobId: "task-run:task-run-1:attempt:0:execute",
+    jobId: "task-run~task-run-1~attempt~0~execute",
     nodeExecutionId: "node-execution-1",
     ownerUserId: "owner-1",
     taskRunId: "task-run-1",

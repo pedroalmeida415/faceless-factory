@@ -94,7 +94,7 @@ describe("TaskRunGatekeeper", () => {
     assert.deepEqual(result.executionJobs, [
       {
         attempt: 0,
-        id: "task-run:child-task-run:attempt:0:execute",
+        id: "task-run~child-task-run~attempt~0~execute",
         inputSnapshot: queuedChild.inputSnapshot,
         taskRunId: child.id,
       },

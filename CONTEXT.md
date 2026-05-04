@@ -143,6 +143,7 @@ _Avoid_: Node dependency, latest dependency
 - Execution jobs are enqueued only after the database transaction that marks task runs `QUEUED` commits.
 - A queued-task sweeper idempotently re-enqueues durable `QUEUED` task runs that missed BullMQ enqueueing.
 - Orchestrator queue events use deterministic job ids and idempotent handlers; queue deduplication is a safety net, not the source of truth.
+- BullMQ custom `jobId` values must not contain `:` because BullMQ reserves colon-delimited ids for repeatable-job internals. Workflow runtime queue job ids use `~` as the structural delimiter.
 - The orchestrator owns durable task-run state transitions and downstream wake-up decisions.
 - BullMQ queue events are operational signals for observability and reconciliation, not the domain orchestration path.
 - Execution workers may directly claim `QUEUED` task runs as `RUNNING` through a narrow atomic claim function before spending resources.
