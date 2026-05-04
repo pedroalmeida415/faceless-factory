@@ -457,6 +457,10 @@ function renderImageInputsByHandle(
 function renderWorkflowImageAsset(
   parent: ResolvedParentTaskRunInputSnapshot,
 ): WorkflowAsset | null {
+  if (parent.asset?.kind === "image") {
+    return parent.asset;
+  }
+
   const output = parent.output;
   if (!output || output.kind !== "cdn-asset") {
     return null;

@@ -95,6 +95,24 @@ describe("workflow runtime Task Status Event contracts", () => {
     assert.equal(event.output?.assetId, "asset-1");
   });
 
+  test("accepts app-relative renderable asset URLs", () => {
+    const event = buildTaskStatusEvent({
+      attempt: 1,
+      itemIndex: 0,
+      nodeExecutionId: "node-execution-1",
+      output: {
+        assetId: "asset-1",
+        cdnUrl: "/api/assets/asset-1",
+        contentType: "image/png",
+        kind: "cdn-asset",
+      },
+      status: "APPROVED",
+      taskRunId: "task-run-1",
+    });
+
+    assert.deepEqual(TaskStatusEventSchema.parse(event), event);
+  });
+
   test("creates and validates Task Status Events with inline text output and failure reasons", () => {
     const approved = buildTaskStatusEvent({
       attempt: 2,

@@ -4,7 +4,7 @@ import { describe, test } from "node:test";
 import { Effect } from "effect";
 
 import { createWorkflowNode } from "~/lib/workflow/document";
-import type { WorkflowAsset } from "~/lib/workflow/types";
+import type { StagedGeneratedMediaArtifact } from "~/lib/workflow/types";
 import type { ExecutableTaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
 import { createWorkflowRuntimeProviderExecutor } from "~/server/workflow-runtime/workflow-runtime-provider-executor";
 
@@ -34,7 +34,7 @@ describe("WorkflowRuntimeProviderExecutor", () => {
     assert.deepEqual(result, {
       ok: true,
       value: {
-        finalCostCredits: 0,
+        finalCostCredits: 10,
         generatedAsset: {
           assetId: "image-asset-1",
           cdnUrl: "/api/assets/image-asset-1",
@@ -44,6 +44,7 @@ describe("WorkflowRuntimeProviderExecutor", () => {
           kind: "image",
           model: "gemini-3-pro-image-preview",
           sizeBytes: 123,
+          stagedStorageKey: "staged-generated/image/image-asset-1.png",
           storageKey: "generated/image/image-asset-1.png",
           storageProvider: "local",
         },
@@ -75,6 +76,7 @@ describe("WorkflowRuntimeProviderExecutor", () => {
       },
     ]);
     assert.equal(result.ok, true);
+    assert.equal(result.ok ? result.value.finalCostCredits : null, 40);
     assert.deepEqual(result.ok ? result.value.generatedAsset : null, {
       assetId: "video-asset-1",
       cdnUrl: "/api/assets/video-asset-1",
@@ -84,6 +86,7 @@ describe("WorkflowRuntimeProviderExecutor", () => {
       kind: "video",
       model: "veo-3.1-fast-generate-001",
       sizeBytes: 123,
+      stagedStorageKey: "staged-generated/video/video-asset-1.mp4",
       storageKey: "generated/video/video-asset-1.mp4",
       storageProvider: "local",
     });
@@ -353,9 +356,8 @@ function renderProviderInput(
 function workflowAsset(input: {
   id: string;
   kind: "image" | "video";
-}): WorkflowAsset {
+}): StagedGeneratedMediaArtifact {
   return {
-    createdAt: "2026-01-01T00:00:00.000Z",
     externalUri: null,
     fileName: `${input.id}.${input.kind === "image" ? "png" : "mp4"}`,
     id: input.id,
@@ -366,8 +368,9 @@ function workflowAsset(input: {
         ? "gemini-3-pro-image-preview"
         : "veo-3.1-fast-generate-001",
     size: 123,
-    source: "generated",
-    storagePath: `generated/${input.kind}/${input.id}.${input.kind === "image" ? "png" : "mp4"}`,
+    promotedStoragePath: `generated/${input.kind}/${input.id}.${input.kind === "image" ? "png" : "mp4"}`,
+    stagedStoragePath: `staged-generated/${input.kind}/${input.id}.${input.kind === "image" ? "png" : "mp4"}`,
+    storageProvider: "local-staged",
     url: `/api/assets/${input.id}`,
   };
 }

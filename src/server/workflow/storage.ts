@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { and, desc, eq, isNull } from "drizzle-orm";
@@ -13,6 +13,7 @@ import type {
   AssetKind,
   AssetSource,
   MediaAssetKind,
+  StagedGeneratedMediaArtifact,
   WorkflowAsset,
 } from "~/lib/workflow/types";
 import { db } from "~/server/db";
@@ -67,6 +68,33 @@ type SaveExternalAssetOptions = AssetOwner & {
   url: string;
 };
 
+type StageGeneratedBufferAsArtifactOptions = {
+  buffer: Buffer;
+  kind: MediaAssetKind;
+  mimeType: string;
+  fileName: string;
+  model?: string | null;
+};
+
+type MaterializeProviderMediaInputOptions = {
+  assetId: string;
+  ownerUserId: string;
+};
+
+export type MaterializedProviderMediaInput =
+  | {
+      readonly assetId: string;
+      readonly bytes: Buffer;
+      readonly kind: "inline-bytes";
+      readonly mimeType: string;
+    }
+  | {
+      readonly assetId: string;
+      readonly kind: "provider-uri";
+      readonly mimeType: string;
+      readonly uri: string;
+    };
+
 function toAssetWriteError(message: string, cause: unknown) {
   return cause instanceof WorkflowAuthorizationError
     ? cause
@@ -101,6 +129,34 @@ function guessMimeType(fileName: string) {
 
 function buildAssetUrl(assetId: string) {
   return `/api/assets/${encodeURIComponent(assetId)}`;
+}
+
+function buildGeneratedStoragePaths(input: {
+  assetId: string;
+  fileName: string;
+  kind: MediaAssetKind;
+  mimeType: string;
+}) {
+  const extension = inferExtension(input.fileName, input.mimeType);
+  const baseName = sanitizeBaseName(path.basename(input.fileName, extension));
+  const dateFolder = new Date().toISOString().slice(0, 10);
+  const storedFileName = `${input.assetId}-${baseName}${extension}`;
+
+  return {
+    fileName: `${baseName}${extension}`,
+    promotedStoragePath: path.posix.join(
+      "generated",
+      input.kind,
+      dateFolder,
+      storedFileName,
+    ),
+    stagedStoragePath: path.posix.join(
+      "staged-generated",
+      input.kind,
+      dateFolder,
+      storedFileName,
+    ),
+  };
 }
 
 function toWorkflowAsset(row: AssetRow): WorkflowAsset {
@@ -295,6 +351,84 @@ function saveBufferAsAssetEffect({
   });
 }
 
+function stageGeneratedBufferAsArtifactEffect({
+  buffer,
+  fileName,
+  kind,
+  mimeType,
+  model = null,
+}: StageGeneratedBufferAsArtifactOptions) {
+  return Effect.gen(function* () {
+    const assetId = randomUUID();
+    const paths = buildGeneratedStoragePaths({
+      assetId,
+      fileName,
+      kind,
+      mimeType,
+    });
+    const absolutePath = yield* Effect.try({
+      try: () => resolveAssetAbsolutePath(paths.stagedStoragePath),
+      catch: (cause) =>
+        new WorkflowStorageError({
+          message: "Invalid staged generated artifact path.",
+          cause,
+        }),
+    });
+
+    yield* Effect.tryPromise({
+      try: () => mkdir(path.dirname(absolutePath), { recursive: true }),
+      catch: (cause) =>
+        new WorkflowStorageError({
+          message: "Failed to prepare staged generated artifact directory.",
+          cause,
+        }),
+    });
+    yield* Effect.tryPromise({
+      try: () => writeFile(absolutePath, buffer),
+      catch: (cause) =>
+        new WorkflowStorageError({
+          message: "Failed to write staged generated artifact.",
+          cause,
+        }),
+    });
+
+    return {
+      externalUri: null,
+      fileName: paths.fileName,
+      id: assetId,
+      kind,
+      mimeType,
+      model,
+      promotedStoragePath: paths.promotedStoragePath,
+      size: buffer.byteLength,
+      stagedStoragePath: paths.stagedStoragePath,
+      storageProvider: "local-staged",
+      url: buildAssetUrl(assetId),
+    } satisfies StagedGeneratedMediaArtifact;
+  });
+}
+
+export async function promoteStagedGeneratedArtifact(input: {
+  promotedStoragePath: string;
+  stagedStoragePath: string;
+}) {
+  const stagedPath = resolveAssetAbsolutePath(input.stagedStoragePath);
+  const promotedPath = resolveAssetAbsolutePath(input.promotedStoragePath);
+  await mkdir(path.dirname(promotedPath), { recursive: true });
+  await rename(stagedPath, promotedPath).catch(async (cause: unknown) => {
+    if (
+      cause &&
+      typeof cause === "object" &&
+      "code" in cause &&
+      cause.code === "ENOENT"
+    ) {
+      await access(promotedPath);
+      return;
+    }
+    throw cause;
+  });
+}
+
 function saveExternalAssetEffect({
   fileName,
   kind,
@@ -430,6 +564,39 @@ function readAssetByIdEffect(params: { assetId: string; userId: string }) {
   });
 }
 
+function materializeProviderMediaInputEffect({
+  assetId,
+  ownerUserId,
+}: MaterializeProviderMediaInputOptions) {
+  return Effect.gen(function* () {
+    const asset = yield* readAssetByIdEffect({ assetId, userId: ownerUserId });
+
+    if (asset.data) {
+      return {
+        assetId,
+        bytes: asset.data,
+        kind: "inline-bytes",
+        mimeType: asset.mimeType,
+      } satisfies MaterializedProviderMediaInput;
+    }
+
+    if (asset.externalUri) {
+      return {
+        assetId,
+        kind: "provider-uri",
+        mimeType: asset.mimeType,
+        uri: asset.externalUri,
+      } satisfies MaterializedProviderMediaInput;
+    }
+
+    return yield* Effect.fail(
+      new WorkflowStorageError({
+        message: `Asset ${assetId} could not be materialized for provider input.`,
+      }),
+    );
+  });
+}
+
 export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
   WorkflowStorage,
   {
@@ -450,12 +617,21 @@ export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
       WorkflowAsset[],
       WorkflowAuthorizationError | WorkflowStorageError
     >;
+    readonly materializeProviderMediaInput: (
+      options: MaterializeProviderMediaInputOptions,
+    ) => Effect.Effect<
+      MaterializedProviderMediaInput,
+      WorkflowAuthorizationError | WorkflowStorageError
+    >;
     readonly saveBufferAsAsset: (
       options: SaveBufferAsAssetOptions,
     ) => Effect.Effect<
       WorkflowAsset,
       WorkflowAuthorizationError | WorkflowStorageError
     >;
+    readonly stageGeneratedBufferAsArtifact: (
+      options: StageGeneratedBufferAsArtifactOptions,
+    ) => Effect.Effect<StagedGeneratedMediaArtifact, WorkflowStorageError>;
     readonly saveExternalAsset: (
       options: SaveExternalAssetOptions,
     ) => Effect.Effect<
@@ -477,10 +653,12 @@ export class WorkflowStorage extends Context.Tag("WorkflowStorage")<
 >() {
   static readonly Live = Layer.succeed(this, {
     listWorkflowAssets: listWorkflowAssetsEffect,
+    materializeProviderMediaInput: materializeProviderMediaInputEffect,
     readAssetById: readAssetByIdEffect,
     readStoredAsset: readStoredAssetEffect,
     saveBufferAsAsset: saveBufferAsAssetEffect,
     saveExternalAsset: saveExternalAssetEffect,
+    stageGeneratedBufferAsArtifact: stageGeneratedBufferAsArtifactEffect,
     saveFormFileAsAsset: (options) =>
       Effect.gen(function* () {
         const buffer = yield* Effect.tryPromise({

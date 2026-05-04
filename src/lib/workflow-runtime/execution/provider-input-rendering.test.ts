@@ -48,7 +48,6 @@ describe("renderTaskRunProviderInput", () => {
   test("renders an LLM generation request with prompt, system prompt, and direct media parent output", () => {
     const node = { ...createWorkflowNode("llmGenerator", 0), id: "llm-node" };
     const image = workflowImageAsset("image-asset");
-    const renderedImage = renderedWorkflowImageAsset("image-asset");
 
     const result = renderTaskRunProviderInput({
       idempotencyKey: "task_run:llm-task:attempt:0",
@@ -70,7 +69,7 @@ describe("renderTaskRunProviderInput", () => {
         mode: null,
         model: "gemini-3-flash-preview",
         prompt: "write a shot list",
-        referenceImages: [renderedImage],
+        referenceImages: [image],
         systemPrompt: "answer tersely",
         temperature: 1,
         thinkingLevel: "LOW",
@@ -84,7 +83,6 @@ describe("renderTaskRunProviderInput", () => {
       id: "video-node",
     };
     const image = workflowImageAsset("reference-image");
-    const renderedImage = renderedWorkflowImageAsset("reference-image");
 
     const result = renderTaskRunProviderInput({
       idempotencyKey: "task_run:video-task:attempt:0",
@@ -97,9 +95,32 @@ describe("renderTaskRunProviderInput", () => {
     });
 
     assert.equal(result.kind, "executable");
-    assert.deepEqual(result.providerInput.request.referenceImages, [
-      renderedImage,
-    ]);
+    assert.deepEqual(result.providerInput.request.referenceImages, [image]);
+  });
+
+  test("preserves non-local parent Asset metadata for provider materialization", () => {
+    const node = {
+      ...createWorkflowNode("imageGenerator", 0),
+      id: "image-node",
+    };
+    const image = {
+      ...workflowImageAsset("external-reference-image"),
+      externalUri: "gs://workflow-assets/external-reference-image.png",
+      storagePath: null,
+    } satisfies WorkflowAsset;
+
+    const result = renderTaskRunProviderInput({
+      idempotencyKey: "task_run:image-task:attempt:0",
+      itemIndex: 0,
+      resolvedParentTaskRuns: [
+        textParent("use this reference", PROMPT_INPUT_HANDLE_ID),
+        mediaParent(image, "image-input-0"),
+      ],
+      targetNodeConfig: node,
+    });
+
+    assert.equal(result.kind, "executable");
+    assert.deepEqual(result.providerInput.request.referenceImages, [image]);
   });
 
   test("folds prompt-node variables into generator provider input from upstream Task Run outputs", () => {
@@ -175,6 +196,7 @@ function mediaParent(
 ): ResolvedParentTaskRunInputSnapshot {
   return {
     attempt: 0,
+    asset,
     itemIndex: 0,
     nodeExecutionId: `node-execution-${targetHandle}`,
     output: {
@@ -200,17 +222,8 @@ function workflowImageAsset(id: string): WorkflowAsset {
     model: null,
     size: 1,
     source: "generated",
-    storagePath: null,
+    storagePath: `generated/image/${id}.png`,
     url: `https://cdn.example.com/${id}.png`,
-  };
-}
-
-function renderedWorkflowImageAsset(id: string): WorkflowAsset {
-  return {
-    ...workflowImageAsset(id),
-    createdAt: "",
-    fileName: id,
-    size: 0,
   };
 }
 

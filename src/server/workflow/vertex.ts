@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   createPartFromBase64,
   createPartFromUri,
@@ -26,6 +27,7 @@ import {
   type GenerateVideoResponse,
   type LlmThinkingLevel,
   NANO_BANANA_PRO_MODEL_ID,
+  type StagedGeneratedMediaArtifact,
   VEO_31_FAST_MODEL_ID,
   type WorkflowAsset,
 } from "~/lib/workflow/types";
@@ -318,59 +320,57 @@ export class VertexAi extends Context.Tag("VertexAi")<
     Effect.gen(function* () {
       const workflowStorage = yield* WorkflowStorage;
 
-      const toInlineImagePart = (asset: WorkflowAsset) =>
-        Effect.gen(function* () {
-          const buffer = yield* workflowStorage.readStoredAsset(asset);
-          return {
-            inlineData: {
-              data: buffer.toString("base64"),
-              mimeType: asset.mimeType,
-            },
-          };
+      const materializeMediaInput = (
+        ownerUserId: string,
+        asset: WorkflowAsset,
+      ) =>
+        workflowStorage.materializeProviderMediaInput({
+          assetId: asset.id,
+          ownerUserId,
         });
 
-      const toSdkImage = (asset: WorkflowAsset) =>
+      const toContentImagePart = (ownerUserId: string, asset: WorkflowAsset) =>
+        Effect.map(materializeMediaInput(ownerUserId, asset), (input) =>
+          input.kind === "inline-bytes"
+            ? createPartFromBase64(
+                input.bytes.toString("base64"),
+                input.mimeType,
+              )
+            : createPartFromUri(input.uri, input.mimeType),
+        );
+
+      const toSdkImage = (ownerUserId: string, asset: WorkflowAsset) =>
         Effect.gen(function* () {
-          const buffer = yield* workflowStorage.readStoredAsset(asset);
-          return {
-            imageBytes: buffer.toString("base64"),
-            mimeType: asset.mimeType,
-          };
-        });
-
-      const toVideoReferenceImage = (asset: WorkflowAsset) =>
-        Effect.map(toSdkImage(asset), (image) => ({
-          image,
-          referenceType: VideoGenerationReferenceType.ASSET,
-        }));
-
-      const toLlmImagePart = (ownerUserId: string, asset: WorkflowAsset) =>
-        Effect.gen(function* () {
-          const storedAsset = yield* workflowStorage.readAssetById({
-            assetId: asset.id,
-            userId: ownerUserId,
-          });
-
-          if (storedAsset.data) {
-            return createPartFromBase64(
-              storedAsset.data.toString("base64"),
-              storedAsset.mimeType,
-            );
+          const input = yield* materializeMediaInput(ownerUserId, asset);
+          if (input.kind === "inline-bytes") {
+            return {
+              imageBytes: input.bytes.toString("base64"),
+              mimeType: input.mimeType,
+            };
           }
 
-          if (storedAsset.externalUri) {
-            return createPartFromUri(
-              storedAsset.externalUri,
-              storedAsset.mimeType,
-            );
+          if (input.uri.startsWith("gs://")) {
+            return {
+              gcsUri: input.uri,
+              mimeType: input.mimeType,
+            };
           }
 
           return yield* Effect.fail(
             new WorkflowStorageError({
-              message: `Asset ${asset.id} could not be loaded for LLM input.`,
+              message: `Asset ${input.assetId} URI cannot be used as a Vertex video image input.`,
             }),
           );
         });
+
+      const toVideoReferenceImage = (
+        ownerUserId: string,
+        asset: WorkflowAsset,
+      ) =>
+        Effect.map(toSdkImage(ownerUserId, asset), (image) => ({
+          image,
+          referenceType: VideoGenerationReferenceType.ASSET,
+        }));
 
       const toLlmUsage = (usage: GenerateContentResponse["usageMetadata"]) =>
         ({
@@ -422,7 +422,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
           const client = yield* createVertexClientEffect(location);
           const imageParts = yield* Effect.forEach(
             referenceImages,
-            (asset) => toLlmImagePart(ownerUserId, asset),
+            (asset) => toContentImagePart(ownerUserId, asset),
             {
               concurrency: "unbounded",
             },
@@ -499,7 +499,6 @@ export class VertexAi extends Context.Tag("VertexAi")<
 
       const generateImagesWithNanoBananaPro = ({
         ownerUserId,
-        projectId,
         request: {
           idempotencyKey = null,
           model,
@@ -527,7 +526,7 @@ export class VertexAi extends Context.Tag("VertexAi")<
           const client = yield* createVertexClientEffect(location);
           const imageParts = yield* Effect.forEach(
             referenceImages,
-            toInlineImagePart,
+            (asset) => toContentImagePart(ownerUserId, asset),
             {
               concurrency: "unbounded",
             },
@@ -589,10 +588,10 @@ export class VertexAi extends Context.Tag("VertexAi")<
             );
           }
 
-          const assets: WorkflowAsset[] = yield* Effect.forEach(
+          const assets = yield* Effect.forEach(
             Array.from(generatedParts.entries()),
             ([index, part]): Effect.Effect<
-              WorkflowAsset,
+              StagedGeneratedMediaArtifact,
               | WorkflowAuthorizationError
               | WorkflowGenerationError
               | WorkflowStorageError
@@ -608,15 +607,12 @@ export class VertexAi extends Context.Tag("VertexAi")<
                 );
               }
 
-              return workflowStorage.saveBufferAsAsset({
+              return workflowStorage.stageGeneratedBufferAsArtifact({
                 buffer: Buffer.from(bytes, "base64"),
                 kind: "image",
-                source: "generated",
                 mimeType,
                 fileName: `nano-banana-pro-${index + 1}.png`,
                 model: NANO_BANANA_PRO_MODEL_ID,
-                ownerUserId,
-                workflowId: projectId,
               });
             },
             { concurrency: "unbounded" },
@@ -630,7 +626,6 @@ export class VertexAi extends Context.Tag("VertexAi")<
 
       const generateVideosWithVeo31 = ({
         ownerUserId,
-        projectId,
         request: {
           idempotencyKey = null,
           model,
@@ -692,16 +687,20 @@ export class VertexAi extends Context.Tag("VertexAi")<
           const location = getVideoLocation();
           const client = yield* createVertexClientEffect(location);
           const sourceImage = firstFrame
-            ? yield* toSdkImage(firstFrame)
+            ? yield* toSdkImage(ownerUserId, firstFrame)
             : undefined;
           const lastFrameImage = lastFrame
-            ? yield* toSdkImage(lastFrame)
+            ? yield* toSdkImage(ownerUserId, lastFrame)
             : undefined;
           const referenceImageAssets =
             referenceImages.length > 0
-              ? yield* Effect.forEach(referenceImages, toVideoReferenceImage, {
-                  concurrency: "unbounded",
-                })
+              ? yield* Effect.forEach(
+                  referenceImages,
+                  (asset) => toVideoReferenceImage(ownerUserId, asset),
+                  {
+                    concurrency: "unbounded",
+                  },
+                )
               : undefined;
           const operation = yield* Effect.tryPromise({
             try: async () => {
@@ -787,10 +786,10 @@ export class VertexAi extends Context.Tag("VertexAi")<
             );
           }
 
-          const assets: WorkflowAsset[] = yield* Effect.forEach(
+          const assets: StagedGeneratedMediaArtifact[] = yield* Effect.forEach(
             Array.from(generatedVideos.entries()),
             ([index, generatedVideo]): Effect.Effect<
-              WorkflowAsset,
+              StagedGeneratedMediaArtifact,
               | WorkflowAuthorizationError
               | WorkflowGenerationError
               | WorkflowStorageError
@@ -799,29 +798,27 @@ export class VertexAi extends Context.Tag("VertexAi")<
               const mimeType = video?.mimeType ?? "video/mp4";
 
               if (video?.videoBytes) {
-                return workflowStorage.saveBufferAsAsset({
+                return workflowStorage.stageGeneratedBufferAsArtifact({
                   buffer: Buffer.from(video.videoBytes, "base64"),
                   kind: "video",
-                  source: "generated",
                   mimeType,
                   fileName: `veo-3-1-${index + 1}.mp4`,
                   model: VEO_31_FAST_MODEL_ID,
-                  ownerUserId,
-                  workflowId: projectId,
                 });
               }
 
               if (video?.uri) {
-                return workflowStorage.saveExternalAsset({
+                return Effect.succeed({
+                  externalUri: video.uri,
                   fileName: `veo-3-1-${index + 1}.mp4`,
+                  id: randomUUID(),
                   kind: "video",
                   mimeType,
                   model: VEO_31_FAST_MODEL_ID,
-                  ownerUserId,
-                  workflowId: projectId,
-                  source: "generated",
+                  size: 0,
+                  storageProvider: "external-staged",
                   url: video.uri,
-                });
+                } satisfies StagedGeneratedMediaArtifact);
               }
 
               return Effect.fail(

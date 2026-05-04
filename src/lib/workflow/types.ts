@@ -97,6 +97,29 @@ export type WorkflowAsset = {
   model: string | null;
 };
 
+export type StagedGeneratedMediaArtifact = {
+  id: string;
+  kind: MediaAssetKind;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  url: string;
+  model: string | null;
+} & (
+  | {
+      storageProvider: "local-staged";
+      stagedStoragePath: string;
+      promotedStoragePath: string;
+      externalUri: null;
+    }
+  | {
+      storageProvider: "external-staged";
+      externalUri: string;
+      stagedStoragePath?: null;
+      promotedStoragePath?: null;
+    }
+);
+
 export type PromptNodeFields = {
   prompt: string;
   displayMode: PromptDisplayMode;
@@ -244,7 +267,7 @@ export type GenerateImageRequest = {
 };
 
 export type GenerateImageResponse = {
-  assets: WorkflowAsset[];
+  assets: StagedGeneratedMediaArtifact[];
   model: ImageGeneratorModelId;
 };
 
@@ -263,7 +286,7 @@ export type GenerateVideoRequest = {
 };
 
 export type GenerateVideoResponse = {
-  assets: WorkflowAsset[];
+  assets: StagedGeneratedMediaArtifact[];
   model: VideoGeneratorModelId;
 };
 

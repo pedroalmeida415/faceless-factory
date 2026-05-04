@@ -1,4 +1,5 @@
 import type { WorkflowDefinitionDocumentNode } from "~/lib/workflow/document";
+import type { WorkflowAsset } from "~/lib/workflow/types";
 import {
   isTaskRunDependencySatisfiedStatus,
   isTerminalTaskRunStatus,
@@ -26,6 +27,7 @@ export type TaskRunGatekeeperTaskRun = {
   readonly status: TaskRunStatus;
   readonly estimatedCreditCost: number;
   readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
+  readonly asset?: WorkflowAsset;
   readonly output?: RenderableTaskOutput;
   readonly reservedCredits?: number;
   readonly failureReason?: TaskRunFailureReason;
@@ -287,6 +289,7 @@ function buildInputSnapshot(
 
       return {
         attempt: parent.attempt,
+        ...(parent.asset ? { asset: parent.asset } : {}),
         itemIndex: parent.itemIndex,
         nodeExecutionId: parent.nodeExecutionId,
         ...(parent.output ? { output: parent.output } : {}),

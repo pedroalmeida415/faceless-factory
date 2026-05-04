@@ -14,10 +14,14 @@ export const taskStatusEventFailureReasonValues =
 const nonEmptyStringSchema = z.string().min(1);
 const attemptSchema = z.number().int().nonnegative();
 const itemIndexSchema = z.number().int().nonnegative();
+const renderableAssetUrlSchema = z.union([
+  z.string().url(),
+  z.string().startsWith("/"),
+]);
 
 export const CdnAssetRenderableOutputSchema = z.object({
   assetId: nonEmptyStringSchema,
-  cdnUrl: z.string().url(),
+  cdnUrl: renderableAssetUrlSchema,
   contentType: nonEmptyStringSchema,
   kind: z.literal("cdn-asset"),
 });

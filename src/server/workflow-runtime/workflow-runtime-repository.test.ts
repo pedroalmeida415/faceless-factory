@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 
 import { PGlite } from "@electric-sql/pglite";
@@ -7,7 +9,10 @@ import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
 
 import { createWorkflowNode } from "~/lib/workflow/document";
 import type { TaskRunStatus } from "~/lib/workflow-runtime/domain/task-run-state";
-import type { TaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
+import {
+  isTaskRunInputSnapshot,
+  type TaskRunInputSnapshot,
+} from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
 import type { WorkflowRunPlan } from "~/lib/workflow-runtime/planning/workflow-run-planner";
 import { wakeUpTaskRunChildrenInRepository } from "~/server/workflow-runtime/workflow-runtime-gatekeeper-repository";
 import { createWorkflowRuntimeRepository } from "~/server/workflow-runtime/workflow-runtime-repository";
@@ -24,6 +29,10 @@ describe("WorkflowRuntimeRepository", () => {
 
   afterEach(async () => {
     await client.close();
+    await rm(path.join(process.cwd(), ".data", "workflow-assets", "test"), {
+      force: true,
+      recursive: true,
+    });
   });
 
   test("commits Workflow Run plans through the database transaction API", async () => {
@@ -266,6 +275,50 @@ describe("WorkflowRuntimeRepository", () => {
         parentTaskRunId: "task-run-approved-complete",
         workflowId: "workflow-id",
       },
+    });
+  });
+
+  test("promotes staged media only during Task Run settlement", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    const stagedStorageKey = "test/staged-generated/image/staged-asset.png";
+    const promotedStorageKey = "test/generated/image/staged-asset.png";
+    const stagedPath = path.join(
+      process.cwd(),
+      ".data",
+      "workflow-assets",
+      stagedStorageKey,
+    );
+    const promotedPath = path.join(
+      process.cwd(),
+      ".data",
+      "workflow-assets",
+      promotedStorageKey,
+    );
+    await mkdir(path.dirname(stagedPath), { recursive: true });
+    await writeFile(stagedPath, "image-bytes");
+    await insertTaskRun(db, {
+      id: "task-run-staged-complete",
+      runtimeStatus: "RUNNING",
+    });
+
+    const result = await repository.settleTaskRunCompletion({
+      attempt: 0,
+      finalCostCredits: 0,
+      generatedAsset: {
+        ...mediaGeneratedAsset("asset-staged"),
+        stagedStorageKey,
+        storageKey: promotedStorageKey,
+      },
+      ownerUserId: "owner-user",
+      reviewRequired: false,
+      taskRunId: "task-run-staged-complete",
+    });
+
+    assert.equal(result.settled, true);
+    assert.equal(await readFile(promotedPath, "utf8"), "image-bytes");
+    assert.deepEqual(await loadAssetStorage(db, "asset-staged"), {
+      storageKey: promotedStorageKey,
+      taskRunId: "task-run-staged-complete",
     });
   });
 
@@ -1129,6 +1182,99 @@ describe("WorkflowRuntimeRepository", () => {
         userId: "owner-user",
       },
     ]);
+  });
+
+  test("wakes a child with durable parent Asset metadata for provider reference images", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    const sourceNodeConfig = createWorkflowNode("imageGenerator", 0);
+    const targetNodeConfig = createWorkflowNode("imageGenerator", 0);
+    await insertUser(db, { creditBalance: 100 });
+    await insertTaskRun(db, {
+      id: "parent-approved-asset",
+      nodeExecutionId: "node-execution-parent-asset",
+      runtimeStatus: "APPROVED",
+    });
+    await insertGeneratedMediaAsset(db, {
+      assetId: "asset-parent-approved",
+      taskRunId: "parent-approved-asset",
+    });
+    await insertTaskRun(db, {
+      estimatedCreditCost: 10,
+      id: "child-ready-asset",
+      inputSnapshot: inputSnapshot("child-ready-asset", 0, {
+        nodeExecutionId: "node-execution-child-ready-asset",
+        targetNodeConfig: {
+          ...targetNodeConfig,
+          id: "target-image-node",
+        },
+      }),
+      nodeExecutionId: "node-execution-child-ready-asset",
+      runtimeStatus: "WAITING_UPSTREAM",
+    });
+    await insertTaskDependency(db, {
+      childTaskRunId: "child-ready-asset",
+      parentNodeId: "source-image-node",
+      parentNodeExecutionId: "node-execution-parent-asset",
+      sourceHandle: "images",
+      targetHandle: "image-input-0",
+      targetNodeId: "target-image-node",
+    });
+
+    await db.execute(sql`
+      update task_runs
+      set input_snapshot = ${{
+        ...inputSnapshot("child-ready-asset", 0, {
+          nodeExecutionId: "node-execution-child-ready-asset",
+          targetNodeConfig: { ...targetNodeConfig, id: "target-image-node" },
+        }),
+        workflowDefinition: {
+          edges: [
+            {
+              id: "source-to-target-image",
+              source: "source-image-node",
+              sourceHandle: "images",
+              target: "target-image-node",
+              targetHandle: "image-input-0",
+            },
+          ],
+          nodes: [
+            { ...sourceNodeConfig, id: "source-image-node" },
+            { ...targetNodeConfig, id: "target-image-node" },
+          ],
+          version: 9,
+        },
+      }}::jsonb
+      where id = 'child-ready-asset'
+    `);
+
+    await repository.wakeUpTaskRunChildren({
+      ownerUserId: "owner-user",
+      settledParentTaskRunId: "parent-approved-asset",
+    });
+
+    const state = await getWakeUpTaskRunState(db, "child-ready-asset");
+    assert.equal(isTaskRunInputSnapshot(state.inputSnapshot), true);
+    if (!isTaskRunInputSnapshot(state.inputSnapshot)) {
+      throw new Error("Expected Task Run input snapshot");
+    }
+    const parent = state.inputSnapshot.resolvedParentTaskRuns[0];
+    assert.equal(
+      parent?.asset?.storagePath,
+      "generated/asset-parent-approved.png",
+    );
+    assert.equal(parent?.output?.kind, "cdn-asset");
+    assert.equal(
+      state.inputSnapshot.providerInput.kind,
+      "image-generation-request",
+    );
+    if (state.inputSnapshot.providerInput.kind !== "image-generation-request") {
+      throw new Error("Expected image generation provider input");
+    }
+    assert.ok(state.inputSnapshot.providerInput.request.referenceImages);
+    assert.equal(
+      state.inputSnapshot.providerInput.request.referenceImages[0]?.storagePath,
+      "generated/asset-parent-approved.png",
+    );
   });
 
   test("does not wake children while a latest parent Task Run is Pending Review", async () => {
@@ -2405,6 +2551,46 @@ async function insertGeneratedTextAsset(
   `);
 }
 
+async function insertGeneratedMediaAsset(
+  db: PgliteDatabase,
+  input: {
+    readonly assetId: string;
+    readonly taskRunId: string;
+  },
+): Promise<void> {
+  await db.execute(sql`
+    insert into assets (
+      id,
+      owner_user_id,
+      workflow_id,
+      source,
+      kind,
+      task_run_id,
+      storage_provider,
+      storage_key,
+      cdn_url,
+      mime_type,
+      file_name,
+      size_bytes,
+      created_at
+    ) values (
+      ${input.assetId},
+      'owner-user',
+      'workflow-id',
+      'generated',
+      'image',
+      ${input.taskRunId},
+      'local',
+      ${`generated/${input.assetId}.png`},
+      ${`/api/assets/${input.assetId}`},
+      'image/png',
+      ${`${input.assetId}.png`},
+      1024,
+      now()
+    )
+  `);
+}
+
 async function insertCreditReservationLedgerEntry(
   db: PgliteDatabase,
   input: {
@@ -2472,6 +2658,22 @@ async function countAssetsForTaskRun(
     select count(*)::int as count from assets where task_run_id = ${taskRunId}
   `);
   return Number(result.rows[0]?.count ?? 0);
+}
+
+async function loadAssetStorage(db: PgliteDatabase, assetId: string) {
+  const result = await db.execute(sql`
+    select storage_key as "storageKey", task_run_id as "taskRunId"
+    from assets
+    where id = ${assetId}
+  `);
+  const row = result.rows[0];
+
+  return row
+    ? {
+        storageKey: String(row.storageKey),
+        taskRunId: String(row.taskRunId),
+      }
+    : null;
 }
 
 async function getTaskRunSettlement(db: PgliteDatabase, taskRunId: string) {

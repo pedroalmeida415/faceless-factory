@@ -3,6 +3,7 @@ import {
   type WorkflowDefinitionDocumentNode,
   type WorkflowDefinitionGraphDocument,
 } from "~/lib/workflow/document";
+import type { WorkflowAsset } from "~/lib/workflow/types";
 import { buildTaskRunIdempotencyKey } from "~/lib/workflow-runtime/domain/task-run-state";
 import {
   type RenderedTaskRunProviderInput,
@@ -18,6 +19,7 @@ export type ResolvedParentTaskRunInputSnapshot = {
   readonly nodeExecutionId: string;
   readonly itemIndex: number;
   readonly attempt: number;
+  readonly asset?: WorkflowAsset;
   readonly output?: RenderableTaskOutput;
   readonly sourceNodeId?: string;
   readonly targetNodeId?: string;
@@ -144,7 +146,27 @@ function isResolvedParentTaskRunInputSnapshot(value: unknown): boolean {
     (value.targetHandle === undefined ||
       value.targetHandle === null ||
       typeof value.targetHandle === "string") &&
-    (value.output === undefined || isRenderableTaskOutput(value.output))
+    (value.output === undefined || isRenderableTaskOutput(value.output)) &&
+    (value.asset === undefined || isWorkflowAsset(value.asset))
+  );
+}
+
+function isWorkflowAsset(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    (value.kind === "image" ||
+      value.kind === "video" ||
+      value.kind === "text") &&
+    typeof value.fileName === "string" &&
+    typeof value.mimeType === "string" &&
+    typeof value.url === "string" &&
+    typeof value.source === "string" &&
+    typeof value.size === "number" &&
+    typeof value.createdAt === "string" &&
+    (value.storagePath === null || typeof value.storagePath === "string") &&
+    (value.externalUri === null || typeof value.externalUri === "string") &&
+    (value.model === null || typeof value.model === "string")
   );
 }
 

@@ -36,6 +36,7 @@ type WorkflowRuntimeGeneratedPrimaryAssetPayloadBase = {
   readonly fileName: string;
   readonly model?: string | null;
   readonly sizeBytes: number;
+  readonly stagedStorageKey?: string | null;
   readonly storageKey?: string | null;
   readonly storageProvider: string;
 };

@@ -1,5 +1,5 @@
 import { type SQL, sql } from "drizzle-orm";
-
+import type { WorkflowAsset } from "~/lib/workflow/types";
 import {
   type GeneratedAsset,
   projectGeneratedAssetToTaskOutput,
@@ -53,6 +53,7 @@ type GatekeeperTaskRunRow = {
   readonly nodeId: string;
   readonly nodeExecutionId: string;
   readonly ownerUserId: string;
+  readonly asset: WorkflowAsset | undefined;
   readonly output: TaskRunGatekeeperTaskRun["output"];
   readonly reservedCredits: number | undefined;
   readonly status: TaskRunStatus;
@@ -193,7 +194,8 @@ async function loadGatekeeperTaskRuns(
     nodeId: requireString(row.nodeId),
     nodeExecutionId: requireString(row.nodeExecutionId),
     ownerUserId: requireString(row.ownerUserId),
-    output: outputs.get(requireString(row.taskRunId)),
+    asset: outputs.get(requireString(row.taskRunId))?.asset,
+    output: outputs.get(requireString(row.taskRunId))?.output,
     reservedCredits: optionalNumber(row.reservedCredits) ?? undefined,
     status: requireTaskRunStatus(row.status),
     taskRunId: requireString(row.taskRunId),
@@ -265,8 +267,22 @@ async function loadOwnerCreditBalance(
 async function loadGeneratedOutputsForTaskRuns(
   db: DbExecutor,
   taskRunIds: readonly string[],
-): Promise<ReadonlyMap<string, TaskRunGatekeeperTaskRun["output"]>> {
-  const outputs = new Map<string, TaskRunGatekeeperTaskRun["output"]>();
+): Promise<
+  ReadonlyMap<
+    string,
+    {
+      readonly asset?: WorkflowAsset;
+      readonly output: NonNullable<TaskRunGatekeeperTaskRun["output"]>;
+    }
+  >
+> {
+  const outputs = new Map<
+    string,
+    {
+      readonly asset?: WorkflowAsset;
+      readonly output: NonNullable<TaskRunGatekeeperTaskRun["output"]>;
+    }
+  >();
   for (const taskRunId of taskRunIds) {
     const rows = rowsFromResult(
       await db.execute(sql`
@@ -275,7 +291,14 @@ async function loadGeneratedOutputsForTaskRuns(
           kind,
           cdn_url as "cdnUrl",
           text_content as "text",
-          mime_type as "contentType"
+          mime_type as "contentType",
+          file_name as "fileName",
+          size_bytes as "sizeBytes",
+          model,
+          source,
+          storage_key as "storagePath",
+          external_uri as "externalUri",
+          created_at as "createdAt"
         from assets
         where task_run_id = ${taskRunId}
           and source = 'generated'
@@ -309,7 +332,13 @@ async function loadGeneratedOutputsForTaskRuns(
     });
     const output = projectGeneratedAssetToTaskOutput(assets);
     if (output.kind !== "INVALID_PRIMARY_GENERATED_ASSET_COUNT") {
-      outputs.set(taskRunId, output);
+      const row = rows[0];
+      outputs.set(taskRunId, {
+        output,
+        ...(row && rows.length === 1 && output.kind === "cdn-asset"
+          ? { asset: workflowAssetFromRow(row) }
+          : {}),
+      });
     }
   }
 
@@ -477,11 +506,28 @@ function projectGatekeeperTaskRun(
     itemIndex: row.itemIndex,
     nodeId: row.nodeId,
     nodeExecutionId: row.nodeExecutionId,
+    asset: row.asset,
     output: row.output,
     reservedCredits: row.reservedCredits,
     status: row.status,
     targetNodeConfig: requireTaskRunInputSnapshot(row.inputSnapshot)
       .targetNodeConfig,
+  };
+}
+
+function workflowAssetFromRow(row: QueryRow): WorkflowAsset {
+  return {
+    createdAt: requireDate(row.createdAt).toISOString(),
+    externalUri: optionalString(row.externalUri),
+    fileName: requireString(row.fileName),
+    id: requireString(row.assetId),
+    kind: requireAssetKind(row.kind),
+    mimeType: requireString(row.contentType),
+    model: optionalString(row.model),
+    size: requireNumber(row.sizeBytes),
+    source: requireAssetSource(row.source),
+    storagePath: optionalString(row.storagePath),
+    url: requireString(row.cdnUrl),
   };
 }
 
@@ -580,6 +626,37 @@ function requireNumber(value: unknown): number {
 
 function optionalNumber(value: unknown): number | null {
   return value === null ? null : requireNumber(value);
+}
+
+function requireDate(value: unknown): Date {
+  if (value instanceof Date) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.valueOf())) {
+      return parsed;
+    }
+  }
+
+  throw new TypeError("Expected database date value");
+}
+
+function requireAssetKind(value: unknown): WorkflowAsset["kind"] {
+  if (value === "image" || value === "video" || value === "text") {
+    return value;
+  }
+
+  throw new TypeError("Expected asset kind value");
+}
+
+function requireAssetSource(value: unknown): WorkflowAsset["source"] {
+  if (value === "upload" || value === "generated") {
+    return value;
+  }
+
+  throw new TypeError("Expected asset source value");
 }
 
 function requireTaskRunStatus(value: unknown): TaskRunStatus {

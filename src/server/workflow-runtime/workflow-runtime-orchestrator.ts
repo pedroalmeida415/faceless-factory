@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { GeneratedAsset } from "~/lib/workflow-runtime/assets/generated-asset-projection";
 import type { TaskRunFailureReason } from "~/lib/workflow-runtime/domain/task-run-state";
 import {
   planWorkflowRun,
@@ -14,6 +13,7 @@ import type {
 } from "~/server/workflow-runtime/workflow-runtime-gatekeeper-repository";
 import type {
   WorkflowRuntimeExecutionJobPayload,
+  WorkflowRuntimeGeneratedPrimaryAssetPayload,
   WorkflowRuntimeWakeUpJobPayload,
 } from "~/server/workflow-runtime/workflow-runtime-queue";
 
@@ -28,20 +28,10 @@ export type WorkflowRuntimeCommitPlanResult = {
   readonly wakeUpJobs: readonly WorkflowRuntimeWakeUpJobPayload[];
 };
 
-type GeneratedPrimaryAssetInput = GeneratedAsset & {
-  readonly contentType: string;
-  readonly externalUri?: string | null;
-  readonly fileName: string;
-  readonly model?: string | null;
-  readonly sizeBytes: number;
-  readonly storageKey?: string | null;
-  readonly storageProvider: string;
-};
-
 export type SettleWorkerCompletionCommand = {
   readonly attempt: number;
   readonly finalCostCredits: number;
-  readonly generatedAsset: GeneratedPrimaryAssetInput;
+  readonly generatedAsset: WorkflowRuntimeGeneratedPrimaryAssetPayload;
   readonly ownerUserId: string;
   readonly reviewRequired: boolean;
   readonly taskRunId: string;

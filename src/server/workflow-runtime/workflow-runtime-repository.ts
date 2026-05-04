@@ -1,4 +1,5 @@
 import { type SQL, sql } from "drizzle-orm";
+import type { WorkflowAsset } from "~/lib/workflow/types";
 import {
   type GeneratedAsset,
   projectGeneratedAssetToTaskOutput,
@@ -15,6 +16,7 @@ import {
   buildTaskStatusEvent,
   type TaskStatusEvent,
 } from "~/lib/workflow-runtime/runtime/task-status-events";
+import { promoteStagedGeneratedArtifact } from "~/server/workflow/storage";
 import {
   type WakeUpTaskRunChildrenRepositoryCommand,
   type WakeUpTaskRunChildrenRepositoryResult,
@@ -24,6 +26,7 @@ import {
   buildWorkflowRuntimeExecutionJobPayload,
   buildWorkflowRuntimeWakeUpJobPayload,
   type WorkflowRuntimeExecutionJobPayload,
+  type WorkflowRuntimeGeneratedPrimaryAssetPayload,
   type WorkflowRuntimeWakeUpJobPayload,
 } from "~/server/workflow-runtime/workflow-runtime-queue";
 
@@ -51,20 +54,10 @@ type ClaimQueuedTaskRunResult =
     }
   | { readonly claimed: false };
 
-type GeneratedPrimaryAssetInput = GeneratedAsset & {
-  readonly contentType: string;
-  readonly externalUri?: string | null;
-  readonly fileName: string;
-  readonly model?: string | null;
-  readonly sizeBytes: number;
-  readonly storageKey?: string | null;
-  readonly storageProvider: string;
-};
-
 type SettleTaskRunCompletionCommand = {
   readonly attempt: number;
   readonly finalCostCredits: number;
-  readonly generatedAsset: GeneratedPrimaryAssetInput;
+  readonly generatedAsset: WorkflowRuntimeGeneratedPrimaryAssetPayload;
   readonly ownerUserId: string;
   readonly reviewRequired: boolean;
   readonly taskRunId: string;
@@ -188,6 +181,11 @@ type RejectedTaskRunRow = {
 
 type ResolvedParentTaskRunSnapshot =
   TaskRunInputSnapshot["resolvedParentTaskRuns"][number];
+
+type ResolvedGeneratedParentOutput = {
+  readonly asset?: WorkflowAsset;
+  readonly output: NonNullable<ResolvedParentTaskRunSnapshot["output"]>;
+};
 
 type QueuedTaskRunFreeze = {
   readonly inputSnapshot: TaskRunInputSnapshot;
@@ -538,6 +536,15 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
 
         if (!row) {
           return { settled: false };
+        }
+
+        if (command.generatedAsset.stagedStorageKey) {
+          await promoteStagedGeneratedArtifact({
+            promotedStoragePath: requireString(
+              command.generatedAsset.storageKey,
+            ),
+            stagedStoragePath: command.generatedAsset.stagedStorageKey,
+          });
         }
 
         await insertGeneratedAsset(tx, {
@@ -1233,6 +1240,7 @@ async function resolveLatestApprovedParents(
     }
     parents.push({
       attempt: parent.attempt,
+      ...(parent.asset ? { asset: parent.asset } : {}),
       itemIndex: parent.itemIndex,
       nodeExecutionId: parent.nodeExecutionId,
       ...(parent.output ? { output: parent.output } : {}),
@@ -1273,13 +1281,14 @@ async function loadLatestParentTaskRun(
   }
 
   const taskRunId = requireString(row.taskRunId);
-  const output = await loadGeneratedOutputForTaskRun(db, taskRunId);
+  const generatedOutput = await loadGeneratedOutputForTaskRun(db, taskRunId);
 
   return {
     attempt: requireNumber(row.attempt),
+    ...(generatedOutput?.asset ? { asset: generatedOutput.asset } : {}),
     itemIndex: requireNumber(row.itemIndex),
     nodeExecutionId: requireString(row.nodeExecutionId),
-    ...(output ? { output } : {}),
+    ...(generatedOutput ? { output: generatedOutput.output } : {}),
     runtimeStatus: requireString(row.runtimeStatus),
     taskRunId,
   };
@@ -1497,13 +1506,14 @@ async function loadLatestApprovedParentTaskRunForCommit(
   }
 
   const taskRunId = requireString(row.taskRunId);
-  const output = await loadGeneratedOutputForTaskRun(db, taskRunId);
+  const generatedOutput = await loadGeneratedOutputForTaskRun(db, taskRunId);
 
   return {
     attempt: requireNumber(row.attempt),
+    ...(generatedOutput?.asset ? { asset: generatedOutput.asset } : {}),
     itemIndex: requireNumber(row.itemIndex),
     nodeExecutionId: requireString(row.nodeExecutionId),
-    ...(output ? { output } : {}),
+    ...(generatedOutput ? { output: generatedOutput.output } : {}),
     taskRunId,
   };
 }
@@ -1511,7 +1521,7 @@ async function loadLatestApprovedParentTaskRunForCommit(
 async function loadGeneratedOutputForTaskRun(
   db: DbExecutor,
   taskRunId: string,
-): Promise<ResolvedParentTaskRunSnapshot["output"] | undefined> {
+): Promise<ResolvedGeneratedParentOutput | undefined> {
   const rows = rowsFromResult(
     await db.execute(sql`
       select
@@ -1519,7 +1529,14 @@ async function loadGeneratedOutputForTaskRun(
         kind,
         cdn_url as "cdnUrl",
         text_content as "text",
-        mime_type as "contentType"
+        mime_type as "contentType",
+        file_name as "fileName",
+        size_bytes as "sizeBytes",
+        model,
+        source,
+        storage_key as "storagePath",
+        external_uri as "externalUri",
+        created_at as "createdAt"
       from assets
       where task_run_id = ${taskRunId}
         and source = 'generated'
@@ -1553,15 +1570,23 @@ async function loadGeneratedOutputForTaskRun(
   });
   const output = projectGeneratedAssetToTaskOutput(assets);
 
-  return output.kind === "INVALID_PRIMARY_GENERATED_ASSET_COUNT"
-    ? undefined
-    : output;
+  if (output.kind === "INVALID_PRIMARY_GENERATED_ASSET_COUNT") {
+    return undefined;
+  }
+
+  const row = rows[0];
+  return {
+    output,
+    ...(row && rows.length === 1 && output.kind === "cdn-asset"
+      ? { asset: workflowAssetFromRow(row) }
+      : {}),
+  };
 }
 
 async function insertGeneratedAsset(
   db: DbExecutor,
   input: {
-    readonly asset: GeneratedPrimaryAssetInput;
+    readonly asset: WorkflowRuntimeGeneratedPrimaryAssetPayload;
     readonly ownerUserId: string;
     readonly taskRunId: string;
     readonly workflowId: string;
@@ -1605,6 +1630,22 @@ async function insertGeneratedAsset(
       now()
     )
   `);
+}
+
+function workflowAssetFromRow(row: QueryRow): WorkflowAsset {
+  return {
+    createdAt: requireDate(row.createdAt).toISOString(),
+    externalUri: optionalString(row.externalUri),
+    fileName: requireString(row.fileName),
+    id: requireString(row.assetId),
+    kind: requireAssetKind(row.kind),
+    mimeType: requireString(row.contentType),
+    model: optionalString(row.model),
+    size: requireNumber(row.sizeBytes),
+    source: requireAssetSource(row.source),
+    storagePath: optionalString(row.storagePath),
+    url: requireString(row.cdnUrl),
+  };
 }
 
 async function reserveInitialQueuedTaskRunCredits(
@@ -1813,6 +1854,37 @@ function requireNumber(value: unknown): number {
 
 function optionalNumber(value: unknown): number | null {
   return value === null ? null : requireNumber(value);
+}
+
+function requireDate(value: unknown): Date {
+  if (value instanceof Date) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.valueOf())) {
+      return parsed;
+    }
+  }
+
+  throw new TypeError("Expected database date value");
+}
+
+function requireAssetKind(value: unknown): WorkflowAsset["kind"] {
+  if (value === "image" || value === "video" || value === "text") {
+    return value;
+  }
+
+  throw new TypeError("Expected asset kind value");
+}
+
+function requireAssetSource(value: unknown): WorkflowAsset["source"] {
+  if (value === "upload" || value === "generated") {
+    return value;
+  }
+
+  throw new TypeError("Expected asset source value");
 }
 
 function requireTaskRunInputSnapshot(value: unknown): TaskRunInputSnapshot {

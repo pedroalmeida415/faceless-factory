@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 
 import { Effect } from "effect";
-
-import { calculateLlmUsageCreditCost } from "~/lib/workflow/llm-models";
+import {
+  priceImageGeneration,
+  priceLlmGeneration,
+  priceVideoGeneration,
+} from "~/lib/workflow/pricing";
 import type {
   GenerateImageRequest,
   GenerateImageResponse,
@@ -10,7 +13,7 @@ import type {
   GenerateLlmResponse,
   GenerateVideoRequest,
   GenerateVideoResponse,
-  WorkflowAsset,
+  StagedGeneratedMediaArtifact,
 } from "~/lib/workflow/types";
 import type { ExecutableTaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
 import type {
@@ -66,7 +69,9 @@ export function createWorkflowRuntimeProviderExecutor(input: {
             return generatedMediaResult({
               assets: response.assets,
               expectedKind: "image",
-              finalCostCredits: 0,
+              finalCostCredits: priceImageGeneration(
+                inputSnapshot.providerInput.request,
+              ),
               reviewRequired: getReviewRequired(inputSnapshot),
             });
           }
@@ -81,7 +86,9 @@ export function createWorkflowRuntimeProviderExecutor(input: {
             return generatedMediaResult({
               assets: response.assets,
               expectedKind: "video",
-              finalCostCredits: 0,
+              finalCostCredits: priceVideoGeneration(
+                inputSnapshot.providerInput.request,
+              ),
               reviewRequired: getReviewRequired(inputSnapshot),
             });
           }
@@ -96,10 +103,7 @@ export function createWorkflowRuntimeProviderExecutor(input: {
             return {
               ok: true,
               value: {
-                finalCostCredits: calculateLlmUsageCreditCost({
-                  model: response.model,
-                  usage: response.usage,
-                }),
+                finalCostCredits: priceLlmGeneration(response),
                 generatedAsset: {
                   assetId: createAssetId(),
                   contentType: "text/plain; charset=utf-8",
@@ -131,7 +135,7 @@ export function createWorkflowRuntimeProviderExecutor(input: {
 }
 
 function generatedMediaResult(input: {
-  readonly assets: readonly WorkflowAsset[];
+  readonly assets: readonly StagedGeneratedMediaArtifact[];
   readonly expectedKind: "image" | "video";
   readonly finalCostCredits: number;
   readonly reviewRequired: boolean;
@@ -172,7 +176,7 @@ function generatedMediaResult(input: {
 }
 
 function toGeneratedMediaAssetPayload(
-  asset: WorkflowAsset,
+  asset: StagedGeneratedMediaArtifact,
   kind: "image" | "video",
 ): WorkflowRuntimeGeneratedPrimaryAssetPayload {
   return {
@@ -184,8 +188,14 @@ function toGeneratedMediaAssetPayload(
     kind,
     model: asset.model,
     sizeBytes: asset.size,
-    storageKey: asset.storagePath,
-    storageProvider: asset.storagePath ? "local" : "external",
+    storageKey:
+      asset.storageProvider === "local-staged"
+        ? asset.promotedStoragePath
+        : null,
+    storageProvider:
+      asset.storageProvider === "local-staged" ? "local" : "external",
+    stagedStorageKey:
+      asset.storageProvider === "local-staged" ? asset.stagedStoragePath : null,
   };
 }
 
