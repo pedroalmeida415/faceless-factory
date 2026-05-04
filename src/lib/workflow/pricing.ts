@@ -13,9 +13,13 @@ import {
   getImageGeneratorModelCreditCost,
   getVideoGeneratorModelCreditCost,
 } from "~/lib/workflow/generator-models";
-import { LLM_ESTIMATED_CREDIT_COST } from "~/lib/workflow/llm-models";
+import {
+  calculateLlmUsageCreditCost,
+  LLM_ESTIMATED_CREDIT_COST,
+} from "~/lib/workflow/llm-models";
 import type {
   GenerateImageRequest,
+  GenerateLlmResponse,
   GenerateVideoRequest,
 } from "~/lib/workflow/types";
 
@@ -33,6 +37,10 @@ export type WorkflowExecutionPriceQuote = {
   hasEstimate: boolean;
   lineItems: WorkflowExecutionPriceLineItem[];
 };
+
+export type WorkflowRuntimeEstimatedCreditCostByNodeId = Readonly<
+  Record<string, number>
+>;
 
 type WorkflowExecutionEstimateOptions = {
   completedOutputKeys?: ReadonlySet<string>;
@@ -135,8 +143,41 @@ export function priceImageGeneration(request: GenerateImageRequest) {
   return getImageGeneratorModelCreditCost(request.model);
 }
 
+export function priceLlmGeneration(
+  response: Pick<GenerateLlmResponse, "model" | "usage">,
+) {
+  return calculateLlmUsageCreditCost(response);
+}
+
 export function priceVideoGeneration(request: GenerateVideoRequest) {
   return getVideoGeneratorModelCreditCost(request.model);
+}
+
+export function estimateWorkflowRuntimeNodeCreditCost(
+  node: WorkflowDocumentNode,
+) {
+  switch (node.kind) {
+    case "imageGenerator":
+      return getImageGeneratorModelCreditCost(node.model);
+    case "videoGenerator":
+      return getVideoGeneratorModelCreditCost(node.model);
+    case "llmGenerator":
+      return LLM_ESTIMATED_CREDIT_COST;
+    default:
+      return 0;
+  }
+}
+
+export function estimateWorkflowRuntimeCreditCostByNodeId(input: {
+  readonly document: WorkflowDocument;
+  readonly overrides?: WorkflowRuntimeEstimatedCreditCostByNodeId;
+}): WorkflowRuntimeEstimatedCreditCostByNodeId {
+  return Object.fromEntries(
+    input.document.nodes.map((node) => [
+      node.id,
+      input.overrides?.[node.id] ?? estimateWorkflowRuntimeNodeCreditCost(node),
+    ]),
+  );
 }
 
 export function estimateWorkflowExecution(

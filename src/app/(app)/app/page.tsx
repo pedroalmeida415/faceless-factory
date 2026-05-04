@@ -1,6 +1,6 @@
 import { WorkflowStudio } from "~/components/workflow/WorkflowStudio";
 import { getSession } from "~/server/better-auth/server";
-import { getOrCreateWorkflowProject } from "~/server/workflow/projects";
+import { getOrCreateWorkflowStudioView } from "~/server/workflow/workflow-studio-view";
 
 export default async function HomePage() {
   const session = await getSession();
@@ -9,7 +9,7 @@ export default async function HomePage() {
     return null;
   }
 
-  const project = await getOrCreateWorkflowProject(session.user.id);
+  const view = await getOrCreateWorkflowStudioView(session.user.id);
 
-  return <WorkflowStudio project={project} />;
+  return <WorkflowStudio view={view} />;
 }

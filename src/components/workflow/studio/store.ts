@@ -23,7 +23,6 @@ import { collectWorkflowExecutionNodeIds } from "~/lib/workflow/execution/subgra
 import type { WorkflowCreditsSummary } from "~/lib/workflow/execution/types";
 import type { WorkflowHandleReference } from "~/lib/workflow/graph";
 import type { WorkflowValueType } from "~/lib/workflow/node-definitions";
-import type { WorkflowProject } from "~/lib/workflow/project";
 import {
   ImageGeneratorService,
   ListNodeService,
@@ -44,6 +43,7 @@ import {
   type WorkflowRuntimeState,
   type WorkflowStudioSnapshot,
 } from "~/lib/workflow/studio-state";
+import type { WorkflowStudioView } from "~/lib/workflow/studio-view";
 import type {
   GeneratorConfigValue,
   ImageGeneratorModelId,
@@ -392,7 +392,7 @@ type WorkflowStudioState = {
   canUndo: boolean;
   canRedo: boolean;
   ready: boolean;
-  hydrate: (project: WorkflowProject) => void;
+  hydrate: (view: WorkflowStudioView) => void;
   applyRuntimeTaskProjection: (
     slots: readonly TaskRunStudioProjectionSlot[],
   ) => void;
@@ -505,9 +505,10 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     canRedo: false,
     ready: false,
 
-    hydrate: (project) => {
+    hydrate: (view) => {
       set((state) => {
         try {
+          const { project, runtimeTaskProjection } = view;
           const document = hydrateWorkflowGraphDocument(project.document);
           if (!document) {
             throw new Error(
@@ -518,11 +519,21 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
             document,
             DEFAULT_WORKFLOW_ACTIVITY,
           );
+          const projection = applyTaskRunStudioProjection({
+            document: nextSnapshot.document,
+            runtime: nextSnapshot.runtime,
+            slots: runtimeTaskProjection,
+          });
 
-          applySnapshotToState(state, nextSnapshot);
+          applySnapshotToState(state, {
+            document: projection.document,
+            editor: nextSnapshot.editor,
+            runtime: projection.runtime,
+          });
           state.documentRevision = project.documentRevision;
-          state.isStreamingExecutionStatus = false;
-          state.lockedNodeIds = [];
+          state.isStreamingExecutionStatus =
+            projection.activeNodeIds.length > 0;
+          state.lockedNodeIds = [...projection.activeNodeIds];
           state.localDocumentVersion = 0;
           state.savedLocalDocumentVersion = 0;
           state.lastExecutionFinishedAt = null;
@@ -1224,7 +1235,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
   })),
 );
 
-export function useWorkflowStudioPersistence(project: WorkflowProject) {
+export function useWorkflowStudioPersistence(view: WorkflowStudioView) {
   const hydrate = useWorkflowStudioStore((state) => state.hydrate);
   const projectId = useWorkflowStudioStore((state) => state.projectId);
   const ready = useWorkflowStudioStore((state) => state.ready);
@@ -1235,7 +1246,7 @@ export function useWorkflowStudioPersistence(project: WorkflowProject) {
 
   useEffect(() => {
     hasHydratedProject.current = false;
-    hydrate(project);
+    hydrate(view);
 
     WorkflowPersistenceService.configure({
       getSnapshot: () => {
@@ -1271,7 +1282,7 @@ export function useWorkflowStudioPersistence(project: WorkflowProject) {
     return () => {
       WorkflowPersistenceService.reset();
     };
-  }, [hydrate, project]);
+  }, [hydrate, view]);
 
   useEffect(() => {
     void localDocumentVersion;

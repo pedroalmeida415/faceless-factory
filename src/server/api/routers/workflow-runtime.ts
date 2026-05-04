@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { type SQL, sql } from "drizzle-orm";
 import { z } from "zod";
+import { estimateWorkflowRuntimeCreditCostByNodeId } from "~/lib/workflow/pricing";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { db } from "~/server/db";
 import { createRedisSubscriber } from "~/server/redis";
@@ -60,7 +61,10 @@ export const workflowRuntimeRouter = createTRPCRouter({
         ...planningState,
         command: { targetNodeIds: [input.nodeId], type: "run-target" },
         document: project.document,
-        estimatedCreditCostByNodeId: input.estimatedCreditCostByNodeId,
+        estimatedCreditCostByNodeId: estimateWorkflowRuntimeCreditCostByNodeId({
+          document: project.document,
+          overrides: input.estimatedCreditCostByNodeId,
+        }),
         ownerId: ownerUserId,
         workflowId: project.id,
       });
@@ -87,7 +91,10 @@ export const workflowRuntimeRouter = createTRPCRouter({
         ...planningState,
         command: { nodeId: input.nodeId, type: "rerun-node" },
         document: project.document,
-        estimatedCreditCostByNodeId: input.estimatedCreditCostByNodeId,
+        estimatedCreditCostByNodeId: estimateWorkflowRuntimeCreditCostByNodeId({
+          document: project.document,
+          overrides: input.estimatedCreditCostByNodeId,
+        }),
         ownerId: ownerUserId,
         workflowId: project.id,
       });

@@ -11,6 +11,7 @@ import {
   getPromptNodeReferencedVariableKeys,
 } from "~/lib/workflow/graph";
 import { OUTPUT_REORDER_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
+import type { WorkflowRuntimeEstimatedCreditCostByNodeId } from "~/lib/workflow/pricing";
 import { parseWorkflowBlueprint } from "~/lib/workflow/runtime/planning/blueprint/parser";
 import { resolveOutputPermutation } from "~/lib/workflow/runtime-values";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
@@ -52,7 +53,7 @@ export type WorkflowRunPlannerInput = {
   readonly latestTaskRuns: readonly ExistingTaskRun[];
   readonly ownerId: string;
   readonly workflowId: string;
-  readonly estimatedCreditCostByNodeId?: Readonly<Record<string, number>>;
+  readonly estimatedCreditCostByNodeId?: WorkflowRuntimeEstimatedCreditCostByNodeId;
   readonly plannedItemCountByNodeId?: Readonly<Record<string, number>>;
 };
 

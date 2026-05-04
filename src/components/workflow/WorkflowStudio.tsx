@@ -45,12 +45,12 @@ import {
   formatNodeTitle,
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
-import type { WorkflowProject } from "~/lib/workflow/project";
 import { PromptNodeService } from "~/lib/workflow/services/node-services";
 import type {
   WorkflowCanvasEdge,
   WorkflowCanvasNode,
 } from "~/lib/workflow/studio-state";
+import type { WorkflowStudioView } from "~/lib/workflow/studio-view";
 import type { WorkflowNodeKind } from "~/lib/workflow/types";
 import { AssetLibrary } from "./studio/AssetLibrary";
 import { getWorkflowAssetDropData } from "./studio/asset-dnd";
@@ -554,8 +554,8 @@ const WorkflowCanvas = memo(function WorkflowCanvas({
   );
 });
 
-export function WorkflowStudio({ project }: { project: WorkflowProject }) {
-  useWorkflowStudioPersistence(project);
+export function WorkflowStudio({ view }: { view: WorkflowStudioView }) {
+  useWorkflowStudioPersistence(view);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const flowRef = useRef<ReactFlowInstance<
@@ -731,7 +731,7 @@ export function WorkflowStudio({ project }: { project: WorkflowProject }) {
         <AssetLibrary
           onOpenChange={setIsAssetLibraryOpen}
           open={isAssetLibraryOpen}
-          projectId={project.id}
+          projectId={view.project.id}
         />
         <WorkflowNodeConfigDrawer />
         <WorkflowCanvas
