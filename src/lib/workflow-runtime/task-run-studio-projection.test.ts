@@ -76,6 +76,7 @@ describe("Task Run studio projection", () => {
     assert.equal(node?.kind, "imageGenerator");
     assert.deepEqual(projection.activeNodeIds, []);
     assert.equal(projection.runtime.nodeStateById[nodeId]?.status, "success");
+    assert.deepEqual(node.outputs[0], []);
     assert.equal(node.outputs[1]?.[0]?.id, "asset-image-1");
     assert.equal(
       node.outputs[1]?.[0]?.url,

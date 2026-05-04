@@ -80,7 +80,9 @@ export function AssetPreview({
 }
 
 export function OutputGallery({ assets }: { assets: WorkflowAsset[] }) {
-  if (!assets.length) {
+  const renderableAssets = assets.filter(Boolean);
+
+  if (!renderableAssets.length) {
     return (
       <Card className="border-dashed">
         <CardContent className="py-4 text-muted-foreground">
@@ -92,7 +94,7 @@ export function OutputGallery({ assets }: { assets: WorkflowAsset[] }) {
 
   return (
     <div className="grid grid-cols-2 gap-2">
-      {assets.map((asset) => (
+      {renderableAssets.map((asset) => (
         <Card className="gap-0 py-0" key={asset.id}>
           <a href={asset.url} rel="noreferrer" target="_blank">
             <div

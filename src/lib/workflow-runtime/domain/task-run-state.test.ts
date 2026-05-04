@@ -6,6 +6,7 @@ import {
   buildTaskRunIdempotencyKey,
   isActiveTaskRunStatus,
   isDirectTaskRunFailureReason,
+  isFailedTaskRunStatus,
   isRecoverableByDownstreamPlanningStatus,
   isRenderableTaskRunStatus,
   isTaskRunDependencySatisfiedStatus,
@@ -46,6 +47,10 @@ describe("Task Run state semantics", () => {
       "QUEUED",
       "RUNNING",
       "PENDING_REVIEW",
+    ]);
+    assert.deepEqual(expectedStatuses.filter(isFailedTaskRunStatus), [
+      "FAILED",
+      "UPSTREAM_FAILED",
     ]);
   });
 

@@ -12,6 +12,12 @@ import type {
   WorkflowReviewOutput,
   WorkflowReviewState,
 } from "~/lib/workflow/types";
+import {
+  isActiveTaskRunStatus,
+  isFailedTaskRunStatus,
+  isTaskRunDependencySatisfiedStatus,
+  type TaskRunStatus,
+} from "~/lib/workflow-runtime/domain/task-run-state";
 import type { RenderableTaskOutput } from "~/lib/workflow-runtime/runtime/task-status-events";
 
 export type TaskRunStudioProjectionSlot = {
@@ -21,16 +27,7 @@ export type TaskRunStudioProjectionSlot = {
   readonly nodeExecutionId: string;
   readonly nodeId: string;
   readonly output?: RenderableTaskOutput;
-  readonly status:
-    | "WAITING_UPSTREAM"
-    | "QUEUED"
-    | "RUNNING"
-    | "PENDING_REVIEW"
-    | "APPROVED"
-    | "REJECTED"
-    | "CANCELLED"
-    | "FAILED"
-    | "UPSTREAM_FAILED";
+  readonly status: TaskRunStatus;
   readonly taskRunId: string;
 };
 
@@ -92,14 +89,17 @@ function projectNodeTaskRuns(
 
   if (node.kind === "imageGenerator" || node.kind === "videoGenerator") {
     const outputKind = node.kind === "imageGenerator" ? "image" : "video";
-    const outputs = [...node.outputs];
+    const outputs = node.outputs.map((output) => output ?? []);
     for (const slot of slots) {
-      if (slot.status !== "APPROVED" || !slot.output) {
+      if (!isTaskRunDependencySatisfiedStatus(slot.status) || !slot.output) {
         continue;
       }
 
       const asset = projectRenderableAsset(slot.output, outputKind);
       if (asset) {
+        while (outputs.length <= slot.itemIndex) {
+          outputs.push([]);
+        }
         outputs[slot.itemIndex] = [asset];
       }
     }
@@ -115,7 +115,7 @@ function projectNodeTaskRuns(
     const outputs = [...node.outputs];
     for (const slot of slots) {
       if (
-        slot.status === "APPROVED" &&
+        isTaskRunDependencySatisfiedStatus(slot.status) &&
         slot.output?.kind === "inline-text-asset"
       ) {
         outputs[slot.itemIndex] = slot.output.text;
@@ -200,7 +200,7 @@ function projectRenderableAsset(
 }
 
 function projectReviewStatus(
-  status: TaskRunStudioProjectionSlot["status"],
+  status: TaskRunStatus,
 ): WorkflowReviewOutput["status"] | null {
   if (status === "PENDING_REVIEW") {
     return "pending";
@@ -211,11 +211,7 @@ function projectReviewStatus(
   if (status === "REJECTED") {
     return "rejected";
   }
-  if (
-    status === "QUEUED" ||
-    status === "RUNNING" ||
-    status === "WAITING_UPSTREAM"
-  ) {
+  if (isActiveTaskRunStatus(status)) {
     return "regenerating";
   }
   return null;
@@ -226,7 +222,7 @@ function projectNodeRuntimeState(
 ): WorkflowNodeRuntimeState {
   return {
     error:
-      slots.find((slot) => isErrorTaskRunStatus(slot.status))?.failureReason ??
+      slots.find((slot) => isFailedTaskRunStatus(slot.status))?.failureReason ??
       null,
     status: projectNodeStatus(slots),
   };
@@ -235,11 +231,7 @@ function projectNodeRuntimeState(
 function projectNodeStatus(
   slots: readonly TaskRunStudioProjectionSlot[],
 ): WorkflowNodeStatus {
-  if (
-    slots.some(
-      (slot) => slot.status === "FAILED" || slot.status === "UPSTREAM_FAILED",
-    )
-  ) {
+  if (slots.some((slot) => isFailedTaskRunStatus(slot.status))) {
     return "error";
   }
   if (
@@ -247,12 +239,7 @@ function projectNodeStatus(
   ) {
     return "running";
   }
-  if (
-    slots.some(
-      (slot) =>
-        slot.status === "WAITING_UPSTREAM" || slot.status === "PENDING_REVIEW",
-    )
-  ) {
+  if (slots.some((slot) => isActiveTaskRunStatus(slot.status))) {
     return "waiting";
   }
   if (slots.some((slot) => slot.status === "APPROVED")) {
@@ -267,17 +254,4 @@ function groupByNodeId(slots: readonly TaskRunStudioProjectionSlot[]) {
     grouped.set(slot.nodeId, [...(grouped.get(slot.nodeId) ?? []), slot]);
   }
   return grouped;
-}
-
-function isActiveTaskRunStatus(status: TaskRunStudioProjectionSlot["status"]) {
-  return (
-    status === "WAITING_UPSTREAM" ||
-    status === "QUEUED" ||
-    status === "RUNNING" ||
-    status === "PENDING_REVIEW"
-  );
-}
-
-function isErrorTaskRunStatus(status: TaskRunStudioProjectionSlot["status"]) {
-  return status === "FAILED" || status === "UPSTREAM_FAILED";
 }

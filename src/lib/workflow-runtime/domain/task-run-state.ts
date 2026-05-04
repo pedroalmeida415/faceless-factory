@@ -69,6 +69,12 @@ export function isActiveTaskRunStatus(
   return !isTerminalTaskRunStatus(status);
 }
 
+export function isFailedTaskRunStatus(
+  status: TaskRunStatus,
+): status is Extract<TaskRunStatus, "FAILED" | "UPSTREAM_FAILED"> {
+  return status === "FAILED" || status === "UPSTREAM_FAILED";
+}
+
 export function isTaskRunDependencySatisfiedStatus(
   status: TaskRunStatus,
 ): status is "APPROVED" {
