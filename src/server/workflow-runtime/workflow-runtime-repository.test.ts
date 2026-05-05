@@ -964,6 +964,7 @@ describe("WorkflowRuntimeRepository", () => {
     const result = await repository.settleTaskRunFailure({
       attempt: 0,
       failureReason: { message: "provider timed out", type: "PROVIDER_FAILED" },
+      failureSource: nonRefundableProviderFailureSource(),
       finalCostCredits: 5,
       ownerUserId: "owner-user",
       taskRunId: "task-run-failed",
@@ -996,113 +997,196 @@ describe("WorkflowRuntimeRepository", () => {
     });
   });
 
-  test("failure refunds debited credits above final cost and treats omitted cost as zero", async () => {
+  test("non-refundable running provider failures keep the Task Run Debit billable", async () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 50 });
     await insertTaskRun(db, {
-      id: "task-run-failed-partial-refund",
+      estimatedCreditCost: 40,
+      id: "task-run-failed-billable",
       reservedCredits: 40,
       runtimeStatus: "RUNNING",
     });
-    await insertTaskRun(db, {
-      id: "task-run-failed-zero-cost-refund",
-      reservedCredits: 10,
-      runtimeStatus: "RUNNING",
-    });
 
     await repository.settleTaskRunFailure({
       attempt: 0,
       failureReason: {
-        message: "provider billed partially",
+        message: "provider failed after spend",
         type: "PROVIDER_FAILED",
       },
-      finalCostCredits: 15,
+      failureSource: nonRefundableProviderFailureSource(),
       ownerUserId: "owner-user",
-      taskRunId: "task-run-failed-partial-refund",
-    });
-    await repository.settleTaskRunFailure({
-      attempt: 0,
-      failureReason: {
-        message: "provider failed before spend",
-        type: "PROVIDER_FAILED",
-      },
-      ownerUserId: "owner-user",
-      taskRunId: "task-run-failed-zero-cost-refund",
+      taskRunId: "task-run-failed-billable",
     });
 
     assert.equal(
-      (await getTaskRunSettlement(db, "task-run-failed-partial-refund"))
-        .costCredits,
-      15,
-    );
-    assert.equal(
-      (await getTaskRunSettlement(db, "task-run-failed-zero-cost-refund"))
-        .costCredits,
+      (await getTaskRunSettlement(db, "task-run-failed-billable")).costCredits,
       0,
     );
     assert.deepEqual(
       await repository.getCreditLedgerForUser({ ownerUserId: "owner-user" }),
       {
-        creditBalance: 85,
+        creditBalance: 50,
+        ledgerEntries: [],
+      },
+    );
+  });
+
+  test("explicitly refundable failures create one full Task Run Refund idempotently", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    await insertUser(db, { creditBalance: 60 });
+    await insertTaskRun(db, {
+      estimatedCreditCost: 30,
+      id: "task-run-refundable-failure",
+      reservedCredits: 30,
+      runtimeStatus: "RUNNING",
+    });
+
+    await repository.settleTaskRunFailure({
+      attempt: 0,
+      failureReason: {
+        message: "provider confirmed no bill",
+        type: "PROVIDER_FAILED",
+      },
+      failureSource: refundableProviderFailureSource(),
+      ownerUserId: "owner-user",
+      taskRunId: "task-run-refundable-failure",
+    });
+    await repository.settleTaskRunFailure({
+      attempt: 0,
+      failureReason: { message: "duplicate", type: "PROVIDER_FAILED" },
+      failureSource: refundableProviderFailureSource(),
+      ownerUserId: "owner-user",
+      taskRunId: "task-run-refundable-failure",
+    });
+
+    assert.deepEqual(
+      await repository.getCreditLedgerForUser({ ownerUserId: "owner-user" }),
+      {
+        creditBalance: 90,
         ledgerEntries: [
           {
-            amount: 25,
-            balanceAfter: 75,
+            amount: 30,
+            balanceAfter: 90,
             kind: "refund",
-            sourceKey: "task_run:task-run-failed-partial-refund:refund",
-          },
-          {
-            amount: 10,
-            balanceAfter: 85,
-            kind: "refund",
-            sourceKey: "task_run:task-run-failed-zero-cost-refund:refund",
+            sourceKey: "task_run:task-run-refundable-failure:refund",
           },
         ],
       },
     );
   });
 
-  test("completion refunds unused Task Run Debit without overdrafting when final cost exceeds debited credits", async () => {
+  test("post-provider infrastructure failures do not automatically refund Task Run Debit", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    await insertUser(db, { creditBalance: 10 });
+    await insertTaskRun(db, {
+      estimatedCreditCost: 20,
+      id: "task-run-post-provider-failed",
+      reservedCredits: 20,
+      runtimeStatus: "RUNNING",
+    });
+
+    await repository.settleTaskRunFailure({
+      attempt: 0,
+      failureReason: {
+        message: "asset promotion failed",
+        type: "EXECUTION_FAILED",
+      },
+      failureSource: postProviderInfrastructureFailureSource(),
+      ownerUserId: "owner-user",
+      taskRunId: "task-run-post-provider-failed",
+    });
+
+    assert.deepEqual(
+      await repository.getCreditLedgerForUser({ ownerUserId: "owner-user" }),
+      { creditBalance: 10, ledgerEntries: [] },
+    );
+  });
+
+  test("LLM overage creates no adjustment at or below Task Run credit cost", async () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 60 });
     await insertTaskRun(db, {
-      id: "task-run-complete-refund",
+      estimatedCreditCost: 30,
+      id: "task-run-no-overage",
       reservedCredits: 30,
-      runtimeStatus: "RUNNING",
-    });
-    await insertTaskRun(db, {
-      id: "task-run-complete-over-reservation",
-      reservedCredits: 5,
       runtimeStatus: "RUNNING",
     });
 
     await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 12,
-      generatedAsset: textGeneratedAsset("asset-complete-refund", "refund"),
+      finalCostCredits: 30,
+      generatedAsset: textGeneratedAsset("asset-no-overage", "no overage"),
       ownerUserId: "owner-user",
       reviewRequired: false,
-      taskRunId: "task-run-complete-refund",
+      taskRunId: "task-run-no-overage",
+    });
+
+    assert.deepEqual(
+      await repository.getCreditLedgerForUser({ ownerUserId: "owner-user" }),
+      { creditBalance: 60, ledgerEntries: [] },
+    );
+  });
+
+  test("positive LLM overage is rounded up, capped by balance, and idempotent", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    await insertUser(db, { creditBalance: 5 });
+    await insertTaskRun(db, {
+      estimatedCreditCost: 20,
+      id: "task-run-overage-rounded",
+      reservedCredits: 20,
+      runtimeStatus: "RUNNING",
+    });
+    await insertTaskRun(db, {
+      estimatedCreditCost: 10,
+      id: "task-run-overage-capped",
+      reservedCredits: 10,
+      runtimeStatus: "RUNNING",
+    });
+
+    await repository.settleTaskRunCompletion({
+      attempt: 0,
+      finalCostCredits: 22,
+      generatedAsset: textGeneratedAsset("asset-overage-rounded", "overage"),
+      ownerUserId: "owner-user",
+      reviewRequired: false,
+      taskRunId: "task-run-overage-rounded",
     });
     await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 9,
-      generatedAsset: textGeneratedAsset("asset-over-reservation", "over"),
+      finalCostCredits: 20,
+      generatedAsset: textGeneratedAsset("asset-overage-capped", "capped"),
       ownerUserId: "owner-user",
       reviewRequired: false,
-      taskRunId: "task-run-complete-over-reservation",
+      taskRunId: "task-run-overage-capped",
+    });
+    await repository.settleTaskRunCompletion({
+      attempt: 0,
+      finalCostCredits: 20,
+      generatedAsset: textGeneratedAsset(
+        "asset-overage-capped-duplicate",
+        "duplicate",
+      ),
+      ownerUserId: "owner-user",
+      reviewRequired: false,
+      taskRunId: "task-run-overage-capped",
     });
 
     assert.deepEqual(
       await repository.getCreditLedgerForUser({ ownerUserId: "owner-user" }),
       {
-        creditBalance: 78,
+        creditBalance: 0,
         ledgerEntries: [
           {
-            amount: 18,
-            balanceAfter: 78,
-            kind: "refund",
-            sourceKey: "task_run:task-run-complete-refund:refund",
+            amount: 2,
+            balanceAfter: 3,
+            kind: "debit",
+            sourceKey: "task_run:task-run-overage-rounded:cost_adjustment",
+          },
+          {
+            amount: 3,
+            balanceAfter: 0,
+            kind: "debit",
+            sourceKey: "task_run:task-run-overage-capped:cost_adjustment",
           },
         ],
       },
@@ -1132,6 +1216,7 @@ describe("WorkflowRuntimeRepository", () => {
       await repository.settleTaskRunFailure({
         attempt: 0,
         failureReason: { type: "EXECUTION_FAILED", message: "ignored" },
+        failureSource: nonRefundableProviderFailureSource(),
         ownerUserId: "owner-user",
         taskRunId: "task-run-wrong-settle-attempt",
       }),
@@ -3536,6 +3621,27 @@ function textGeneratedAsset(assetId: string, text: string) {
     sizeBytes: text.length,
     storageProvider: "inline",
     text,
+  };
+}
+
+function nonRefundableProviderFailureSource() {
+  return {
+    taskRunDebitRefundable: false,
+    type: "PROVIDER" as const,
+  };
+}
+
+function refundableProviderFailureSource() {
+  return {
+    taskRunDebitRefundable: true,
+    type: "PROVIDER" as const,
+  };
+}
+
+function postProviderInfrastructureFailureSource() {
+  return {
+    taskRunDebitRefundable: false as const,
+    type: "POST_PROVIDER_INFRASTRUCTURE" as const,
   };
 }
 

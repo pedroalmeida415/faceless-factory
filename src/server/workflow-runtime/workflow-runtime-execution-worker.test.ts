@@ -119,6 +119,10 @@ describe("WorkflowRuntimeExecutionWorker", () => {
             message: "provider timeout",
             type: "PROVIDER_FAILED",
           },
+          failureSource: {
+            taskRunDebitRefundable: true,
+            type: "PROVIDER",
+          },
           finalCostCredits: 1,
         },
         ok: false,
@@ -133,6 +137,10 @@ describe("WorkflowRuntimeExecutionWorker", () => {
       {
         attempt: 0,
         failureReason: { message: "provider timeout", type: "PROVIDER_FAILED" },
+        failureSource: {
+          taskRunDebitRefundable: true,
+          type: "PROVIDER",
+        },
         finalCostCredits: 1,
         jobId: "task-run~task-run-1~attempt~0~orchestrator~failure",
         ownerUserId: "owner-1",
@@ -163,6 +171,10 @@ describe("WorkflowRuntimeExecutionWorker", () => {
       {
         attempt: 0,
         failureReason: { message: "sdk exploded", type: "PROVIDER_FAILED" },
+        failureSource: {
+          taskRunDebitRefundable: false,
+          type: "POST_PROVIDER_INFRASTRUCTURE",
+        },
         jobId: "task-run~task-run-1~attempt~0~orchestrator~failure",
         ownerUserId: "owner-1",
         taskRunId: "task-run-1",

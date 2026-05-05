@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { TaskRunFailureReason } from "~/lib/workflow-runtime/domain/task-run-state";
+import type {
+  TaskRunFailureReason,
+  TaskRunSettlementFailureSource,
+} from "~/lib/workflow-runtime/domain/task-run-state";
 import {
   planWorkflowRun,
   type WorkflowRunPlan,
@@ -44,6 +47,7 @@ export type SettleWorkerFailureCommand = {
     TaskRunFailureReason,
     { readonly type: "UPSTREAM_FAILED" }
   >;
+  readonly failureSource: TaskRunSettlementFailureSource;
   readonly finalCostCredits?: number;
   readonly ownerUserId: string;
   readonly taskRunId: string;

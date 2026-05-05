@@ -68,8 +68,14 @@ describe("Task Run credit ledger", () => {
     });
     await refundTaskRunCredits(db, { ...command, amount: 7 });
     await refundTaskRunCredits(db, { ...command, amount: 7 });
-    await adjustTaskRunCostCredits(db, { ...command, amount: 3 });
-    await adjustTaskRunCostCredits(db, { ...command, amount: 3 });
+    assert.deepEqual(
+      await adjustTaskRunCostCredits(db, { ...command, amount: 3 }),
+      { adjusted: true, amount: 3 },
+    );
+    assert.deepEqual(
+      await adjustTaskRunCostCredits(db, { ...command, amount: 3 }),
+      { adjusted: false, amount: 0 },
+    );
 
     assert.equal(await getUserCreditBalance(db), 84);
     assert.deepEqual(await getLedgerEntries(db), [
@@ -113,6 +119,35 @@ describe("Task Run credit ledger", () => {
         "task_run:task-run-source:cost_adjustment",
       ],
     );
+  });
+
+  test("cost adjustments are capped by available balance without overdrafting", async () => {
+    await db.execute(sql`
+      update "user"
+      set credit_balance = 4
+      where id = 'owner-user'
+    `);
+
+    assert.deepEqual(
+      await adjustTaskRunCostCredits(db, {
+        amount: 9,
+        ownerUserId: "owner-user",
+        taskRunId: "task-run-capped-adjustment",
+        workflowId: "workflow-id",
+      }),
+      { adjusted: true, amount: 4 },
+    );
+
+    assert.equal(await getUserCreditBalance(db), 0);
+    assert.deepEqual(await getLedgerEntries(db), [
+      {
+        amount: 4,
+        balanceAfter: 0,
+        kind: "debit",
+        reason: "task_run_cost_adjustment",
+        sourceKey: "task_run:task-run-capped-adjustment:cost_adjustment",
+      },
+    ]);
   });
 });
 

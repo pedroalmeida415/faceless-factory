@@ -548,7 +548,7 @@ describe("Workflow runtime state-machine contract", () => {
       },
     ]);
     assertNoColonJobIds(wake.executionJobs);
-    assert.equal(await getUserCreditBalance(db, "owner-user"), 54);
+    assert.equal(await getUserCreditBalance(db, "owner-user"), 50);
     assert.deepEqual(await getTaskRunCreditState(db, "runtime-task-run-2"), {
       estimatedCreditCost: 40,
       failureReason: null,
@@ -563,7 +563,7 @@ describe("Workflow runtime state-machine contract", () => {
       executionJobs: [],
       taskStatusEvents: [],
     });
-    assert.equal(await getUserCreditBalance(db, "owner-user"), 54);
+    assert.equal(await getUserCreditBalance(db, "owner-user"), 50);
 
     const dependencies = await repository.getTaskDependenciesForChild({
       childTaskRunId: "runtime-task-run-2",
@@ -698,6 +698,7 @@ describe("Workflow runtime state-machine contract", () => {
     await repository.settleTaskRunFailure({
       attempt: 0,
       failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
+      failureSource: nonRefundableProviderFailureSource(),
       ownerUserId: "low-credit-user",
       taskRunId: "unfunded-parent",
     });
@@ -818,6 +819,7 @@ describe("Workflow runtime state-machine contract", () => {
       buildWorkflowRuntimeFailureSettlementJobPayload({
         attempt: 2,
         failureReason: { message: "failed", type: "PROVIDER_FAILED" },
+        failureSource: nonRefundableProviderFailureSource(),
         ownerUserId: "owner-user",
         taskRunId: "task-run-queue",
         workflowId: "workflow-id",
@@ -1672,6 +1674,13 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
 
 function never(): never {
   throw new Error("Expected settled result");
+}
+
+function nonRefundableProviderFailureSource() {
+  return {
+    taskRunDebitRefundable: false,
+    type: "PROVIDER" as const,
+  };
 }
 
 function providerPrompt(snapshot: TaskRunInputSnapshot) {

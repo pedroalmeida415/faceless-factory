@@ -1,4 +1,7 @@
-import type { TaskRunFailureReason } from "~/lib/workflow-runtime/domain/task-run-state";
+import type {
+  TaskRunFailureReason,
+  TaskRunSettlementFailureSource,
+} from "~/lib/workflow-runtime/domain/task-run-state";
 import {
   buildExecutionJobId,
   buildOrchestratorEventId,
@@ -68,6 +71,7 @@ export type WorkflowRuntimeFailureSettlementJobPayload = {
     TaskRunFailureReason,
     { readonly type: "UPSTREAM_FAILED" }
   >;
+  readonly failureSource: TaskRunSettlementFailureSource;
   readonly finalCostCredits?: number;
   readonly jobId: string;
   readonly ownerUserId: string;
@@ -125,6 +129,7 @@ export function buildWorkflowRuntimeFailureSettlementJobPayload(
       ? {
           attempt: input.attempt,
           failureReason: input.failureReason,
+          failureSource: input.failureSource,
           ownerUserId: input.ownerUserId,
           taskRunId: input.taskRunId,
           workflowId: input.workflowId,

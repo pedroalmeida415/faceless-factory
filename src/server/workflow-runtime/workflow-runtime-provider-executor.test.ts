@@ -210,6 +210,10 @@ describe("WorkflowRuntimeProviderExecutor", () => {
             "Provider returned 2 image assets; exactly one primary asset is required.",
           type: "PROVIDER_FAILED",
         },
+        failureSource: {
+          taskRunDebitRefundable: false,
+          type: "PROVIDER",
+        },
       },
       ok: false,
     });
@@ -231,6 +235,10 @@ describe("WorkflowRuntimeProviderExecutor", () => {
         failureReason: {
           message: "Vertex quota exhausted",
           type: "PROVIDER_FAILED",
+        },
+        failureSource: {
+          taskRunDebitRefundable: false,
+          type: "PROVIDER",
         },
       },
       ok: false,

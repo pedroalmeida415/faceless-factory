@@ -1,4 +1,7 @@
-import type { TaskRunFailureReason } from "~/lib/workflow-runtime/domain/task-run-state";
+import type {
+  TaskRunFailureReason,
+  TaskRunSettlementFailureSource,
+} from "~/lib/workflow-runtime/domain/task-run-state";
 import type { ExecutableTaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
 import type { TaskStatusEvent } from "~/lib/workflow-runtime/runtime/task-status-events";
 import {
@@ -35,6 +38,7 @@ export type ProviderExecutionFailure = {
     TaskRunFailureReason,
     { readonly type: "UPSTREAM_FAILED" }
   >;
+  readonly failureSource: TaskRunSettlementFailureSource;
   readonly finalCostCredits?: number;
 };
 
@@ -120,6 +124,10 @@ export function createWorkflowRuntimeExecutionWorker(input: {
                 message: providerFailureMessage(cause),
                 type: "PROVIDER_FAILED",
               },
+              failureSource: {
+                taskRunDebitRefundable: false,
+                type: "POST_PROVIDER_INFRASTRUCTURE",
+              },
             },
             ok: false,
           }),
@@ -128,6 +136,7 @@ export function createWorkflowRuntimeExecutionWorker(input: {
         const settlement = buildWorkflowRuntimeFailureSettlementJobPayload({
           attempt: job.attempt,
           failureReason: providerResult.error.failureReason,
+          failureSource: providerResult.error.failureSource,
           finalCostCredits: providerResult.error.finalCostCredits,
           ownerUserId: job.ownerUserId,
           taskRunId: job.taskRunId,

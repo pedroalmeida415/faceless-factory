@@ -17,6 +17,10 @@ type TaskRunCreditDebitResult =
   | { readonly debited: true }
   | { readonly debited: false; readonly reason: "INSUFFICIENT_CREDITS" };
 
+type TaskRunCostAdjustmentResult =
+  | { readonly adjusted: true; readonly amount: number }
+  | { readonly adjusted: false; readonly amount: 0 };
+
 type TaskRunLedgerOperation = "debit" | "refund" | "cost_adjustment";
 
 export async function debitTaskRunCredits(
@@ -78,27 +82,34 @@ export async function refundTaskRunCredits(
 export async function adjustTaskRunCostCredits(
   db: DbExecutor,
   command: TaskRunCreditLedgerCommand,
-): Promise<void> {
+): Promise<TaskRunCostAdjustmentResult> {
   if (command.amount <= 0) {
-    return;
+    return { adjusted: false, amount: 0 };
   }
 
   const sourceKey = buildTaskRunCreditLedgerSourceKey({
     operation: "cost_adjustment",
     taskRunId: command.taskRunId,
   });
-  await lockUserAndReadBalance(db, command.ownerUserId);
+  const balance = await lockUserAndReadBalance(db, command.ownerUserId);
   if (await hasLedgerEntry(db, sourceKey)) {
-    return;
+    return { adjusted: false, amount: 0 };
+  }
+
+  const cappedAmount = Math.min(command.amount, balance);
+  if (cappedAmount <= 0) {
+    return { adjusted: false, amount: 0 };
   }
 
   await insertBalanceChangingLedgerEntry(db, {
     ...command,
-    balanceDelta: -command.amount,
+    amount: cappedAmount,
+    balanceDelta: -cappedAmount,
     kind: "debit",
     reason: "task_run_cost_adjustment",
     sourceKey,
   });
+  return { adjusted: true, amount: cappedAmount };
 }
 
 export function buildTaskRunCreditLedgerSourceKey(input: {

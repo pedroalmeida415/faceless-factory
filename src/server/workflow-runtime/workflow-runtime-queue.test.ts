@@ -77,6 +77,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
       buildWorkflowRuntimeFailureSettlementJobPayload({
         attempt: 2,
         failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
+        failureSource: nonRefundableProviderFailureSource(),
         ownerUserId: "owner-user-1",
         taskRunId: "task-run-1",
         workflowId: "workflow-1",
@@ -84,6 +85,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
       {
         attempt: 2,
         failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
+        failureSource: nonRefundableProviderFailureSource(),
         jobId: "task-run~task-run-1~attempt~2~orchestrator~failure",
         ownerUserId: "owner-user-1",
         taskRunId: "task-run-1",
@@ -193,6 +195,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
     const job = buildWorkflowRuntimeFailureSettlementJobPayload({
       attempt: 1,
       failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
+      failureSource: nonRefundableProviderFailureSource(),
       ownerUserId: "owner-user-1",
       taskRunId: "task-run-1",
       workflowId: "workflow-1",
@@ -226,4 +229,11 @@ class FakeQueueLike {
 
     return Promise.resolve({ id: options.jobId });
   }
+}
+
+function nonRefundableProviderFailureSource() {
+  return {
+    taskRunDebitRefundable: false,
+    type: "PROVIDER" as const,
+  };
 }

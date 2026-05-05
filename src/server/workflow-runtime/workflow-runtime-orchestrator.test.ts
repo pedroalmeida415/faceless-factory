@@ -860,6 +860,10 @@ function makeFailureCommand(): SettleWorkerFailureCommand {
   return {
     attempt: 0,
     failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
+    failureSource: {
+      taskRunDebitRefundable: false,
+      type: "PROVIDER",
+    },
     finalCostCredits: 1,
     ownerUserId: "owner-1",
     taskRunId: "task-run-1",

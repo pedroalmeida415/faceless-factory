@@ -43,6 +43,16 @@ export type TaskRunFailureReason =
       readonly failedParentTaskRunId: string;
     };
 
+export type TaskRunSettlementFailureSource =
+  | {
+      readonly taskRunDebitRefundable: boolean;
+      readonly type: "PROVIDER";
+    }
+  | {
+      readonly taskRunDebitRefundable: false;
+      readonly type: "POST_PROVIDER_INFRASTRUCTURE";
+    };
+
 const terminalTaskRunStatuses = new Set<TaskRunStatus>([
   "APPROVED",
   "REJECTED",

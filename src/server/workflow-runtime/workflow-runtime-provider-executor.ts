@@ -126,6 +126,7 @@ export function createWorkflowRuntimeProviderExecutor(input: {
               message: providerFailureMessage(cause),
               type: "PROVIDER_FAILED",
             },
+            failureSource: nonRefundableProviderFailureSource(),
           },
           ok: false,
         } satisfies ProviderExecutionResult;
@@ -147,6 +148,7 @@ function generatedMediaResult(input: {
           message: `Provider returned ${input.assets.length} ${input.expectedKind} assets; exactly one primary asset is required.`,
           type: "PROVIDER_FAILED",
         },
+        failureSource: nonRefundableProviderFailureSource(),
       },
       ok: false,
     };
@@ -160,6 +162,7 @@ function generatedMediaResult(input: {
           message: `Provider returned an invalid ${input.expectedKind} asset.`,
           type: "PROVIDER_FAILED",
         },
+        failureSource: nonRefundableProviderFailureSource(),
       },
       ok: false,
     };
@@ -203,6 +206,13 @@ function getReviewRequired(snapshot: ExecutableTaskRunInputSnapshot) {
   const node = snapshot.targetNodeConfig;
 
   return "reviewEnabled" in node ? node.reviewEnabled : false;
+}
+
+function nonRefundableProviderFailureSource() {
+  return {
+    taskRunDebitRefundable: false,
+    type: "PROVIDER",
+  } as const;
 }
 
 function providerFailureMessage(cause: unknown): string {

@@ -4,7 +4,10 @@ import {
   type GeneratedAsset,
   projectGeneratedAssetToTaskOutput,
 } from "~/lib/workflow-runtime/assets/generated-asset-projection";
-import type { TaskRunFailureReason } from "~/lib/workflow-runtime/domain/task-run-state";
+import type {
+  TaskRunFailureReason,
+  TaskRunSettlementFailureSource,
+} from "~/lib/workflow-runtime/domain/task-run-state";
 import {
   buildTaskRunInputSnapshot,
   type ExecutableTaskRunInputSnapshot,
@@ -18,6 +21,7 @@ import {
 } from "~/lib/workflow-runtime/runtime/task-status-events";
 import { promoteStagedGeneratedArtifact } from "~/server/workflow/storage";
 import {
+  adjustTaskRunCostCredits,
   debitTaskRunCredits,
   refundTaskRunCredits,
 } from "~/server/workflow-runtime/task-run-credit-ledger";
@@ -73,6 +77,7 @@ type SettleTaskRunFailureCommand = {
     TaskRunFailureReason,
     { readonly type: "UPSTREAM_FAILED" }
   >;
+  readonly failureSource: TaskRunSettlementFailureSource;
   readonly finalCostCredits?: number;
   readonly ownerUserId: string;
   readonly taskRunId: string;
@@ -559,6 +564,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               workflow_id as "workflowId",
               owner_user_id as "ownerUserId",
               item_index as "itemIndex",
+              estimated_credit_cost as "estimatedCreditCost",
               reserved_credits as "reservedCredits",
               attempt
           `),
@@ -584,9 +590,9 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           taskRunId: requireString(row.taskRunId),
           workflowId: requireString(row.workflowId),
         });
-        await refundTaskRunCredits(tx, {
-          amount: refundableTaskRunCredits(
-            optionalNumber(row.reservedCredits),
+        await adjustTaskRunCostCredits(tx, {
+          amount: taskRunCostAdjustmentCredits(
+            optionalNumber(row.estimatedCreditCost),
             command.finalCostCredits,
           ),
           ownerUserId: requireString(row.ownerUserId),
@@ -648,6 +654,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               workflow_id as "workflowId",
               owner_user_id as "ownerUserId",
               item_index as "itemIndex",
+              estimated_credit_cost as "estimatedCreditCost",
               reserved_credits as "reservedCredits",
               attempt
           `),
@@ -658,15 +665,24 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           return { settled: false };
         }
 
-        await refundTaskRunCredits(tx, {
-          amount: refundableTaskRunCredits(
-            optionalNumber(row.reservedCredits),
-            finalCostCredits,
-          ),
-          ownerUserId: requireString(row.ownerUserId),
-          taskRunId: requireString(row.taskRunId),
-          workflowId: requireString(row.workflowId),
-        });
+        if (command.failureSource.taskRunDebitRefundable) {
+          await refundTaskRunCredits(tx, {
+            amount: optionalNumber(row.reservedCredits) ?? 0,
+            ownerUserId: requireString(row.ownerUserId),
+            taskRunId: requireString(row.taskRunId),
+            workflowId: requireString(row.workflowId),
+          });
+        } else {
+          await adjustTaskRunCostCredits(tx, {
+            amount: taskRunCostAdjustmentCredits(
+              optionalNumber(row.estimatedCreditCost),
+              finalCostCredits,
+            ),
+            ownerUserId: requireString(row.ownerUserId),
+            taskRunId: requireString(row.taskRunId),
+            workflowId: requireString(row.workflowId),
+          });
+        }
 
         return {
           settled: true,
@@ -1667,11 +1683,11 @@ function workflowAssetFromRow(row: QueryRow): WorkflowAsset {
   };
 }
 
-function refundableTaskRunCredits(
+function taskRunCostAdjustmentCredits(
   creditCost: number | null,
   finalCostCredits: number,
 ): number {
-  return Math.max((creditCost ?? 0) - finalCostCredits, 0);
+  return Math.ceil(Math.max(finalCostCredits - (creditCost ?? 0), 0));
 }
 
 async function loadTaskRunRuntimeStatus(

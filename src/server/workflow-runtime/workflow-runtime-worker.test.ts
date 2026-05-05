@@ -111,6 +111,10 @@ function failureJob() {
       message: "provider failed",
       type: "PROVIDER_FAILED" as const,
     },
+    failureSource: {
+      taskRunDebitRefundable: false,
+      type: "PROVIDER" as const,
+    },
     jobId: "task-run~task-run-1~attempt~0~orchestrator~failure",
     ownerUserId: "owner-1",
     taskRunId: "task-run-1",
