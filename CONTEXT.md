@@ -1,6 +1,6 @@
 # Faceless Factory Workflow Runtime
 
-This context defines the domain language for the node-based media workflow runtime, including execution, review, regeneration, and dependency gating.
+This context defines the domain language for the node-based media workflow runtime, including execution, review, new attempts, and dependency gating.
 
 ## Language
 
@@ -48,13 +48,17 @@ _Avoid_: Failed, errored
 A terminal task run state where the user intentionally stopped an attempt before approval.
 _Avoid_: Failed, manual failure
 
-**Regenerate Item**:
-A command that creates the next attempt for selected item indexes within the same node execution.
-_Avoid_: Rerun node
+**Task Run Slot**:
+The durable address for attempts at one **Node Execution** and one **Item Index**.
+_Avoid_: Task, output slot
 
-**Rerun Node**:
-A command that creates a new node execution and fresh attempts for all planned item indexes of that node.
-_Avoid_: Regenerate item
+**Run Node**:
+A user command that asks the server to execute a graph node now. The server decides from persisted runtime state whether this creates the first **Node Execution** or a new **Node Execution**.
+_Avoid_: Rerun node, run target node
+
+**Run Task Slot**:
+A user command that creates the next **Attempt** for one **Task Run Slot** within an existing **Node Execution**.
+_Avoid_: Regenerate item, rerun item
 
 **Task Status Event**:
 A real-time notification that identifies one task run attempt, its new status, and optional renderable output payload.
@@ -72,7 +76,7 @@ _Avoid_: Node dependency, latest dependency
 
 - A **Node Execution** has one or more **Task Runs**.
 - A **Task Run** belongs to exactly one **Node Execution**, one **Item Index**, and one **Attempt**.
-- A **Task Run** is the durable source of truth for scheduling, retry, review, regeneration, and dependency gating.
+- A **Task Run** is the durable source of truth for scheduling, retry, review, attempt creation, and dependency gating.
 - **Task Run Input Materialization** is the only path that creates or refreshes a **Task Run** input snapshot before the task run becomes `QUEUED`.
 - **Task Run Input Materialization** freezes static upstream blueprint values and target node settings when a **Task Run** is created, including **Waiting Upstream** task runs.
 - A **Wake-Up Call** for a **Waiting Upstream** **Task Run** binds only generated parent outputs from resolved parent **Task Runs**; it does not re-read live list, prompt, asset, or target generator settings from the workflow document.
@@ -80,10 +84,10 @@ _Avoid_: Node dependency, latest dependency
 - A **Node Execution** is the durable batch record; there is no separate **Workflow Execution** concept in the domain model.
 - A **Node Execution** does not have an authoritative execution status; visible node state is derived from its latest **Task Runs**.
 - A node gets its first **Node Execution** when it is first run manually or when downstream execution needs a batch for dependency linking.
-- A node with an existing **Node Execution** only gets a new **Node Execution** when the user manually reruns that node.
+- A node with an existing **Node Execution** only gets a new **Node Execution** when the user issues **Run Node** for that node.
 - The UI shows the latest **Node Execution** for each node by default.
-- A manual rerun creates a new **Node Execution** only for the rerun node; existing downstream **Task Runs** remain historical and frozen to their resolved dependencies.
-- Running a target node plans the full upstream closure needed by that target in one transaction.
+- **Run Node** creates a new **Node Execution** only for the selected node when that node already has execution history; existing downstream **Task Runs** remain historical and frozen to their resolved dependencies.
+- **Run Node** plans the full upstream closure needed by that node in one transaction when the node has no existing **Node Execution**.
 - Upstream closure planning creates missing **Node Executions**, **Task Runs**, and **Task Dependencies**, queues satisfied **Task Runs**, and parks unsatisfied **Task Runs** as `WAITING_UPSTREAM`.
 - Downstream planning reuses the latest existing upstream **Node Execution** when one exists.
 - Downstream planning creates an upstream **Node Execution** only when the upstream node has none.
@@ -91,30 +95,30 @@ _Avoid_: Node dependency, latest dependency
 - Downstream planning does not create duplicate upstream attempts for slots already in `WAITING_UPSTREAM`, `QUEUED`, `RUNNING`, or `PENDING_REVIEW`.
 - Running a downstream target may create downstream **Task Runs** that wait on active upstream **Task Runs**.
 - `REJECTED` is not expected to remain the latest slot state because rejection immediately creates a newer **Attempt**.
-- **Regenerate Item** preserves the **Node Execution** and creates a new **Attempt** only for selected **Item Indexes**.
-- **Rerun Node** creates a new **Node Execution** and fresh **Task Runs** for all planned **Item Indexes**.
-- **Rerun Node** is rejected when the node's latest **Node Execution** has any **Active Task Runs**.
-- Running a target node is rejected when that target node's latest **Node Execution** has any **Active Task Runs**.
+- **Run Task Slot** preserves the **Node Execution** and creates a new **Attempt** only for the selected **Item Index**.
+- **Run Node** creates the first **Node Execution** when none exists, or a new **Node Execution** with fresh **Task Runs** for all planned **Item Indexes** when one already exists.
+- **Run Node** is rejected when the node's latest **Node Execution** has any **Active Task Runs**.
+- **Run Node** is rejected when that node's latest **Node Execution** has any **Active Task Runs**.
 - At most one active non-terminal **Attempt** may exist for a **Node Execution** and **Item Index**.
 - The server enforces the one-active-attempt invariant transactionally; frontend controls only prevent obvious duplicate user actions.
 - The database enforces active-slot uniqueness for each **Node Execution** and **Item Index** across `WAITING_UPSTREAM`, `QUEUED`, `RUNNING`, and `PENDING_REVIEW` attempts.
 - A **Task Run** in **Waiting Upstream** consumes no worker resources; it is resumed only by a **Wake-Up Call** from a settled parent task run.
 - A **Task Run** moves through `WAITING_UPSTREAM`, `QUEUED`, `RUNNING`, `PENDING_REVIEW`, `APPROVED`, `REJECTED`, `CANCELLED`, `FAILED`, or `UPSTREAM_FAILED`.
 - If an upstream **Task Run** fails, downstream **Task Runs** that depend on it become **Upstream Failed** instead of remaining parked indefinitely.
-- A directly **Failed** **Task Run** may be retried; an **Upstream Failed** **Task Run** requires rerunning or regenerating its failed upstream path first.
+- A directly **Failed** **Task Run** may be retried; an **Upstream Failed** **Task Run** requires running its failed upstream path first.
 - A **Rejected** **Task Run** is not an execution failure; it is a reviewed item that was not accepted.
-- Rejecting a **Task Run** is a server-side regeneration command: the rejected attempt becomes `REJECTED` and a newer **Attempt** is created immediately.
+- Rejecting a **Task Run** is a server-side **Run Task Slot** command: the rejected attempt becomes `REJECTED` and a newer **Attempt** is created immediately.
 - A **Cancelled** **Task Run** propagates to waiting downstream **Task Runs** as `UPSTREAM_FAILED`.
 - If review is disabled for a generated output, successful generation transitions the **Task Run** directly to `APPROVED`.
 - Downstream execution may consume only `APPROVED` parent **Task Runs**; `PENDING_REVIEW` output is renderable but does not satisfy dependencies.
-- A later upstream rerun does not automatically resume a downstream **Task Run** already marked **Upstream Failed**.
+- A later upstream **Run Node** does not automatically resume a downstream **Task Run** already marked **Upstream Failed**.
 - A **Task Dependency** stores a logical requirement address while the child **Task Run** is waiting: parent **Node Execution** plus **Item Index**.
 - **Task Dependencies** represent generated parent **Task Run** requirements only; static upstream blueprint values are frozen in the **Task Run** input snapshot, not stored as **Task Dependencies**.
 - A **Task Dependency** stores the resolved exact parent **Task Run** before the child **Task Run** is queued or run.
-- Regeneration can satisfy unresolved **Task Dependencies** through the same parent **Node Execution** and **Item Index** without rewriting child dependencies.
+- **Run Task Slot** can satisfy unresolved **Task Dependencies** through the same parent **Node Execution** and **Item Index** without rewriting child dependencies.
 - An unresolved **Task Dependency** is satisfied only when the latest **Attempt** for the required **Node Execution** and **Item Index** is `APPROVED`.
-- Once a child **Task Run** becomes `QUEUED`, its **Task Dependencies** are frozen to exact resolved parent **Task Runs** and are not affected by later regeneration.
-- An `APPROVED` **Attempt** remains approved forever; later regeneration creates a newer **Attempt** without mutating historical approval.
+- Once a child **Task Run** becomes `QUEUED`, its **Task Dependencies** are frozen to exact resolved parent **Task Runs** and are not affected by later **Run Task Slot**.
+- An `APPROVED` **Attempt** remains approved forever; later **Run Task Slot** creates a newer **Attempt** without mutating historical approval.
 - When a newer **Attempt** is created for a required slot, unresolved downstream **Task Dependencies** wait for that newer **Attempt** even if an older **Attempt** is `APPROVED`.
 - The gatekeeper transaction is the only path that moves a dependency-waiting child **Task Run** to `QUEUED`.
 - The gatekeeper re-checks latest required attempts at commit time; creating newer upstream attempts does not require rewriting already waiting children.
@@ -132,7 +136,7 @@ _Avoid_: Node dependency, latest dependency
 - If credit reservation fails, the **Task Run** becomes `FAILED` and waiting downstream **Task Runs** cascade to `UPSTREAM_FAILED`.
 - Direct task failures use `FAILED` with a structured failure reason such as `INSUFFICIENT_CREDITS`.
 - Failed **Task Runs** do not auto-resume after external conditions change; retry requires explicit user action.
-- Input-hash-based output reuse is not part of the domain; rerunning or regenerating always creates a new generation attempt.
+- Input-hash-based output reuse is not part of the domain; **Run Node** and **Run Task Slot** always create new generation attempts for their selected runtime addresses.
 - Input hashes are not stored in the workflow runtime schema.
 - Existing execution/runtime data is disposable during the overhaul; backward compatibility with old task runs, node executions, and execution artifacts is not required.
 - A saved workflow document is a blueprint: it stores creative configuration and graph structure, not execution history, review state, or generated output attempts.
@@ -162,7 +166,7 @@ _Avoid_: Node dependency, latest dependency
 ## Example Dialogue
 
 > **Dev:** "If an image node generates four images, do we schedule one job or four?"
-> **Domain expert:** "Four **Task Runs**. Each **Task Run** produces one item and can be reviewed or regenerated independently."
+> **Domain expert:** "Four **Task Runs**. Each **Task Run** produces one item and can be reviewed or run again independently through its **Task Run Slot**."
 
 ## Flagged Ambiguities
 

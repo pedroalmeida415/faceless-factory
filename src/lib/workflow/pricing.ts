@@ -43,12 +43,11 @@ type WorkflowExecutionEstimateOptions = {
 };
 
 export type WorkflowRuntimeCreditEstimateCommand =
-  | { readonly type: "run-target"; readonly targetNodeIds: readonly string[] }
-  | { readonly type: "rerun-node"; readonly nodeId: string }
+  | { readonly type: "run-node"; readonly nodeId: string }
   | {
-      readonly type: "regenerate-item";
+      readonly type: "run-task-slot";
       readonly nodeExecutionId: string;
-      readonly itemIndexes: readonly number[];
+      readonly itemIndex: number;
     };
 
 export type WorkflowRuntimeCreditEstimateNodeExecution = {
@@ -202,17 +201,15 @@ export function estimateWorkflowRuntimeCommand(input: {
 
   const quotedNodeIds = facts.value.executableNodeIds;
   const quotedNodeIdSet = new Set(quotedNodeIds);
-  const selectedItemIndexes =
-    input.command.type === "regenerate-item"
-      ? new Set(input.command.itemIndexes)
-      : null;
+  const selectedItemIndex =
+    input.command.type === "run-task-slot" ? input.command.itemIndex : null;
   const iterationCountByNodeId = new Map<string, number>();
 
   for (const fact of facts.value.taskFacts) {
     if (!quotedNodeIdSet.has(fact.nodeId)) {
       continue;
     }
-    if (selectedItemIndexes && !selectedItemIndexes.has(fact.itemIndex)) {
+    if (selectedItemIndex !== null && selectedItemIndex !== fact.itemIndex) {
       continue;
     }
     iterationCountByNodeId.set(
@@ -233,18 +230,16 @@ function resolveCreditEstimateTargetNodeIds(input: {
   readonly latestNodeExecutions?: readonly WorkflowRuntimeCreditEstimateNodeExecution[];
 }) {
   switch (input.command.type) {
-    case "run-target":
-      return input.command.targetNodeIds;
-    case "rerun-node":
+    case "run-node":
       return [input.command.nodeId];
-    case "regenerate-item": {
+    case "run-task-slot": {
       const nodeExecutionId = input.command.nodeExecutionId;
       const nodeExecution = input.latestNodeExecutions?.find(
         (execution) => execution.id === nodeExecutionId,
       );
       if (!nodeExecution) {
         throw new WorkflowValidationError({
-          message: `Cannot estimate regeneration for missing Node Execution ${nodeExecutionId}.`,
+          message: `Cannot estimate Task Run slot execution for missing Node Execution ${nodeExecutionId}.`,
         });
       }
       return [nodeExecution.nodeId];
@@ -257,7 +252,7 @@ export function estimateWorkflowExecution(
   options?: WorkflowExecutionEstimateOptions,
 ): WorkflowExecutionPriceQuote {
   return estimateWorkflowRuntimeCommand({
-    command: { targetNodeIds: [request.target.nodeId], type: "run-target" },
+    command: { nodeId: request.target.nodeId, type: "run-node" },
     document: request.document,
     options,
   });

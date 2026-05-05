@@ -21,12 +21,11 @@ import {
 } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
 
 export type WorkflowRunPlannerCommand =
-  | { readonly type: "run-target"; readonly targetNodeIds: readonly string[] }
-  | { readonly type: "rerun-node"; readonly nodeId: string }
+  | { readonly type: "run-node"; readonly nodeId: string }
   | {
-      readonly type: "regenerate-item";
+      readonly type: "run-task-slot";
       readonly nodeExecutionId: string;
-      readonly itemIndexes: readonly number[];
+      readonly itemIndex: number;
     };
 
 export type ExistingNodeExecution = {
@@ -170,47 +169,31 @@ export function planWorkflowRun(
   const nodeExecutionById = new Map(
     input.latestNodeExecutions.map((execution) => [execution.id, execution]),
   );
-  const regenerationNodeExecution =
-    input.command.type === "regenerate-item"
+  const taskSlotNodeExecution =
+    input.command.type === "run-task-slot"
       ? nodeExecutionById.get(input.command.nodeExecutionId)
       : undefined;
-  if (
-    input.command.type === "regenerate-item" &&
-    input.command.itemIndexes.length === 0
-  ) {
-    return plannerError(
-      `Cannot regenerate items for Node Execution ${input.command.nodeExecutionId} without selected Item Indexes.`,
-    );
-  }
-  if (input.command.type === "regenerate-item") {
-    const selectedItemIndexes = new Set<number>();
-    for (const itemIndex of input.command.itemIndexes) {
-      if (!Number.isInteger(itemIndex) || itemIndex < 0) {
-        return plannerError(
-          `Cannot regenerate invalid Item Index ${itemIndex} for Node Execution ${input.command.nodeExecutionId}.`,
-        );
-      }
-      if (selectedItemIndexes.has(itemIndex)) {
-        return plannerError(
-          `Cannot regenerate item ${itemIndex} for Node Execution ${input.command.nodeExecutionId} more than once in the same command.`,
-        );
-      }
-      selectedItemIndexes.add(itemIndex);
+  if (input.command.type === "run-task-slot") {
+    if (
+      !Number.isInteger(input.command.itemIndex) ||
+      input.command.itemIndex < 0
+    ) {
+      return plannerError(
+        `Cannot run invalid Item Index ${input.command.itemIndex} for Node Execution ${input.command.nodeExecutionId}.`,
+      );
     }
   }
-  if (input.command.type === "regenerate-item" && !regenerationNodeExecution) {
+  if (input.command.type === "run-task-slot" && !taskSlotNodeExecution) {
     return plannerError(
-      `Cannot regenerate items for missing Node Execution ${input.command.nodeExecutionId}.`,
+      `Cannot run Task Run slot for missing Node Execution ${input.command.nodeExecutionId}.`,
     );
   }
   const schedulingTargetNodeIds =
-    input.command.type === "run-target"
-      ? input.command.targetNodeIds
-      : input.command.type === "rerun-node"
-        ? [input.command.nodeId]
-        : regenerationNodeExecution
-          ? [regenerationNodeExecution.nodeId]
-          : [];
+    input.command.type === "run-node"
+      ? [input.command.nodeId]
+      : taskSlotNodeExecution
+        ? [taskSlotNodeExecution.nodeId]
+        : [];
   const materializationFacts = materializeWorkflowRunTaskFacts({
     document: input.document,
     plannedItemCountByNodeId: input.plannedItemCountByNodeId,
@@ -499,60 +482,58 @@ export function planWorkflowRun(
     return true;
   };
 
-  if (input.command.type === "run-target") {
-    for (const targetNodeId of input.command.targetNodeIds) {
-      if (latestNodeExecutionHasActiveTaskRuns(targetNodeId)) {
-        return plannerError(
-          `Cannot run target ${targetNodeId} because its latest Node Execution has active Task Runs.`,
-        );
-      }
+  if (input.command.type === "run-node") {
+    if (latestNodeExecutionHasActiveTaskRuns(input.command.nodeId)) {
+      return plannerError(
+        `Cannot run node ${input.command.nodeId} because its latest Node Execution has active Task Runs.`,
+      );
     }
 
-    const orderedNodeIds: string[] = [];
-    const seenNodeIds = new Set<string>();
-    for (const targetNodeId of input.command.targetNodeIds) {
-      const upstream = blueprint.value.getUpstreamClosureNodeIds(targetNodeId);
+    const latestTargetExecution = latestNodeExecutionByNodeId.get(
+      input.command.nodeId,
+    );
+
+    if (!latestTargetExecution) {
+      const orderedNodeIds: string[] = [];
+      const seenNodeIds = new Set<string>();
+      const upstream = blueprint.value.getUpstreamClosureNodeIds(
+        input.command.nodeId,
+      );
       if (!upstream.ok) {
         return plannerError(upstream.error.message);
       }
       addOrdered(
         orderedNodeIds,
         seenNodeIds,
-        [...upstream.value, targetNodeId].filter((nodeId) =>
+        [...upstream.value, input.command.nodeId].filter((nodeId) =>
           isProviderBackedNode(targetNodeConfigByNodeId.get(nodeId)),
         ),
       );
-    }
 
-    const targetNodeIds = new Set(input.command.targetNodeIds);
-    for (const nodeId of orderedNodeIds) {
-      const nodeExecutionId = targetNodeIds.has(nodeId)
-        ? createNodeExecution(nodeId)
-        : ensureNodeExecution(nodeId);
-      for (const itemIndex of plannedItemIndexesForNode(nodeId)) {
-        if (!planTaskRunIfNeeded({ itemIndex, nodeExecutionId, nodeId })) {
-          return plannerError(`Missing dependency information for ${nodeId}.`);
+      for (const nodeId of orderedNodeIds) {
+        const nodeExecutionId =
+          nodeId === input.command.nodeId
+            ? createNodeExecution(nodeId)
+            : ensureNodeExecution(nodeId);
+        for (const itemIndex of plannedItemIndexesForNode(nodeId)) {
+          if (!planTaskRunIfNeeded({ itemIndex, nodeExecutionId, nodeId })) {
+            return plannerError(
+              `Missing dependency information for ${nodeId}.`,
+            );
+          }
         }
       }
-    }
 
-    return {
-      ok: true,
-      value: {
-        workflowDefinition,
-        nodeExecutionsToCreate,
-        nodeExecutionsToReuse,
-        taskDependenciesToCreate,
-        taskRunsToCreate,
-      },
-    };
-  }
-
-  if (input.command.type === "rerun-node") {
-    if (latestNodeExecutionHasActiveTaskRuns(input.command.nodeId)) {
-      return plannerError(
-        `Cannot rerun node ${input.command.nodeId} because its latest Node Execution has active Task Runs.`,
-      );
+      return {
+        ok: true,
+        value: {
+          workflowDefinition,
+          nodeExecutionsToCreate,
+          nodeExecutionsToReuse,
+          taskDependenciesToCreate,
+          taskRunsToCreate,
+        },
+      };
     }
 
     const nodeExecutionId = createNodeExecution(input.command.nodeId);
@@ -592,17 +573,18 @@ export function planWorkflowRun(
   const nodeExecution = nodeExecutionById.get(input.command.nodeExecutionId);
   if (!nodeExecution) {
     return plannerError(
-      `Cannot regenerate items for missing Node Execution ${input.command.nodeExecutionId}.`,
+      `Cannot run Task Run slot for missing Node Execution ${input.command.nodeExecutionId}.`,
     );
   }
 
-  for (const itemIndex of input.command.itemIndexes) {
-    const latest = latestTaskRun(input.command.nodeExecutionId, itemIndex);
-    if (latest && isActiveTaskRunStatus(latest.status)) {
-      return plannerError(
-        `Cannot regenerate item ${itemIndex} for Node Execution ${input.command.nodeExecutionId} because the latest Attempt is active.`,
-      );
-    }
+  const latest = latestTaskRun(
+    input.command.nodeExecutionId,
+    input.command.itemIndex,
+  );
+  if (latest && isActiveTaskRunStatus(latest.status)) {
+    return plannerError(
+      `Cannot run Item Index ${input.command.itemIndex} for Node Execution ${input.command.nodeExecutionId} because the latest Attempt is active.`,
+    );
   }
 
   nodeExecutionsToReuse.push({
@@ -611,30 +593,26 @@ export function planWorkflowRun(
   });
   executionIdByNodeId.set(nodeExecution.nodeId, nodeExecution.id);
   if (
-    !ensureUpstreamProviderTaskRuns(
-      nodeExecution.nodeId,
-      input.command.itemIndexes,
-    )
+    !ensureUpstreamProviderTaskRuns(nodeExecution.nodeId, [
+      input.command.itemIndex,
+    ])
   ) {
     return plannerError(
       `Missing dependency information for ${nodeExecution.nodeId}.`,
     );
   }
 
-  for (const itemIndex of input.command.itemIndexes) {
-    const latest = latestTaskRun(input.command.nodeExecutionId, itemIndex);
-    if (
-      !createTaskRun({
-        attempt: latest ? latest.attempt + 1 : 0,
-        itemIndex,
-        nodeExecutionId: input.command.nodeExecutionId,
-        nodeId: nodeExecution.nodeId,
-      })
-    ) {
-      return plannerError(
-        `Missing dependency information for ${nodeExecution.nodeId}.`,
-      );
-    }
+  if (
+    !createTaskRun({
+      attempt: latest ? latest.attempt + 1 : 0,
+      itemIndex: input.command.itemIndex,
+      nodeExecutionId: input.command.nodeExecutionId,
+      nodeId: nodeExecution.nodeId,
+    })
+  ) {
+    return plannerError(
+      `Missing dependency information for ${nodeExecution.nodeId}.`,
+    );
   }
 
   return {

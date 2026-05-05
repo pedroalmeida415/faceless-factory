@@ -31,23 +31,10 @@ export const WorkflowExecutionService = {
 
       yield* workflowStudioStore.setExecutionStreaming(true);
 
-      const previousProjection =
-        yield* WorkflowClientService.getTaskProjection(projectId);
-      const hasExistingNodeExecution = previousProjection.some(
-        (slot) => slot.nodeId === target.nodeId,
-      );
-
-      if (hasExistingNodeExecution) {
-        yield* WorkflowClientService.rerunNode({
-          nodeId: target.nodeId,
-          projectId,
-        });
-      } else {
-        yield* WorkflowClientService.runTarget({
-          nodeId: target.nodeId,
-          projectId,
-        });
-      }
+      yield* WorkflowClientService.runNode({
+        nodeId: target.nodeId,
+        projectId,
+      });
 
       const initialProjection =
         yield* WorkflowClientService.getTaskProjection(projectId);

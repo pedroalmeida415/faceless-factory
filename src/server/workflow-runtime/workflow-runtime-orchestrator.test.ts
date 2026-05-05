@@ -39,7 +39,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     });
 
     const result = await orchestrator.startWorkflowRun({
-      command: { type: "run-target", targetNodeIds: ["script"] },
+      command: { type: "run-node", nodeId: "script" },
       document: makeDocument(),
       latestNodeExecutions: [
         { id: "topic-execution", nodeId: "topic" },
@@ -117,7 +117,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     });
 
     const result = await orchestrator.startWorkflowRun({
-      command: { type: "run-target", targetNodeIds: ["missing-node"] },
+      command: { type: "run-node", nodeId: "missing-node" },
       document: makeDocument(),
       latestNodeExecutions: [],
       latestTaskRuns: [],
@@ -201,7 +201,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     ]);
   });
 
-  test("delegates rerun-node and regenerate-item commands to the planner", async () => {
+  test("delegates run-node and run-task-slot commands to the planner", async () => {
     const sideEffects: string[] = [];
     const repository = new FakeRepository(sideEffects);
     const orchestrator = createWorkflowRuntimeOrchestrator({
@@ -213,7 +213,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     });
 
     const rerun = await orchestrator.startWorkflowRun({
-      command: { type: "rerun-node", nodeId: "script" },
+      command: { type: "run-node", nodeId: "script" },
       document: makeDocument(),
       latestNodeExecutions: [],
       latestTaskRuns: [],
@@ -222,8 +222,8 @@ describe("WorkflowRuntimeOrchestrator", () => {
     });
     const regenerate = await orchestrator.startWorkflowRun({
       command: {
-        type: "regenerate-item",
-        itemIndexes: [0],
+        type: "run-task-slot",
+        itemIndex: 0,
         nodeExecutionId: "script-execution",
       },
       document: makeDocument(),
@@ -736,7 +736,7 @@ function nextId(prefix: string) {
 
 function runScriptInput() {
   return {
-    command: { type: "run-target", targetNodeIds: ["script"] } as const,
+    command: { type: "run-node", nodeId: "script" } as const,
     document: makeDocument(),
     latestNodeExecutions: [
       { id: "topic-execution", nodeId: "topic" },

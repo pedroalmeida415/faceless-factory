@@ -76,12 +76,12 @@ describe("Workflow runtime state-machine contract", () => {
     await client.close();
   });
 
-  test("planner run-target contract creates upstream closure, reuses durable batches, waits on active parents, and never creates empty executable Node Executions", () => {
+  test("planner run-node contract creates upstream closure, reuses durable batches, waits on active parents, and never creates empty executable Node Executions", () => {
     const document = generatedImageToGeneratedVideoDocument();
     const firstRunLatestTaskRuns: ReturnType<typeof latestTaskRun>[] = [];
     const firstRun = unwrapPlan(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["video"] },
+        command: { type: "run-node", nodeId: "video" },
         createNodeExecutionId: nextId("node-execution"),
         createTaskRunId: nextId("task-run"),
         document,
@@ -139,7 +139,7 @@ describe("Workflow runtime state-machine contract", () => {
     ];
     const activeUpstreamRun = unwrapPlan(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["video"] },
+        command: { type: "run-node", nodeId: "video" },
         createNodeExecutionId: nextId("node-execution-active"),
         createTaskRunId: nextId("task-run-active"),
         document,
@@ -188,7 +188,7 @@ describe("Workflow runtime state-machine contract", () => {
     ];
     const recoverableUpstreamRun = unwrapPlan(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["video"] },
+        command: { type: "run-node", nodeId: "video" },
         createNodeExecutionId: nextId("node-execution-recover"),
         createTaskRunId: nextId("task-run-recover"),
         document,
@@ -260,7 +260,7 @@ describe("Workflow runtime state-machine contract", () => {
     ];
     const reviewBarrierRun = unwrapPlan(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["video"] },
+        command: { type: "run-node", nodeId: "video" },
         document,
         latestNodeExecutions: [{ id: "image-execution", nodeId: "image" }],
         latestTaskRuns: reviewBarrierLatestTaskRuns,
@@ -279,16 +279,16 @@ describe("Workflow runtime state-machine contract", () => {
     );
   });
 
-  test("planner run-target contract fills empty reused upstream Node Execution slots before children wait on them", () => {
+  test("planner run-node contract fills empty reused upstream Node Execution slots before children wait on them", () => {
     const document = generatedImageToGeneratedVideoDocument();
     const latestTaskRuns: ReturnType<typeof latestTaskRun>[] = [];
     const plan = unwrapPlan(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["video"] },
+        command: { type: "run-node", nodeId: "video" },
         createNodeExecutionId: nextId(
-          "runtime-node-execution-run-target-empty-parent",
+          "runtime-node-execution-run-node-empty-parent",
         ),
-        createTaskRunId: nextId("runtime-task-run-run-target-empty-parent"),
+        createTaskRunId: nextId("runtime-task-run-run-node-empty-parent"),
         document,
         latestNodeExecutions: [
           { id: "empty-image-execution", nodeId: "image" },
@@ -325,13 +325,13 @@ describe("Workflow runtime state-machine contract", () => {
         },
         {
           itemIndex: 0,
-          nodeExecutionId: "runtime-node-execution-run-target-empty-parent-1",
+          nodeExecutionId: "runtime-node-execution-run-node-empty-parent-1",
           nodeId: "video",
           status: "WAITING_UPSTREAM",
         },
         {
           itemIndex: 1,
-          nodeExecutionId: "runtime-node-execution-run-target-empty-parent-1",
+          nodeExecutionId: "runtime-node-execution-run-node-empty-parent-1",
           nodeId: "video",
           status: "WAITING_UPSTREAM",
         },
@@ -362,12 +362,12 @@ describe("Workflow runtime state-machine contract", () => {
     assertPlanInvariants(plan, document, latestTaskRuns);
   });
 
-  test("planner rerun-node contract fills empty reused upstream Node Execution slots before children wait on them", () => {
+  test("planner run-node contract fills empty reused upstream Node Execution slots before children wait on them", () => {
     const document = generatedImageToGeneratedVideoDocument();
     const latestTaskRuns: ReturnType<typeof latestTaskRun>[] = [];
     const plan = unwrapPlan(
       planWorkflowRun({
-        command: { type: "rerun-node", nodeId: "video" },
+        command: { type: "run-node", nodeId: "video" },
         createNodeExecutionId: nextId("runtime-node-execution-empty-parent"),
         createTaskRunId: nextId("runtime-task-run-empty-parent"),
         document,
@@ -427,7 +427,7 @@ describe("Workflow runtime state-machine contract", () => {
     const document = generatedImageToGeneratedVideoDocument();
     const plan = unwrapPlan(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["video"] },
+        command: { type: "run-node", nodeId: "video" },
         createNodeExecutionId: nextId("runtime-node-execution"),
         createTaskRunId: nextId("runtime-task-run"),
         document,
@@ -707,9 +707,9 @@ describe("Workflow runtime state-machine contract", () => {
     const regenerate = unwrapPlan(
       planWorkflowRun({
         command: {
-          itemIndexes: [1],
+          itemIndex: 1,
           nodeExecutionId: "node-execution-script-existing",
-          type: "regenerate-item",
+          type: "run-task-slot",
         },
         document,
         latestNodeExecutions: [
@@ -752,7 +752,7 @@ describe("Workflow runtime state-machine contract", () => {
     );
     const rerun = unwrapPlan(
       planWorkflowRun({
-        command: { type: "rerun-node", nodeId: "script" },
+        command: { type: "run-node", nodeId: "script" },
         document,
         latestNodeExecutions: [
           { id: "node-execution-script-existing", nodeId: "script" },
@@ -784,23 +784,6 @@ describe("Workflow runtime state-machine contract", () => {
         { attempt: 0, itemIndex: 0 },
         { attempt: 0, itemIndex: 1 },
       ],
-    );
-    assert.equal(
-      planWorkflowRun({
-        command: {
-          itemIndexes: [1, 1],
-          nodeExecutionId: "node-execution-script-existing",
-          type: "regenerate-item",
-        },
-        document,
-        latestNodeExecutions: [
-          { id: "node-execution-script-existing", nodeId: "script" },
-        ],
-        latestTaskRuns: [],
-        ownerId: "owner-user",
-        workflowId: "workflow-id",
-      }).ok,
-      false,
     );
     await assertRuntimeInvariants(db);
   });
@@ -1148,7 +1131,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
     });
     const plan = unwrapPlan(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         createNodeExecutionId: () => "node-execution-child-freeze",
         createTaskRunId: () => "child-freezes-parent",
         document: broadcastGeneratedTextDocument(),
@@ -1238,7 +1221,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
     ];
     const broadcastPlan = unwrapPlan(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         createNodeExecutionId: () => "node-execution-broadcast-script",
         createTaskRunId: nextId("broadcast-script-task"),
         document: broadcastGeneratedTextDocument(),
@@ -1331,7 +1314,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
     ];
     const reorderPlan = unwrapPlan(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         createNodeExecutionId: () => "node-execution-reorder-script",
         createTaskRunId: nextId("reorder-script-task"),
         document: outputReorderDocument(),
@@ -1375,7 +1358,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
     const document = simpleScriptDocument();
     assert.equal(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         document,
         latestNodeExecutions: [
           { id: "node-execution-active-script", nodeId: "script" },
@@ -1394,7 +1377,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
     );
     assert.equal(
       planWorkflowRun({
-        command: { type: "rerun-node", nodeId: "script" },
+        command: { type: "run-node", nodeId: "script" },
         document,
         latestNodeExecutions: [
           { id: "node-execution-active-script", nodeId: "script" },

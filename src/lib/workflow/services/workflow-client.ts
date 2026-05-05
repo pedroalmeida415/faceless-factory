@@ -28,9 +28,13 @@ export const WorkflowClientService = {
     }) as Effect.Effect<WorkflowProjectSaveResponse, WorkflowRequestError>;
   },
 
-  runTarget(input: { nodeId: string; projectId: string }) {
+  runNode(input: { nodeId: string; projectId: string }) {
     return Effect.tryPromise({
-      try: () => trpcClient.workflowRuntime.runTarget.mutate(input),
+      try: () =>
+        trpcClient.workflowRuntime.run.mutate({
+          projectId: input.projectId,
+          target: { nodeId: input.nodeId, type: "node" },
+        }),
       catch: (cause) =>
         new WorkflowRequestError({
           message: getErrorMessage(cause),
@@ -39,27 +43,20 @@ export const WorkflowClientService = {
     });
   },
 
-  rerunNode(input: { nodeId: string; projectId: string }) {
-    return Effect.tryPromise({
-      try: () => trpcClient.workflowRuntime.rerunNode.mutate(input),
-      catch: (cause) =>
-        new WorkflowRequestError({
-          message: getErrorMessage(cause),
-          cause,
-        }),
-    });
-  },
-
-  regenerateItems(input: {
-    itemIndexes: readonly number[];
+  runTaskSlot(input: {
+    itemIndex: number;
     nodeExecutionId: string;
     projectId: string;
   }) {
     return Effect.tryPromise({
       try: () =>
-        trpcClient.workflowRuntime.regenerateItems.mutate({
-          ...input,
-          itemIndexes: [...input.itemIndexes],
+        trpcClient.workflowRuntime.run.mutate({
+          projectId: input.projectId,
+          target: {
+            itemIndex: input.itemIndex,
+            nodeExecutionId: input.nodeExecutionId,
+            type: "task-slot",
+          },
         }),
       catch: (cause) =>
         new WorkflowRequestError({

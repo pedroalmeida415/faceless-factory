@@ -10,15 +10,15 @@ import { estimateWorkflowRuntimeCommand } from "~/lib/workflow/pricing";
 import { planWorkflowRun } from "~/lib/workflow-runtime/planning/workflow-run-planner";
 
 describe("Workflow runtime pricing", () => {
-  test("estimates run-target Task Run counts from materialized Item Index facts", () => {
+  test("estimates run-node Task Run counts from materialized Item Index facts", () => {
     const document = materializedTextFanOutDocument();
     const quote = estimateWorkflowRuntimeCommand({
-      command: { targetNodeIds: ["summary"], type: "run-target" },
+      command: { nodeId: "summary", type: "run-node" },
       document,
     });
     const plan = unwrapPlan(
       planWorkflowRun({
-        command: { targetNodeIds: ["summary"], type: "run-target" },
+        command: { nodeId: "summary", type: "run-node" },
         document,
         latestNodeExecutions: [],
         latestTaskRuns: [],
@@ -33,15 +33,15 @@ describe("Workflow runtime pricing", () => {
     );
   });
 
-  test("estimates Rerun Node Task Run counts including required upstream provider slots", () => {
+  test("estimates Run Node Task Run counts including required upstream provider slots", () => {
     const document = materializedTextFanOutDocument();
     const quote = estimateWorkflowRuntimeCommand({
-      command: { nodeId: "summary", type: "rerun-node" },
+      command: { nodeId: "summary", type: "run-node" },
       document,
     });
     const plan = unwrapPlan(
       planWorkflowRun({
-        command: { nodeId: "summary", type: "rerun-node" },
+        command: { nodeId: "summary", type: "run-node" },
         document,
         latestNodeExecutions: [],
         latestTaskRuns: [],
@@ -60,7 +60,7 @@ describe("Workflow runtime pricing", () => {
     );
   });
 
-  test("estimates Regenerate Item Task Run counts including required upstream provider slots", () => {
+  test("estimates Run Task Slot Task Run counts including required upstream provider slots", () => {
     const document = materializedTextFanOutDocument();
     const latestNodeExecutions = [
       { id: "node-execution-summary", nodeId: "summary" },
@@ -83,9 +83,9 @@ describe("Workflow runtime pricing", () => {
     ];
     const quote = estimateWorkflowRuntimeCommand({
       command: {
-        itemIndexes: [1],
+        itemIndex: 1,
         nodeExecutionId: "node-execution-summary",
-        type: "regenerate-item",
+        type: "run-task-slot",
       },
       document,
       latestNodeExecutions,
@@ -93,9 +93,9 @@ describe("Workflow runtime pricing", () => {
     const plan = unwrapPlan(
       planWorkflowRun({
         command: {
-          itemIndexes: [1],
+          itemIndex: 1,
           nodeExecutionId: "node-execution-summary",
-          type: "regenerate-item",
+          type: "run-task-slot",
         },
         document,
         latestNodeExecutions,
@@ -118,12 +118,12 @@ describe("Workflow runtime pricing", () => {
   test("estimates multimodal parent Task Run counts from materialized provider facts", () => {
     const document = multimodalParentWorkflowDocument();
     const quote = estimateWorkflowRuntimeCommand({
-      command: { targetNodeIds: ["video"], type: "run-target" },
+      command: { nodeId: "video", type: "run-node" },
       document,
     });
     const plan = unwrapPlan(
       planWorkflowRun({
-        command: { targetNodeIds: ["video"], type: "run-target" },
+        command: { nodeId: "video", type: "run-node" },
         document,
         latestNodeExecutions: [],
         latestTaskRuns: [],

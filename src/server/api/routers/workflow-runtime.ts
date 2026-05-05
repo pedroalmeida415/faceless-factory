@@ -25,22 +25,19 @@ const estimatedCreditCostByNodeIdSchema = z.record(
   z.number().int().nonnegative(),
 );
 
-const runNodeInputSchema = z.object({
-  estimatedCreditCostByNodeId: estimatedCreditCostByNodeIdSchema.optional(),
-  nodeId: z.string().min(1),
-  projectId: z.string().min(1),
+const runTaskSlotTargetSchema = z.object({
+  itemIndex: z.number().int().nonnegative(),
+  nodeExecutionId: z.string().min(1),
+  type: z.literal("task-slot"),
 });
 
-const regenerateItemsInputSchema = z.object({
+const runInputSchema = z.object({
   estimatedCreditCostByNodeId: estimatedCreditCostByNodeIdSchema.optional(),
-  itemIndexes: z
-    .array(z.number().int().nonnegative())
-    .min(1)
-    .refine((itemIndexes) => new Set(itemIndexes).size === itemIndexes.length, {
-      message: "Item Indexes must be unique.",
-    }),
-  nodeExecutionId: z.string().min(1),
   projectId: z.string().min(1),
+  target: z.discriminatedUnion("type", [
+    z.object({ nodeId: z.string().min(1), type: z.literal("node") }),
+    runTaskSlotTargetSchema,
+  ]),
 });
 
 const taskRunDecisionInputSchema = z.object({
@@ -54,8 +51,8 @@ const taskEventsInputSchema = z.object({
 });
 
 export const workflowRuntimeRouter = createTRPCRouter({
-  runTarget: protectedProcedure
-    .input(runNodeInputSchema)
+  run: protectedProcedure
+    .input(runInputSchema)
     .mutation(async ({ ctx, input }) => {
       const ownerUserId = ctx.session.user.id;
       const project = await getWorkflowProject({
@@ -71,71 +68,14 @@ export const workflowRuntimeRouter = createTRPCRouter({
 
       const result = await orchestrator.startWorkflowRun({
         ...planningState,
-        command: { targetNodeIds: [input.nodeId], type: "run-target" },
-        document: project.document,
-        estimatedCreditCostByNodeId: estimateWorkflowRuntimeCreditCostByNodeId({
-          document: project.document,
-          overrides: input.estimatedCreditCostByNodeId,
-        }),
-        ownerId: ownerUserId,
-        workflowId: project.id,
-      });
-
-      return unwrapOrchestratorResult(result);
-    }),
-
-  rerunNode: protectedProcedure
-    .input(runNodeInputSchema)
-    .mutation(async ({ ctx, input }) => {
-      const ownerUserId = ctx.session.user.id;
-      const project = await getWorkflowProject({
-        ownerUserId,
-        projectId: input.projectId,
-      }).catch(throwTRPCError);
-      const planningState = await getPlanningStateForWorkflow(db, {
-        ownerUserId,
-        workflowId: project.id,
-      }).catch(throwTRPCError);
-      const { orchestrator } =
-        await createWorkflowRuntimeComposition().catch(throwTRPCError);
-
-      const result = await orchestrator.startWorkflowRun({
-        ...planningState,
-        command: { nodeId: input.nodeId, type: "rerun-node" },
-        document: project.document,
-        estimatedCreditCostByNodeId: estimateWorkflowRuntimeCreditCostByNodeId({
-          document: project.document,
-          overrides: input.estimatedCreditCostByNodeId,
-        }),
-        ownerId: ownerUserId,
-        workflowId: project.id,
-      });
-
-      return unwrapOrchestratorResult(result);
-    }),
-
-  regenerateItems: protectedProcedure
-    .input(regenerateItemsInputSchema)
-    .mutation(async ({ ctx, input }) => {
-      const ownerUserId = ctx.session.user.id;
-      const project = await getWorkflowProject({
-        ownerUserId,
-        projectId: input.projectId,
-      }).catch(throwTRPCError);
-      const planningState = await getPlanningStateForWorkflow(db, {
-        ownerUserId,
-        workflowId: project.id,
-      }).catch(throwTRPCError);
-      const { orchestrator } =
-        await createWorkflowRuntimeComposition().catch(throwTRPCError);
-
-      const result = await orchestrator.startWorkflowRun({
-        ...planningState,
-        command: {
-          itemIndexes: input.itemIndexes,
-          nodeExecutionId: input.nodeExecutionId,
-          type: "regenerate-item",
-        },
+        command:
+          input.target.type === "node"
+            ? { nodeId: input.target.nodeId, type: "run-node" }
+            : {
+                itemIndex: input.target.itemIndex,
+                nodeExecutionId: input.target.nodeExecutionId,
+                type: "run-task-slot",
+              },
         document: project.document,
         estimatedCreditCostByNodeId: estimateWorkflowRuntimeCreditCostByNodeId({
           document: project.document,

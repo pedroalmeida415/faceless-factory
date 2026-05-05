@@ -292,10 +292,10 @@ function workflowAsset(id: string) {
 }
 
 describe("WorkflowRunPlanner", () => {
-  test("run-target plans the full upstream closure and starts only satisfied roots as Queued", () => {
+  test("run-node plans the full upstream closure and starts only satisfied roots as Queued", () => {
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         document: makeDocument(),
         latestNodeExecutions: [],
         latestTaskRuns: [],
@@ -327,10 +327,10 @@ describe("WorkflowRunPlanner", () => {
     assert.deepEqual(plan.taskDependenciesToCreate, []);
   });
 
-  test("run-target executes a new review-enabled upstream generator before its downstream child waits", () => {
+  test("run-node executes a new review-enabled upstream generator before its downstream child waits", () => {
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["downstream-image"] },
+        command: { type: "run-node", nodeId: "downstream-image" },
         createNodeExecutionId: (() => {
           let index = 0;
           return () => `node-execution-${++index}`;
@@ -421,7 +421,7 @@ describe("WorkflowRunPlanner", () => {
   test("carries estimated credit costs onto planned Task Runs", () => {
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         document: makeDocument(),
         estimatedCreditCostByNodeId: { prompt: 3, script: 8, topic: 1 },
         latestNodeExecutions: [],
@@ -452,7 +452,7 @@ describe("WorkflowRunPlanner", () => {
     const definition = toWorkflowDefinitionGraphDocument(document);
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         document,
         latestNodeExecutions: [],
         latestTaskRuns: [],
@@ -473,7 +473,7 @@ describe("WorkflowRunPlanner", () => {
   test("materializes direct queued Task Run input snapshots before persistence", () => {
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         createNodeExecutionId: () => "node-execution-script",
         createTaskRunId: () => "task-run-script",
         document: makeDocument(),
@@ -510,14 +510,14 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
-  test("run-target freezes Waiting Upstream static input snapshots while dependencies stay generated-parent-only", () => {
+  test("run-node freezes Waiting Upstream static input snapshots while dependencies stay generated-parent-only", () => {
     let nodeExecutionIndex = 0;
     let taskRunIndex = 0;
     const document = makeWaitingUpstreamFreezeDocument();
 
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["image"] },
+        command: { type: "run-node", nodeId: "image" },
         createNodeExecutionId: () => `node-execution-${++nodeExecutionIndex}`,
         createTaskRunId: () => `task-run-${++taskRunIndex}`,
         document,
@@ -644,13 +644,13 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
-  test("run-target uses injected plan identities consistently across Task Dependencies", () => {
+  test("run-node uses injected plan identities consistently across Task Dependencies", () => {
     let nodeExecutionIndex = 0;
     let taskRunIndex = 0;
 
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         createNodeExecutionId: () => `node-execution-${++nodeExecutionIndex}`,
         createTaskRunId: () => `task-run-${++taskRunIndex}`,
         document: makeDocument(),
@@ -675,7 +675,7 @@ describe("WorkflowRunPlanner", () => {
   test("does not create Task Dependencies for static prompt and asset inputs", () => {
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["image"] },
+        command: { type: "run-node", nodeId: "image" },
         document: makeGeneratorInputDocument(),
         latestNodeExecutions: [],
         latestTaskRuns: [],
@@ -700,7 +700,7 @@ describe("WorkflowRunPlanner", () => {
   test("maps output-reorder item indexes onto provider-backed Task Dependencies", () => {
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         document: makeOutputReorderDependencyDocument(),
         latestNodeExecutions: [],
         latestTaskRuns: [],
@@ -754,7 +754,7 @@ describe("WorkflowRunPlanner", () => {
 
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         document: malformedDocument,
         latestNodeExecutions: [
           latestNodeExecution("source-execution", "source"),
@@ -802,10 +802,10 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
-  test("run-target reuses latest upstream Node Executions and creates only the missing target batch", () => {
+  test("run-node reuses latest upstream Node Executions and creates only the missing target batch", () => {
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         document: makeDocument(),
         latestNodeExecutions: [
           latestNodeExecution("topic-execution", "topic"),
@@ -853,10 +853,10 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
-  test("run-target creates next upstream attempts for recoverable failed latest slots", () => {
+  test("run-node creates next upstream attempts for recoverable failed latest slots", () => {
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         document: makeDocument(),
         latestNodeExecutions: [
           latestNodeExecution("topic-execution", "topic"),
@@ -898,10 +898,10 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
-  test("run-target does not duplicate active upstream attempts", () => {
+  test("run-node does not duplicate active upstream attempts", () => {
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         document: makeDocument(),
         latestNodeExecutions: [
           latestNodeExecution("topic-execution", "topic"),
@@ -931,9 +931,9 @@ describe("WorkflowRunPlanner", () => {
     assert.equal(plan.taskRunsToCreate[0]?.status, "QUEUED");
   });
 
-  test("run-target rejects when the target latest Node Execution has active Task Runs", () => {
+  test("run-node rejects when the target latest Node Execution has active Task Runs", () => {
     const result = planWorkflowRun({
-      command: { type: "run-target", targetNodeIds: ["script"] },
+      command: { type: "run-node", nodeId: "script" },
       document: makeDocument(),
       latestNodeExecutions: [latestNodeExecution("script-execution", "script")],
       latestTaskRuns: [
@@ -951,14 +951,14 @@ describe("WorkflowRunPlanner", () => {
     assert.deepEqual(result.error, {
       _tag: "WorkflowRunPlannerError",
       message:
-        "Cannot run target script because its latest Node Execution has active Task Runs.",
+        "Cannot run node script because its latest Node Execution has active Task Runs.",
     });
   });
 
-  test("run-target creates a new target batch when the latest target execution is terminal and reuses approved upstream", () => {
+  test("run-node creates a new target batch when the latest target execution is terminal and reuses approved upstream", () => {
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "run-target", targetNodeIds: ["script"] },
+        command: { type: "run-node", nodeId: "script" },
         document: makeDocument(),
         latestNodeExecutions: [
           latestNodeExecution("topic-execution", "topic"),
@@ -1015,10 +1015,10 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
-  test("rerun-node creates a new Node Execution with fresh Attempt 0 Task Runs", () => {
+  test("run-node creates a new Node Execution with fresh Attempt 0 Task Runs", () => {
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "rerun-node", nodeId: "script" },
+        command: { type: "run-node", nodeId: "script" },
         document: makeDocument(),
         latestNodeExecutions: [
           latestNodeExecution("script-execution", "script"),
@@ -1059,7 +1059,7 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
-  test("rerun-node materializes fresh snapshots for every planned Item Index from current blueprint settings", () => {
+  test("run-node materializes fresh snapshots for every planned Item Index from current blueprint settings", () => {
     const topic = makeNode("list", "topic");
     const prompt = makeNode("prompt", "prompt");
     const script = makeNode("llmGenerator", "script");
@@ -1084,7 +1084,7 @@ describe("WorkflowRunPlanner", () => {
 
     const plan = unwrap(
       planWorkflowRun({
-        command: { type: "rerun-node", nodeId: "script" },
+        command: { type: "run-node", nodeId: "script" },
         createNodeExecutionId: () => "node-execution-script-current",
         createTaskRunId: (() => {
           let index = 0;
@@ -1177,9 +1177,9 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
-  test("rerun-node rejects when the latest Node Execution has active Task Runs", () => {
+  test("run-node rejects when the latest Node Execution has active Task Runs", () => {
     const result = planWorkflowRun({
-      command: { type: "rerun-node", nodeId: "script" },
+      command: { type: "run-node", nodeId: "script" },
       document: makeDocument(),
       latestNodeExecutions: [latestNodeExecution("script-execution", "script")],
       latestTaskRuns: [
@@ -1197,17 +1197,17 @@ describe("WorkflowRunPlanner", () => {
     assert.deepEqual(result.error, {
       _tag: "WorkflowRunPlannerError",
       message:
-        "Cannot rerun node script because its latest Node Execution has active Task Runs.",
+        "Cannot run node script because its latest Node Execution has active Task Runs.",
     });
   });
 
-  test("regenerate-item preserves the Node Execution and creates next attempts for selected Item Indexes", () => {
+  test("run-task-slot preserves the Node Execution and creates the next Attempt for the selected Item Index", () => {
     const plan = unwrap(
       planWorkflowRun({
         command: {
-          itemIndexes: [1],
+          itemIndex: 1,
           nodeExecutionId: "script-execution",
-          type: "regenerate-item",
+          type: "run-task-slot",
         },
         document: makeDocument(),
         latestNodeExecutions: [
@@ -1256,13 +1256,13 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
-  test("regenerate-item creates dependencies to latest approved parent executions before queueing the next Attempt", () => {
+  test("run-task-slot creates dependencies to latest approved parent executions before queueing the next Attempt", () => {
     const plan = unwrap(
       planWorkflowRun({
         command: {
-          itemIndexes: [0],
+          itemIndex: 0,
           nodeExecutionId: "script-execution",
-          type: "regenerate-item",
+          type: "run-task-slot",
         },
         document: makeOutputReorderDependencyDocument(),
         latestNodeExecutions: [
@@ -1327,14 +1327,14 @@ describe("WorkflowRunPlanner", () => {
     ]);
   });
 
-  test("regenerate-item materializes selected next Attempt snapshots while historical Attempts stay frozen", () => {
+  test("run-task-slot materializes selected next Attempt snapshots while historical Attempts stay frozen", () => {
     const document = makeWaitingUpstreamFreezeDocument();
     const plan = unwrap(
       planWorkflowRun({
         command: {
-          itemIndexes: [1],
+          itemIndex: 1,
           nodeExecutionId: "image-execution",
-          type: "regenerate-item",
+          type: "run-task-slot",
         },
         createTaskRunId: () => "image-task-regenerated-1",
         document,
@@ -1453,12 +1453,12 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
-  test("regenerate-item rejects when a selected latest Attempt is active", () => {
+  test("run-task-slot rejects when the selected latest Attempt is active", () => {
     const result = planWorkflowRun({
       command: {
-        itemIndexes: [0],
+        itemIndex: 0,
         nodeExecutionId: "script-execution",
-        type: "regenerate-item",
+        type: "run-task-slot",
       },
       document: makeDocument(),
       latestNodeExecutions: [latestNodeExecution("script-execution", "script")],
@@ -1478,16 +1478,16 @@ describe("WorkflowRunPlanner", () => {
     assert.deepEqual(result.error, {
       _tag: "WorkflowRunPlannerError",
       message:
-        "Cannot regenerate item 0 for Node Execution script-execution because the latest Attempt is active.",
+        "Cannot run Item Index 0 for Node Execution script-execution because the latest Attempt is active.",
     });
   });
 
-  test("regenerate-item rejects an empty selected Item Index set", () => {
+  test("run-task-slot rejects an invalid selected Item Index", () => {
     const result = planWorkflowRun({
       command: {
-        itemIndexes: [],
+        itemIndex: -1,
         nodeExecutionId: "script-execution",
-        type: "regenerate-item",
+        type: "run-task-slot",
       },
       document: makeDocument(),
       latestNodeExecutions: [latestNodeExecution("script-execution", "script")],
@@ -1500,58 +1500,7 @@ describe("WorkflowRunPlanner", () => {
     assert.deepEqual(result.error, {
       _tag: "WorkflowRunPlannerError",
       message:
-        "Cannot regenerate items for Node Execution script-execution without selected Item Indexes.",
-    });
-  });
-
-  test("regenerate-item rejects duplicate selected Item Indexes", () => {
-    const result = planWorkflowRun({
-      command: {
-        itemIndexes: [0, 0],
-        nodeExecutionId: "script-execution",
-        type: "regenerate-item",
-      },
-      document: makeDocument(),
-      latestNodeExecutions: [latestNodeExecution("script-execution", "script")],
-      latestTaskRuns: [
-        latestTaskRun({
-          id: "script-task",
-          itemIndex: 0,
-          nodeExecutionId: "script-execution",
-          status: "APPROVED",
-        }),
-      ],
-      ownerId: "owner-1",
-      workflowId: "workflow-1",
-    });
-
-    assert.equal(result.ok, false);
-    assert.deepEqual(result.error, {
-      _tag: "WorkflowRunPlannerError",
-      message:
-        "Cannot regenerate item 0 for Node Execution script-execution more than once in the same command.",
-    });
-  });
-
-  test("regenerate-item rejects invalid selected Item Indexes", () => {
-    const result = planWorkflowRun({
-      command: {
-        itemIndexes: [-1],
-        nodeExecutionId: "script-execution",
-        type: "regenerate-item",
-      },
-      document: makeDocument(),
-      latestNodeExecutions: [latestNodeExecution("script-execution", "script")],
-      latestTaskRuns: [],
-      ownerId: "owner-1",
-      workflowId: "workflow-1",
-    });
-
-    assert.equal(result.ok, false);
-    assert.deepEqual(result.error, {
-      _tag: "WorkflowRunPlannerError",
-      message:
-        "Cannot regenerate invalid Item Index -1 for Node Execution script-execution.",
+        "Cannot run invalid Item Index -1 for Node Execution script-execution.",
     });
   });
 });
