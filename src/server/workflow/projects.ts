@@ -13,12 +13,12 @@ import {
   WorkflowAuthorizationError,
   WorkflowValidationError,
 } from "~/lib/workflow/errors";
-import { extractWorkflowExecutionSubgraph } from "~/lib/workflow/execution/subgraph";
 import {
   DEFAULT_WORKFLOW_PROJECT_NAME,
   type WorkflowProject,
   type WorkflowProjectSaveResponse,
 } from "~/lib/workflow/project";
+import { assertActiveTaskRunSaveAllowed } from "~/lib/workflow/save-lock-policy";
 import { WorkflowGraphValidator } from "~/lib/workflow/workflow-graph-validator";
 import { db } from "~/server/db";
 import { workflows } from "~/server/db/schema";
@@ -70,41 +70,6 @@ function toWorkflowProject(row: WorkflowProjectRow): WorkflowProject {
     document: hydratedDocument,
     documentRevision: row.documentRevision,
   };
-}
-
-function assertLockedExecutionSliceUnchanged(params: {
-  currentDocument: WorkflowGraphDocument;
-  lockedTargetNodeIds: string[];
-  nextDocument: WorkflowGraphDocument;
-}) {
-  if (!params.lockedTargetNodeIds.length) {
-    return;
-  }
-
-  const currentDocument = hydrateWorkflowGraphDocument(params.currentDocument);
-  const nextDocument = hydrateWorkflowGraphDocument(params.nextDocument);
-  if (!currentDocument || !nextDocument) {
-    throw new WorkflowValidationError({
-      message: "Workflow project contains an invalid graph document.",
-    });
-  }
-
-  const currentSlice = extractWorkflowExecutionSubgraph(
-    currentDocument,
-    params.lockedTargetNodeIds,
-  );
-  const nextSlice = extractWorkflowExecutionSubgraph(
-    nextDocument,
-    params.lockedTargetNodeIds,
-  );
-
-  if (JSON.stringify(currentSlice) === JSON.stringify(nextSlice)) {
-    return;
-  }
-
-  throw new WorkflowValidationError({
-    message: "Cannot edit nodes that are participating in a running workflow.",
-  });
 }
 
 export async function getOrCreateWorkflowProject(
@@ -192,9 +157,9 @@ export async function saveWorkflowProjectDocument(params: {
     projectId: params.projectId,
   });
 
-  assertLockedExecutionSliceUnchanged({
+  assertActiveTaskRunSaveAllowed({
+    activeTargetNodeIds: params.lockedNodeIds ?? [],
     currentDocument: currentProject.document,
-    lockedTargetNodeIds: params.lockedNodeIds ?? [],
     nextDocument,
   });
 

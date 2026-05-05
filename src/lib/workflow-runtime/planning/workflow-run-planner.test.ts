@@ -6,23 +6,30 @@ import {
   toWorkflowDefinitionGraphDocument,
   WORKFLOW_DOCUMENT_VERSION,
   type WorkflowDocument,
+  type WorkflowDocumentNode,
 } from "~/lib/workflow/document";
 import type { TaskRunStatus } from "~/lib/workflow-runtime/domain/task-run-state";
 import { planWorkflowRun } from "~/lib/workflow-runtime/planning/workflow-run-planner";
 
-function makeNode(kind: Parameters<typeof createWorkflowNode>[0], id: string) {
+function makeNode<K extends Parameters<typeof createWorkflowNode>[0]>(
+  kind: K,
+  id: string,
+): Extract<WorkflowDocumentNode, { kind: K }> {
   const node = {
     ...createWorkflowNode(kind, 0),
     id,
   };
 
-  return node.kind === "prompt"
-    ? {
-        ...node,
-        prompt: "{{topic}}",
-        variables: [{ key: "topic", label: "Topic" }],
-      }
-    : node;
+  const configuredNode =
+    node.kind === "prompt"
+      ? {
+          ...node,
+          prompt: "{{topic}}",
+          variables: [{ key: "topic", label: "Topic" }],
+        }
+      : node;
+
+  return configuredNode as Extract<WorkflowDocumentNode, { kind: K }>;
 }
 
 function makeDocument(): WorkflowDocument {

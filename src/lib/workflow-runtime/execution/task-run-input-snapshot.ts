@@ -63,9 +63,12 @@ export function buildTaskRunInputSnapshot(input: {
     attempt: input.attempt,
     taskRunId: input.taskRunId,
   });
+  const targetNodeConfig = structuredClone(input.targetNodeConfig);
   const workflowDefinition =
-    input.workflowDefinition ??
-    workflowDefinitionFromTarget(input.targetNodeConfig);
+    input.workflowDefinition !== undefined
+      ? structuredClone(input.workflowDefinition)
+      : workflowDefinitionFromTarget(targetNodeConfig);
+  const resolvedParentTaskRuns = structuredClone(input.resolvedParentTaskRuns);
 
   return {
     attempt: input.attempt,
@@ -78,12 +81,12 @@ export function buildTaskRunInputSnapshot(input: {
     providerInput: renderTaskRunProviderInput({
       idempotencyKey,
       itemIndex: input.itemIndex,
-      resolvedParentTaskRuns: input.resolvedParentTaskRuns,
-      targetNodeConfig: input.targetNodeConfig,
+      resolvedParentTaskRuns,
+      targetNodeConfig,
       workflowDefinition,
     }).providerInput,
-    resolvedParentTaskRuns: input.resolvedParentTaskRuns,
-    targetNodeConfig: input.targetNodeConfig,
+    resolvedParentTaskRuns,
+    targetNodeConfig,
     taskRunId: input.taskRunId,
     version: 1,
     workflowDefinition,

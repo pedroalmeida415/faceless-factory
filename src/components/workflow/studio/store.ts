@@ -812,15 +812,6 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
 
     setNodePosition: (nodeId, position, options) => {
       set((state) => {
-        if (
-          getLockedExecutionNodeIds(state.document, state.lockedNodeIds).has(
-            nodeId,
-          )
-        ) {
-          state.runtime.activity = LOCKED_WORKFLOW_ACTIVITY;
-          return;
-        }
-
         const currentSnapshot = snapshotFromState(state);
         const currentNode = currentSnapshot.document.nodes.find(
           (candidate) => candidate.id === nodeId,
@@ -899,7 +890,21 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
           state.lockedNodeIds,
         );
 
+        const hasDraggingPositionChange = relevantChanges.some(
+          (change) => change.type === "position" && change.dragging === true,
+        );
+        const hasDragStopPositionChange = relevantChanges.some(
+          (change) => change.type === "position" && change.dragging === false,
+        );
+        const hasNonSelectionChange = relevantChanges.some(
+          (change) => change.type !== "select",
+        );
+        const hasSelectionAndPositionOnlyChanges = relevantChanges.every(
+          (change) => change.type === "position" || change.type === "select",
+        );
+
         if (
+          !hasSelectionAndPositionOnlyChanges &&
           relevantChanges.some(
             (change) =>
               "id" in change &&
@@ -913,19 +918,6 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
 
         state.nodes = nextNodes;
         syncNodeDimensionsFromCanvas(state, nextNodes);
-
-        const hasDraggingPositionChange = relevantChanges.some(
-          (change) => change.type === "position" && change.dragging === true,
-        );
-        const hasDragStopPositionChange = relevantChanges.some(
-          (change) => change.type === "position" && change.dragging === false,
-        );
-        const hasNonSelectionChange = relevantChanges.some(
-          (change) => change.type !== "select",
-        );
-        const hasSelectionAndPositionOnlyChanges = relevantChanges.every(
-          (change) => change.type === "position" || change.type === "select",
-        );
 
         // React Flow emits every movement while dragging; keep the pre-drag
         // snapshot so undo collapses the whole drag into one step.
