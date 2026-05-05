@@ -1,75 +1,34 @@
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import {
+  extractTaskRunMaterializationSubgraph,
   type GeneratorIterationInfo,
-  type WorkflowExecutionPlan,
-  WorkflowExecutionPlanner,
+  getGeneratorIterationPreview,
+  planTargetNodes,
+  type TaskRunMaterializationPlan,
 } from "~/lib/workflow/execution/planning";
 
-export type { GeneratorIterationInfo, WorkflowExecutionPlan };
+export type { GeneratorIterationInfo, TaskRunMaterializationPlan };
 
-export function buildWorkflowExecutionPlan(
+export { getGeneratorIterationPreview };
+
+function buildTaskRunMaterializationPlan(
   document: WorkflowDocument,
   targetNodeIds: string[],
-): WorkflowExecutionPlan {
-  return WorkflowExecutionPlanner.planTargetNodes(document, targetNodeIds);
+): TaskRunMaterializationPlan {
+  return planTargetNodes(document, targetNodeIds);
 }
 
-export function getWorkflowPlannedOutputCount(
-  document: WorkflowDocument,
-  nodeId: string,
-  sourceHandleId?: string | null,
-  generatorIterationById: ReadonlyMap<
-    string,
-    { iterations: number }
-  > = new Map(),
-) {
-  return WorkflowExecutionPlanner.getPlannedOutputCount({
-    document,
-    generatorIterationById,
-    nodeId,
-    sourceHandleId,
-  });
-}
-
-export function getGeneratorIterationPreview(
-  document: WorkflowDocument,
-  targetId: string,
-): GeneratorIterationInfo {
-  return WorkflowExecutionPlanner.getGeneratorIterationPreview(
-    document,
-    targetId,
-  );
-}
-
-export function collectWorkflowExecutionNodeIds(
+export function collectTaskRunMaterializationNodeIds(
   document: WorkflowDocument,
   targetNodeIds: string[],
 ) {
-  return buildWorkflowExecutionPlan(document, targetNodeIds).requiredNodeIds;
+  return buildTaskRunMaterializationPlan(document, targetNodeIds)
+    .requiredNodeIds;
 }
 
-export function extractWorkflowExecutionSubgraph(
+export function extractTaskRunMaterializationSlice(
   document: WorkflowDocument,
   targetNodeIds: string[],
 ): WorkflowDocument {
-  return WorkflowExecutionPlanner.extractSubgraph(document, targetNodeIds);
-}
-
-export function collectExecutableWorkflowGeneratorNodeIds(
-  document: WorkflowDocument,
-  targetNodeIds: string[],
-) {
-  return buildWorkflowExecutionPlan(document, targetNodeIds).executableNodeIds;
-}
-
-export function collectDownstreamWorkflowGeneratorNodeIds(
-  document: WorkflowDocument,
-  sourceNodeId: string,
-  allowedNodeIds?: ReadonlySet<string>,
-) {
-  return WorkflowExecutionPlanner.collectDownstreamGeneratorNodeIds({
-    allowedNodeIds,
-    document,
-    sourceNodeId,
-  });
+  return extractTaskRunMaterializationSubgraph(document, targetNodeIds);
 }

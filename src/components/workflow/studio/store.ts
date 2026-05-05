@@ -19,7 +19,7 @@ import {
   type WorkflowPosition,
 } from "~/lib/workflow/document";
 import { getErrorMessage } from "~/lib/workflow/errors";
-import { collectWorkflowExecutionNodeIds } from "~/lib/workflow/execution/subgraph";
+import { collectTaskRunMaterializationNodeIds } from "~/lib/workflow/execution/subgraph";
 import type { WorkflowCreditsSummary } from "~/lib/workflow/execution/types";
 import type { WorkflowHandleReference } from "~/lib/workflow/graph";
 import type { WorkflowValueType } from "~/lib/workflow/node-definitions";
@@ -289,7 +289,7 @@ function getLockedExecutionNodeIds(
   lockedTargetNodeIds: string[],
 ) {
   return lockedTargetNodeIds.length
-    ? collectWorkflowExecutionNodeIds(document, lockedTargetNodeIds)
+    ? collectTaskRunMaterializationNodeIds(document, lockedTargetNodeIds)
     : new Set<string>();
 }
 

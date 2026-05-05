@@ -1,6 +1,6 @@
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import { WorkflowValidationError } from "~/lib/workflow/errors";
-import { extractWorkflowExecutionSubgraph } from "~/lib/workflow/execution/subgraph";
+import { extractTaskRunMaterializationSlice } from "~/lib/workflow/execution/subgraph";
 
 const ACTIVE_TASK_RUN_SAVE_LOCK_MESSAGE =
   "Cannot edit nodes that are participating in a running workflow.";
@@ -29,12 +29,12 @@ export function assertActiveTaskRunSaveAllowed(
   }
 
   const currentMaterializationSlice = materializationSemanticDocument(
-    extractWorkflowExecutionSubgraph(params.currentDocument, [
+    extractTaskRunMaterializationSlice(params.currentDocument, [
       ...params.activeTargetNodeIds,
     ]),
   );
   const nextMaterializationSlice = materializationSemanticDocument(
-    extractWorkflowExecutionSubgraph(params.nextDocument, [
+    extractTaskRunMaterializationSlice(params.nextDocument, [
       ...params.activeTargetNodeIds,
     ]),
   );

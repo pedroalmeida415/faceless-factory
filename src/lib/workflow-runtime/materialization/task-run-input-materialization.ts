@@ -5,7 +5,7 @@ import {
   type WorkflowDocumentEdge,
   type WorkflowDocumentNode,
 } from "~/lib/workflow/document";
-import { WorkflowExecutionPlanner } from "~/lib/workflow/execution/planning";
+import { planTaskRunMaterialization } from "~/lib/workflow/execution/planning";
 import {
   buildIncomingByTarget,
   buildTextRuntimeValue,
@@ -163,7 +163,7 @@ export function materializeWorkflowRunTaskFacts(
     const workflowDefinition = toWorkflowDefinitionGraphDocument(
       command.document,
     );
-    const schedulingPlan = WorkflowExecutionPlanner.forTaskScheduling({
+    const schedulingPlan = planTaskRunMaterialization({
       document: command.document,
       targetNodeIds: command.targetNodeIds,
     });

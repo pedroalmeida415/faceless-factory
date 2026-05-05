@@ -1,19 +1,14 @@
 import { Data } from "effect";
 
 import type { WorkflowDocument } from "~/lib/workflow/document";
-import { WorkflowValidationError } from "~/lib/workflow/errors";
-import type { WorkflowExecutionTarget } from "~/lib/workflow/execution/types";
 import {
   buildIncomingByTarget,
-  buildOutgoingBySource,
   getAlignedOutputCount,
   getGeneratorInputHandles,
   getIncomingEdgesForHandle,
-  getOutputReorderInputValue,
   getPromptNodeReferencedVariableKeys,
   getWorkflowGeneratorAwaitingReviewRuntimeValue,
   getWorkflowGeneratorOutputRuntimeValue,
-  resolvePromptNodeTextBatch,
 } from "~/lib/workflow/graph";
 import {
   OUTPUT_REORDER_INPUT_HANDLE_ID,
@@ -21,11 +16,10 @@ import {
   type WorkflowValueType,
 } from "~/lib/workflow/node-definitions";
 import { getReviewOutputCount } from "~/lib/workflow/review-state";
-import { getOutputPermutationValidationMessage } from "~/lib/workflow/runtime-values";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
 
-export class WorkflowExecutionPlanningError extends Data.TaggedError(
-  "WorkflowExecutionPlanningError",
+class TaskRunMaterializationPlanningError extends Data.TaggedError(
+  "TaskRunMaterializationPlanningError",
 )<{
   readonly message: string;
   readonly cause?: unknown;
@@ -54,18 +48,12 @@ type PlanningContext = {
   targetNodeIdSet: Set<string>;
 };
 
-export type WorkflowExecutionPlan = {
+export type TaskRunMaterializationPlan = {
   targetNodeIds: string[];
   requiredNodeIds: Set<string>;
   executableNodeIds: string[];
   reviewBarrierNodeIds: string[];
   generatorIterationById: Map<string, GeneratorIterationInfo>;
-};
-
-type PlanningRequest = {
-  document: WorkflowDocument;
-  selectionNodeIds?: readonly string[];
-  target: WorkflowExecutionTarget;
 };
 
 const DEFAULT_GENERATOR_ITERATION_INFO: GeneratorIterationInfo = {
@@ -75,16 +63,7 @@ const DEFAULT_GENERATOR_ITERATION_INFO: GeneratorIterationInfo = {
 };
 
 function failPlanning(message: string, cause?: unknown): never {
-  throw new WorkflowExecutionPlanningError({ message, cause });
-}
-
-export function toWorkflowValidationError(
-  error: WorkflowExecutionPlanningError,
-) {
-  return new WorkflowValidationError({
-    message: error.message,
-    cause: error.cause,
-  });
+  throw new TaskRunMaterializationPlanningError({ message, cause });
 }
 
 function getNodeOutputValueType(
@@ -108,11 +87,6 @@ function getNodeOutputValueType(
 
 function isGeneratorNode(node: WorkflowDocument["nodes"][number] | undefined) {
   return node ? isGeneratorNodeKind(node.kind) : false;
-}
-
-function resolveTargetNodeIds(request: PlanningRequest) {
-  void request.selectionNodeIds;
-  return [request.target.nodeId];
 }
 
 function validateTargetNodes(
@@ -411,7 +385,7 @@ function buildPlan(
     executableNodeIds: context.executableNodeIds,
     reviewBarrierNodeIds: Array.from(context.reviewBarrierNodeIds),
     generatorIterationById: context.generatorIterationById,
-  } satisfies WorkflowExecutionPlan;
+  } satisfies TaskRunMaterializationPlan;
 }
 
 function getPlannedOutputCount(params: {
@@ -447,98 +421,6 @@ function getPlannedOutputCount(params: {
   );
 }
 
-function validatePlan(document: WorkflowDocument, plan: WorkflowExecutionPlan) {
-  const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
-  const incomingByTarget = buildIncomingByTarget(document.edges);
-  const executableNodeIds = new Set(plan.executableNodeIds);
-
-  for (const nodeId of plan.requiredNodeIds) {
-    const node = nodeMap.get(nodeId);
-    if (!node) {
-      failPlanning(`Node ${nodeId} not found.`);
-    }
-
-    switch (node.kind) {
-      case "list":
-        if (!node.items.some((value) => value.trim())) {
-          failPlanning("List node is empty.");
-        }
-        break;
-      case "prompt":
-        if (
-          !resolvePromptNodeTextBatch(node, (key) =>
-            getIncomingEdgesForHandle(incomingByTarget, node.id, key).length
-              ? { type: "text", items: [key] }
-              : null,
-          )
-        ) {
-          failPlanning("Prompt node is empty.");
-        }
-        break;
-      case "asset":
-        if (!node.assetKind || !node.assets.length) {
-          failPlanning("Asset node is empty.");
-        }
-        break;
-      case "outputReorder": {
-        const inputEdges = getIncomingEdgesForHandle(
-          incomingByTarget,
-          node.id,
-          OUTPUT_REORDER_INPUT_HANDLE_ID,
-        );
-        if (inputEdges.length !== 1) {
-          failPlanning("Output Reorder needs exactly one input.");
-        }
-
-        const inputValue = getOutputReorderInputValue(document, node.id);
-        if (inputValue && inputValue.type !== node.valueType) {
-          failPlanning(
-            "Output Reorder input type does not match its output type.",
-          );
-        }
-
-        if (node.mode === "manual" && inputValue) {
-          const message = getOutputPermutationValidationMessage(
-            node.order,
-            inputValue.items.length,
-          );
-          if (message) {
-            failPlanning(message);
-          }
-        }
-        break;
-      }
-      case "imageGenerator":
-      case "videoGenerator":
-      case "llmGenerator": {
-        if (!executableNodeIds.has(node.id)) {
-          break;
-        }
-
-        for (const handle of getGeneratorInputHandles(document, node.id).filter(
-          (handle) => handle.required,
-        )) {
-          if (
-            getIncomingEdgesForHandle(incomingByTarget, node.id, handle.id)
-              .length
-          ) {
-            continue;
-          }
-
-          failPlanning(
-            `Connect ${handle.label.toLowerCase()} ${handle.valueType}.`,
-          );
-        }
-
-        if (plan.generatorIterationById.get(node.id)?.mismatchedIterators) {
-          failPlanning("Connected input output counts do not match.");
-        }
-        break;
-      }
-    }
-  }
-}
-
 function extractSubgraph(
   document: WorkflowDocument,
   requiredNodeIds: ReadonlySet<string>,
@@ -553,133 +435,50 @@ function extractSubgraph(
   } satisfies WorkflowDocument;
 }
 
-function collectDownstreamGeneratorNodeIds(params: {
-  allowedNodeIds?: ReadonlySet<string>;
+export function planTaskRunMaterialization(params: {
   document: WorkflowDocument;
-  sourceNodeId: string;
+  targetNodeIds: readonly string[];
 }) {
-  const outgoingBySource = buildOutgoingBySource(params.document.edges);
-  const nodeById = new Map(
-    params.document.nodes.map((node) => [node.id, node]),
-  );
-  const visited = new Set<string>();
-  const stack = (outgoingBySource.get(params.sourceNodeId) ?? []).map(
-    (edge) => edge.target,
-  );
-  const generatorIds: string[] = [];
-
-  while (stack.length) {
-    const nodeId = stack.shift();
-    if (!nodeId || visited.has(nodeId)) {
-      continue;
-    }
-
-    visited.add(nodeId);
-    const node = nodeById.get(nodeId);
-    if (
-      node &&
-      isGeneratorNodeKind(node.kind) &&
-      (!params.allowedNodeIds || params.allowedNodeIds.has(node.id))
-    ) {
-      generatorIds.push(node.id);
-    }
-
-    for (const edge of outgoingBySource.get(nodeId) ?? []) {
-      stack.push(edge.target);
-    }
-  }
-
-  return generatorIds;
+  const plan = buildPlan(params.document, params.targetNodeIds);
+  validateTargetNodes(params.document, plan.targetNodeIds);
+  return {
+    ...plan,
+    artifactNodeIds: Array.from(
+      new Set([...plan.executableNodeIds, ...plan.reviewBarrierNodeIds]),
+    ),
+    getOutputCount: (nodeId: string, sourceHandleId?: string | null) =>
+      getPlannedOutputCount({
+        document: params.document,
+        generatorIterationById: plan.generatorIterationById,
+        nodeId,
+        sourceHandleId,
+      }),
+  };
 }
 
-function planRequest(
-  request: PlanningRequest,
-  validateExecutionInputs: boolean,
+export function extractTaskRunMaterializationSubgraph(
+  document: WorkflowDocument,
+  targetNodeIds: readonly string[],
 ) {
-  const targetNodeIds = resolveTargetNodeIds(request);
-  validateTargetNodes(request.document, targetNodeIds);
-  const plan = buildPlan(request.document, targetNodeIds);
-  if (validateExecutionInputs) {
-    validatePlan(request.document, plan);
-  }
-  return plan;
+  return extractSubgraph(
+    document,
+    buildPlan(document, targetNodeIds).requiredNodeIds,
+  );
 }
 
-export const WorkflowExecutionPlanner = {
-  forQuote(request: PlanningRequest) {
-    const plan = planRequest(request, false);
-    return {
-      ...plan,
-      priceNodeIds: plan.executableNodeIds,
-    };
-  },
+export function getGeneratorIterationPreview(
+  document: WorkflowDocument,
+  targetId: string,
+) {
+  return (
+    buildPlan(document, [targetId]).generatorIterationById.get(targetId) ??
+    DEFAULT_GENERATOR_ITERATION_INFO
+  );
+}
 
-  forStart(request: PlanningRequest) {
-    const plan = planRequest(request, true);
-    return {
-      ...plan,
-      artifactNodeIds: Array.from(
-        new Set([...plan.executableNodeIds, ...plan.reviewBarrierNodeIds]),
-      ),
-      document: extractSubgraph(request.document, plan.requiredNodeIds),
-    };
-  },
-
-  forRuntime(request: PlanningRequest) {
-    const plan = planRequest(request, true);
-    return {
-      ...plan,
-      artifactNodeIds: Array.from(
-        new Set([...plan.executableNodeIds, ...plan.reviewBarrierNodeIds]),
-      ),
-    };
-  },
-
-  forTaskScheduling(params: {
-    document: WorkflowDocument;
-    targetNodeIds: readonly string[];
-  }) {
-    const plan = buildPlan(params.document, params.targetNodeIds);
-    validateTargetNodes(params.document, plan.targetNodeIds);
-    return {
-      ...plan,
-      artifactNodeIds: Array.from(
-        new Set([...plan.executableNodeIds, ...plan.reviewBarrierNodeIds]),
-      ),
-      getOutputCount: (nodeId: string, sourceHandleId?: string | null) =>
-        getPlannedOutputCount({
-          document: params.document,
-          generatorIterationById: plan.generatorIterationById,
-          nodeId,
-          sourceHandleId,
-        }),
-    };
-  },
-
-  collectDownstreamGeneratorNodeIds,
-  extractSubgraph(
-    document: WorkflowDocument,
-    targetNodeIds: readonly string[],
-  ) {
-    return extractSubgraph(
-      document,
-      buildPlan(document, targetNodeIds).requiredNodeIds,
-    );
-  },
-  getGeneratorIterationPreview(document: WorkflowDocument, targetId: string) {
-    return (
-      buildPlan(document, [targetId]).generatorIterationById.get(targetId) ??
-      DEFAULT_GENERATOR_ITERATION_INFO
-    );
-  },
-  getPlannedOutputCount,
-  planTargetNodes(
-    document: WorkflowDocument,
-    targetNodeIds: readonly string[],
-  ) {
-    return buildPlan(document, targetNodeIds);
-  },
-  resolveTargetNodeIds,
-  validatePlan,
-  validateTargetNodes,
-};
+export function planTargetNodes(
+  document: WorkflowDocument,
+  targetNodeIds: readonly string[],
+) {
+  return buildPlan(document, targetNodeIds);
+}
