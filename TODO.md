@@ -14,7 +14,7 @@
 - [ ] Add support for structured outputs on LLM node
 - [ ] Support pasting images
 - [ ] Support drag/drop images
-- [ ] Support multiple images per lane (x2, x3, x4 in Nano banana pro for example)
+- [ ] Support multiple images per output/slot (x2, x3, x4 in Nano banana pro for example)
 - [ ] Array utilities
 - [ ] Display upstream cost separate from node cost when upstream nodes don't yet have an output
 - [ ] Disconnect edge by dragging out the connected socket
@@ -24,12 +24,12 @@
 - [X] ~~Database design (tables, credits, etc...)~~
 - [X] ~~Plans Stripe integration~~
 - [X] ~~Any LLM node for text-related functionality.~~
+- [X] ~~unblock lanes when ready and display results independently instead of having everything blocked until the entire batch is finished.~~ 
+- [X] ~~I also want to change this overall behavior where running a downstream node puts it in "generating" mode even though the "flow" has not gotten to it just yet, meaning, it is not generating anything, but currently it still shows the loading spinner as if it were. We need to differentiate between "waiting" and "running".~~
+- [X] ~~Human-in-the-loop nodes or something to that require approval before moving forward.~~
 - [ ] Extract a provider-agnostic LLM model registry so adding OpenAI/Anthropic models only requires pricing + estimate config + execution adapter wiring.
-- [ ] Human-in-the-loop nodes or something to that require approval before moving forward.
 - [ ] Proper blob storage + CDN for images/videos (Cloudflare?)
-- [ ] How to support breaking changes to workflows in the future when we can't simply drop everything and call it a day to avoid shooting ourselves in the foot?
-- [ ] unblock lanes when ready and display results independently instead of having everything blocked until the entire batch is finished. 
-- [ ] I also want to change this overall behavior where running a downstream node puts it in "generating" mode even though the "flow" has not gotten to it just yet, meaning, it is not generating anything, but currently it still shows the loading spinner as if it were. We need to differentiate between "waiting" and "running". If the node is running, 
+- [ ] How to support breaking changes to workflows in the future when we can't simply drop everything
 
 # Infra
 - [ ] How to deploy to prod?
