@@ -427,7 +427,7 @@ function isSameNodeRender<T extends WorkflowNodeData>(
 function WorkflowExecutionCostBadge({ nodeId }: { nodeId: string }) {
   const { priceQuote } = useWorkflowExecutionQuote(nodeId);
 
-  if (!priceQuote || priceQuote.totalCost <= 0) {
+  if (!priceQuote || priceQuote.creditCostPerSlot <= 0) {
     return null;
   }
 
@@ -435,17 +435,13 @@ function WorkflowExecutionCostBadge({ nodeId }: { nodeId: string }) {
     <Badge
       className="border-primary/20 bg-primary/10 text-primary"
       title={
-        priceQuote.lineItems.length > 1
-          ? priceQuote.hasEstimate
-            ? "Estimate includes upstream generator costs."
-            : "Includes upstream generator costs."
-          : priceQuote.hasEstimate
-            ? "Estimated cost. Final usage may settle higher or lower."
-            : undefined
+        priceQuote.isEstimate
+          ? "Estimated own-node cost per Task Run slot. Final usage may settle higher."
+          : "Own-node cost per Task Run slot. Upstream costs are shown in the run preview."
       }
       variant="outline"
     >
-      {`${priceQuote.hasEstimate ? "~" : ""}${formatCredits(priceQuote.totalCost)} est.`}
+      {`${priceQuote.isEstimate ? "~" : ""}${formatCredits(priceQuote.creditCostPerSlot)} / slot`}
     </Badge>
   );
 }
@@ -476,7 +472,7 @@ export function WorkflowExecutionEstimateWarning({
   return (
     <NodeNotice tone="accent">
       {priceQuote
-        ? `${formatCredits(priceQuote.totalCost)} estimated. Final cost varies with generated output and reasoning tokens.`
+        ? `${formatCredits(priceQuote.creditCostPerSlot)} estimated per Task Run slot. Final cost varies with generated output and reasoning tokens.`
         : "Estimate only. Final cost varies with generated output and reasoning tokens."}
     </NodeNotice>
   );

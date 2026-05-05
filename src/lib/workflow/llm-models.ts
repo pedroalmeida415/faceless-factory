@@ -8,7 +8,6 @@ import {
 } from "~/lib/workflow/node-definitions";
 import type {
   GenerateLlmRequest,
-  GenerateLlmUsage,
   GeneratorConfig,
   GeneratorConfigValue,
   LlmGeneratorModelId,
@@ -23,11 +22,8 @@ import {
 } from "~/lib/workflow/types";
 
 export const SYSTEM_PROMPT_INPUT_HANDLE_ID = "systemPrompt";
-export const LLM_ESTIMATED_CREDIT_COST = 1;
 
 const IMAGE_INPUT_PREFIX = "image-input-";
-const GEMINI_3_FLASH_INPUT_USD_PER_MILLION_TOKENS = 0.5;
-const GEMINI_3_FLASH_OUTPUT_USD_PER_MILLION_TOKENS = 3;
 
 const VALUE_TYPE_COLORS: Record<WorkflowValueType, string> = {
   image: "#38bdf8",
@@ -37,9 +33,7 @@ const VALUE_TYPE_COLORS: Record<WorkflowValueType, string> = {
 
 type LlmGeneratorModelDefinition = {
   id: LlmGeneratorModelId;
-  inputUsdPerMillionTokens: number;
   label: string;
-  outputUsdPerMillionTokens: number;
 };
 
 function getConfigNumber(
@@ -148,9 +142,7 @@ const LLM_GENERATOR_MODELS: Record<
 > = {
   [GEMINI_3_FLASH_PREVIEW_MODEL_ID]: {
     id: GEMINI_3_FLASH_PREVIEW_MODEL_ID,
-    inputUsdPerMillionTokens: GEMINI_3_FLASH_INPUT_USD_PER_MILLION_TOKENS,
     label: "Gemini 3 Flash Preview",
-    outputUsdPerMillionTokens: GEMINI_3_FLASH_OUTPUT_USD_PER_MILLION_TOKENS,
   },
 };
 
@@ -262,42 +254,4 @@ export function setLlmGeneratorConfigValue(
     ...config,
     [key]: value,
   });
-}
-
-export function getLlmInputUsdPerMillionTokens(model: LlmGeneratorModelId) {
-  return getLlmGeneratorModelDefinition(model).inputUsdPerMillionTokens;
-}
-
-export function getLlmOutputUsdPerMillionTokens(model: LlmGeneratorModelId) {
-  return getLlmGeneratorModelDefinition(model).outputUsdPerMillionTokens;
-}
-
-export function convertUsdToCredits(usd: number) {
-  if (usd <= 0) {
-    return 0;
-  }
-
-  return Math.max(1, Math.ceil(usd * 100));
-}
-
-export function calculateLlmUsageUsd(params: {
-  model: LlmGeneratorModelId;
-  usage: GenerateLlmUsage;
-}) {
-  const inputUsd =
-    (params.usage.promptTokenCount / 1_000_000) *
-    getLlmInputUsdPerMillionTokens(params.model);
-  const outputUsd =
-    ((params.usage.candidatesTokenCount + params.usage.thoughtsTokenCount) /
-      1_000_000) *
-    getLlmOutputUsdPerMillionTokens(params.model);
-
-  return inputUsd + outputUsd;
-}
-
-export function calculateLlmUsageCreditCost(params: {
-  model: LlmGeneratorModelId;
-  usage: GenerateLlmUsage;
-}) {
-  return convertUsdToCredits(calculateLlmUsageUsd(params));
 }

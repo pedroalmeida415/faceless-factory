@@ -1,11 +1,6 @@
 import { randomUUID } from "node:crypto";
 
 import { Effect } from "effect";
-import {
-  priceImageGeneration,
-  priceLlmGeneration,
-  priceVideoGeneration,
-} from "~/lib/workflow/pricing";
 import type {
   GenerateImageRequest,
   GenerateImageResponse,
@@ -16,6 +11,11 @@ import type {
   StagedGeneratedMediaArtifact,
 } from "~/lib/workflow/types";
 import type { ExecutableTaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
+import {
+  priceImageGeneration,
+  priceLlmGeneration,
+  priceVideoGeneration,
+} from "~/server/workflow/pricing-catalog";
 import type {
   ProviderExecutionResult,
   WorkflowRuntimeProviderExecutor,

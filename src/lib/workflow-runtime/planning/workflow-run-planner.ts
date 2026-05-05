@@ -4,7 +4,6 @@ import {
   type WorkflowDefinitionGraphDocument,
   type WorkflowDocument,
 } from "~/lib/workflow/document";
-import type { WorkflowRuntimeEstimatedCreditCostByNodeId } from "~/lib/workflow/pricing";
 import { parseWorkflowBlueprint } from "~/lib/workflow/runtime/planning/blueprint/parser";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
 import type { ProviderDependencyAddress } from "~/lib/workflow-runtime/domain/provider-dependency-address";
@@ -19,6 +18,10 @@ import {
   materializeTaskRunInput,
   materializeWorkflowRunTaskFacts,
 } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
+
+type WorkflowRuntimeEstimatedCreditCostByNodeId = Readonly<
+  Record<string, number>
+>;
 
 export type WorkflowRunPlannerCommand =
   | { readonly type: "run-node"; readonly nodeId: string }

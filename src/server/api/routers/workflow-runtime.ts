@@ -1,10 +1,17 @@
 import { TRPCError } from "@trpc/server";
 import { type SQL, sql } from "drizzle-orm";
 import { z } from "zod";
-import { estimateWorkflowRuntimeCreditCostByNodeId } from "~/lib/workflow/pricing";
+import {
+  deserializeStoredWorkflowGraphDocument,
+  type WorkflowGraphDocument,
+} from "~/lib/workflow/document";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { db } from "~/server/db";
 import { createRedisSubscriber } from "~/server/redis";
+import {
+  buildExecutionCostProjection,
+  estimateWorkflowRuntimeCreditCostByNodeId,
+} from "~/server/workflow/pricing-catalog";
 import {
   assertWorkflowProjectAccess,
   getWorkflowProject,
@@ -20,11 +27,6 @@ import { getTaskRunProjectionForWorkflow } from "~/server/workflow-runtime/workf
 
 type QueryRow = Record<string, unknown>;
 
-const estimatedCreditCostByNodeIdSchema = z.record(
-  z.string().min(1),
-  z.number().int().nonnegative(),
-);
-
 const runTaskSlotTargetSchema = z.object({
   itemIndex: z.number().int().nonnegative(),
   nodeExecutionId: z.string().min(1),
@@ -32,7 +34,6 @@ const runTaskSlotTargetSchema = z.object({
 });
 
 const runInputSchema = z.object({
-  estimatedCreditCostByNodeId: estimatedCreditCostByNodeIdSchema.optional(),
   projectId: z.string().min(1),
   target: z.discriminatedUnion("type", [
     z.object({ nodeId: z.string().min(1), type: z.literal("node") }),
@@ -50,7 +51,23 @@ const taskEventsInputSchema = z.object({
   projectId: z.string().min(1),
 });
 
+const workflowGraphDocumentSchema = z
+  .custom<WorkflowGraphDocument>(
+    (value) => Boolean(deserializeStoredWorkflowGraphDocument(value)),
+    "Invalid workflow graph document.",
+  )
+  .transform(
+    (value) =>
+      deserializeStoredWorkflowGraphDocument(value) as NonNullable<
+        ReturnType<typeof deserializeStoredWorkflowGraphDocument>
+      >,
+  );
+
 export const workflowRuntimeRouter = createTRPCRouter({
+  executionCostProjection: protectedProcedure
+    .input(z.object({ document: workflowGraphDocumentSchema }))
+    .query(({ input }) => buildExecutionCostProjection(input.document)),
+
   run: protectedProcedure
     .input(runInputSchema)
     .mutation(async ({ ctx, input }) => {
@@ -79,7 +96,6 @@ export const workflowRuntimeRouter = createTRPCRouter({
         document: project.document,
         estimatedCreditCostByNodeId: estimateWorkflowRuntimeCreditCostByNodeId({
           document: project.document,
-          overrides: input.estimatedCreditCostByNodeId,
         }),
         ownerId: ownerUserId,
         workflowId: project.id,

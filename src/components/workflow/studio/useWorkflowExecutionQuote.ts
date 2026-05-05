@@ -1,23 +1,16 @@
 "use client";
 
-import { useMemo } from "react";
 import { useWorkflowStudioStore } from "~/components/workflow/studio/store";
-import { estimateWorkflowRuntimeNode } from "~/lib/workflow/pricing";
+import { api } from "~/trpc/react";
 
 export function useWorkflowExecutionQuote(nodeId: string) {
   const document = useWorkflowStudioStore((state) => state.document);
-  const localPriceQuote = useMemo(() => {
-    try {
-      return estimateWorkflowRuntimeNode({
-        document,
-        nodeId,
-      });
-    } catch {
-      return null;
-    }
-  }, [document, nodeId]);
+  const projectionQuery = api.workflowRuntime.executionCostProjection.useQuery(
+    { document },
+    { staleTime: 30_000 },
+  );
 
   return {
-    priceQuote: localPriceQuote,
+    priceQuote: projectionQuery.data?.costsByNodeId[nodeId] ?? null,
   };
 }
