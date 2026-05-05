@@ -308,19 +308,6 @@ export function planWorkflowRun(
     return id;
   };
 
-  const ensureUpstreamProviderNodeExecutions = (nodeId: string) => {
-    const upstream = blueprint.value.getUpstreamClosureNodeIds(nodeId);
-    if (!upstream.ok) {
-      return false;
-    }
-    for (const upstreamNodeId of upstream.value) {
-      if (isProviderBackedNode(targetNodeConfigByNodeId.get(upstreamNodeId))) {
-        ensureNodeExecution(upstreamNodeId);
-      }
-    }
-    return true;
-  };
-
   const parentDependencyAddresses = (nodeId: string, itemIndex: number) =>
     materializedTaskFactsBySlot.get(
       taskRunSlotKey({ itemIndex, nodeExecutionId: nodeId }),
@@ -456,6 +443,9 @@ export function planWorkflowRun(
     readonly nodeExecutionId: string;
     readonly itemIndex: number;
   }) => {
+    if (plannedTaskRunBySlot.has(taskRunSlotKey(params))) {
+      return true;
+    }
     const latest = latestTaskRun(params.nodeExecutionId, params.itemIndex);
     if (!latest) {
       return createTaskRun({ ...params, attempt: 0 });
@@ -464,6 +454,49 @@ export function planWorkflowRun(
     return isRecoverableByDownstreamPlanningStatus(latest.status)
       ? createTaskRun({ ...params, attempt: latest.attempt + 1 })
       : true;
+  };
+
+  const ensureProviderTaskRunSlot = (
+    nodeId: string,
+    itemIndex: number,
+  ): boolean => {
+    const nodeExecutionId = ensureNodeExecution(nodeId);
+    for (const dependency of parentDependencyAddresses(nodeId, itemIndex)) {
+      if (
+        isProviderBackedNode(
+          targetNodeConfigByNodeId.get(dependency.parentNodeId),
+        ) &&
+        !ensureProviderTaskRunSlot(
+          dependency.parentNodeId,
+          dependency.parentItemIndex,
+        )
+      ) {
+        return false;
+      }
+    }
+    return planTaskRunIfNeeded({ itemIndex, nodeExecutionId, nodeId });
+  };
+
+  const ensureUpstreamProviderTaskRuns = (
+    nodeId: string,
+    itemIndexes: readonly number[],
+  ) => {
+    for (const itemIndex of itemIndexes) {
+      for (const dependency of parentDependencyAddresses(nodeId, itemIndex)) {
+        if (
+          isProviderBackedNode(
+            targetNodeConfigByNodeId.get(dependency.parentNodeId),
+          ) &&
+          !ensureProviderTaskRunSlot(
+            dependency.parentNodeId,
+            dependency.parentItemIndex,
+          )
+        ) {
+          return false;
+        }
+      }
+    }
+    return true;
   };
 
   if (input.command.type === "run-target") {
@@ -523,12 +556,13 @@ export function planWorkflowRun(
     }
 
     const nodeExecutionId = createNodeExecution(input.command.nodeId);
-    if (!ensureUpstreamProviderNodeExecutions(input.command.nodeId)) {
+    const itemIndexes = plannedItemIndexesForNode(input.command.nodeId);
+    if (!ensureUpstreamProviderTaskRuns(input.command.nodeId, itemIndexes)) {
       return plannerError(
         `Missing dependency information for ${input.command.nodeId}.`,
       );
     }
-    for (const itemIndex of plannedItemIndexesForNode(input.command.nodeId)) {
+    for (const itemIndex of itemIndexes) {
       if (
         !createTaskRun({
           attempt: 0,
@@ -576,7 +610,12 @@ export function planWorkflowRun(
     nodeId: nodeExecution.nodeId,
   });
   executionIdByNodeId.set(nodeExecution.nodeId, nodeExecution.id);
-  if (!ensureUpstreamProviderNodeExecutions(nodeExecution.nodeId)) {
+  if (
+    !ensureUpstreamProviderTaskRuns(
+      nodeExecution.nodeId,
+      input.command.itemIndexes,
+    )
+  ) {
     return plannerError(
       `Missing dependency information for ${nodeExecution.nodeId}.`,
     );

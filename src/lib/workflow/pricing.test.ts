@@ -33,7 +33,7 @@ describe("Workflow runtime pricing", () => {
     );
   });
 
-  test("estimates Rerun Node Task Run counts from target materialization facts", () => {
+  test("estimates Rerun Node Task Run counts including required upstream provider slots", () => {
     const document = materializedTextFanOutDocument();
     const quote = estimateWorkflowRuntimeCommand({
       command: { nodeId: "summary", type: "rerun-node" },
@@ -50,13 +50,17 @@ describe("Workflow runtime pricing", () => {
       }),
     );
 
+    assert.deepEqual(iterationsByNodeId(quote.lineItems), {
+      script: 2,
+      summary: 2,
+    });
     assert.deepEqual(
       iterationsByNodeId(quote.lineItems),
       taskRunCountsByNodeId(plan.taskRunsToCreate),
     );
   });
 
-  test("estimates Regenerate Item Task Run counts from selected materialized Item Index facts", () => {
+  test("estimates Regenerate Item Task Run counts including required upstream provider slots", () => {
     const document = materializedTextFanOutDocument();
     const latestNodeExecutions = [
       { id: "node-execution-summary", nodeId: "summary" },
@@ -101,6 +105,10 @@ describe("Workflow runtime pricing", () => {
       }),
     );
 
+    assert.deepEqual(iterationsByNodeId(quote.lineItems), {
+      script: 1,
+      summary: 1,
+    });
     assert.deepEqual(
       iterationsByNodeId(quote.lineItems),
       taskRunCountsByNodeId(plan.taskRunsToCreate),

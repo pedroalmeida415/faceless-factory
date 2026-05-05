@@ -200,10 +200,7 @@ export function estimateWorkflowRuntimeCommand(input: {
     throw new WorkflowValidationError({ message: facts.error.message });
   }
 
-  const quotedNodeIds =
-    input.command.type === "run-target"
-      ? facts.value.executableNodeIds
-      : targetNodeIds;
+  const quotedNodeIds = facts.value.executableNodeIds;
   const quotedNodeIdSet = new Set(quotedNodeIds);
   const selectedItemIndexes =
     input.command.type === "regenerate-item"

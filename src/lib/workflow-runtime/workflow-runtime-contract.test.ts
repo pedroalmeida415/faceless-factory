@@ -78,6 +78,7 @@ describe("Workflow runtime state-machine contract", () => {
 
   test("planner run-target contract creates upstream closure, reuses durable batches, waits on active parents, and never creates empty executable Node Executions", () => {
     const document = generatedImageToGeneratedVideoDocument();
+    const firstRunLatestTaskRuns: ReturnType<typeof latestTaskRun>[] = [];
     const firstRun = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-target", targetNodeIds: ["video"] },
@@ -86,7 +87,7 @@ describe("Workflow runtime state-machine contract", () => {
         document,
         documentRevision: 12,
         latestNodeExecutions: [],
-        latestTaskRuns: [],
+        latestTaskRuns: firstRunLatestTaskRuns,
         ownerId: "owner-user",
         plannedItemCountByNodeId: { image: 2, video: 2 },
         workflowId: "workflow-id",
@@ -121,8 +122,21 @@ describe("Workflow runtime state-machine contract", () => {
         },
       ],
     );
-    assertPlanInvariants(firstRun, document);
+    assertPlanInvariants(firstRun, document, firstRunLatestTaskRuns);
 
+    const activeUpstreamLatestTaskRuns = [
+      latestTaskRun({
+        id: "image-running-0",
+        nodeExecutionId: "image-execution",
+        status: "RUNNING",
+      }),
+      latestTaskRun({
+        id: "image-pending-1",
+        itemIndex: 1,
+        nodeExecutionId: "image-execution",
+        status: "PENDING_REVIEW",
+      }),
+    ];
     const activeUpstreamRun = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-target", targetNodeIds: ["video"] },
@@ -130,19 +144,7 @@ describe("Workflow runtime state-machine contract", () => {
         createTaskRunId: nextId("task-run-active"),
         document,
         latestNodeExecutions: [{ id: "image-execution", nodeId: "image" }],
-        latestTaskRuns: [
-          latestTaskRun({
-            id: "image-running-0",
-            nodeExecutionId: "image-execution",
-            status: "RUNNING",
-          }),
-          latestTaskRun({
-            id: "image-pending-1",
-            itemIndex: 1,
-            nodeExecutionId: "image-execution",
-            status: "PENDING_REVIEW",
-          }),
-        ],
+        latestTaskRuns: activeUpstreamLatestTaskRuns,
         ownerId: "owner-user",
         plannedItemCountByNodeId: { image: 2, video: 2 },
         workflowId: "workflow-id",
@@ -163,8 +165,27 @@ describe("Workflow runtime state-machine contract", () => {
         { itemIndex: 1, nodeId: "video", status: "WAITING_UPSTREAM" },
       ],
     );
-    assertPlanInvariants(activeUpstreamRun, document);
+    assertPlanInvariants(
+      activeUpstreamRun,
+      document,
+      activeUpstreamLatestTaskRuns,
+    );
 
+    const recoverableUpstreamLatestTaskRuns = [
+      latestTaskRun({
+        attempt: 2,
+        id: "image-failed-0",
+        nodeExecutionId: "image-execution",
+        status: "FAILED",
+      }),
+      latestTaskRun({
+        attempt: 4,
+        id: "image-cancelled-1",
+        itemIndex: 1,
+        nodeExecutionId: "image-execution",
+        status: "CANCELLED",
+      }),
+    ];
     const recoverableUpstreamRun = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-target", targetNodeIds: ["video"] },
@@ -172,21 +193,7 @@ describe("Workflow runtime state-machine contract", () => {
         createTaskRunId: nextId("task-run-recover"),
         document,
         latestNodeExecutions: [{ id: "image-execution", nodeId: "image" }],
-        latestTaskRuns: [
-          latestTaskRun({
-            attempt: 2,
-            id: "image-failed-0",
-            nodeExecutionId: "image-execution",
-            status: "FAILED",
-          }),
-          latestTaskRun({
-            attempt: 4,
-            id: "image-cancelled-1",
-            itemIndex: 1,
-            nodeExecutionId: "image-execution",
-            status: "CANCELLED",
-          }),
-        ],
+        latestTaskRuns: recoverableUpstreamLatestTaskRuns,
         ownerId: "owner-user",
         plannedItemCountByNodeId: { image: 2, video: 2 },
         workflowId: "workflow-id",
@@ -232,26 +239,31 @@ describe("Workflow runtime state-machine contract", () => {
         },
       ],
     );
-    assertPlanInvariants(recoverableUpstreamRun, document);
+    assertPlanInvariants(
+      recoverableUpstreamRun,
+      document,
+      recoverableUpstreamLatestTaskRuns,
+    );
 
+    const reviewBarrierLatestTaskRuns = [
+      latestTaskRun({
+        id: "image-approved-old",
+        nodeExecutionId: "image-execution",
+        status: "APPROVED",
+      }),
+      latestTaskRun({
+        attempt: 1,
+        id: "image-pending-latest",
+        nodeExecutionId: "image-execution",
+        status: "PENDING_REVIEW",
+      }),
+    ];
     const reviewBarrierRun = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-target", targetNodeIds: ["video"] },
         document,
         latestNodeExecutions: [{ id: "image-execution", nodeId: "image" }],
-        latestTaskRuns: [
-          latestTaskRun({
-            id: "image-approved-old",
-            nodeExecutionId: "image-execution",
-            status: "APPROVED",
-          }),
-          latestTaskRun({
-            attempt: 1,
-            id: "image-pending-latest",
-            nodeExecutionId: "image-execution",
-            status: "PENDING_REVIEW",
-          }),
-        ],
+        latestTaskRuns: reviewBarrierLatestTaskRuns,
         ownerId: "owner-user",
         workflowId: "workflow-id",
       }),
@@ -260,7 +272,153 @@ describe("Workflow runtime state-machine contract", () => {
       reviewBarrierRun.taskRunsToCreate[0]?.status,
       "WAITING_UPSTREAM",
     );
-    assertPlanInvariants(reviewBarrierRun, document);
+    assertPlanInvariants(
+      reviewBarrierRun,
+      document,
+      reviewBarrierLatestTaskRuns,
+    );
+  });
+
+  test("planner run-target contract fills empty reused upstream Node Execution slots before children wait on them", () => {
+    const document = generatedImageToGeneratedVideoDocument();
+    const latestTaskRuns: ReturnType<typeof latestTaskRun>[] = [];
+    const plan = unwrapPlan(
+      planWorkflowRun({
+        command: { type: "run-target", targetNodeIds: ["video"] },
+        createNodeExecutionId: nextId(
+          "runtime-node-execution-run-target-empty-parent",
+        ),
+        createTaskRunId: nextId("runtime-task-run-run-target-empty-parent"),
+        document,
+        latestNodeExecutions: [
+          { id: "empty-image-execution", nodeId: "image" },
+        ],
+        latestTaskRuns,
+        ownerId: "owner-user",
+        plannedItemCountByNodeId: { image: 2, video: 2 },
+        workflowId: "workflow-id",
+      }),
+    );
+
+    assert.deepEqual(plan.nodeExecutionsToReuse, [
+      { id: "empty-image-execution", nodeId: "image" },
+    ]);
+    assert.deepEqual(
+      plan.taskRunsToCreate.map((taskRun) => ({
+        itemIndex: taskRun.itemIndex,
+        nodeExecutionId: taskRun.nodeExecutionId,
+        nodeId: taskRun.nodeId,
+        status: taskRun.status,
+      })),
+      [
+        {
+          itemIndex: 0,
+          nodeExecutionId: "empty-image-execution",
+          nodeId: "image",
+          status: "QUEUED",
+        },
+        {
+          itemIndex: 1,
+          nodeExecutionId: "empty-image-execution",
+          nodeId: "image",
+          status: "QUEUED",
+        },
+        {
+          itemIndex: 0,
+          nodeExecutionId: "runtime-node-execution-run-target-empty-parent-1",
+          nodeId: "video",
+          status: "WAITING_UPSTREAM",
+        },
+        {
+          itemIndex: 1,
+          nodeExecutionId: "runtime-node-execution-run-target-empty-parent-1",
+          nodeId: "video",
+          status: "WAITING_UPSTREAM",
+        },
+      ],
+    );
+    assert.deepEqual(
+      plan.taskDependenciesToCreate.map((dependency) => ({
+        childNodeId: dependency.childNodeId,
+        parentItemIndex: dependency.parentItemIndex,
+        parentNodeExecutionId: dependency.parentNodeExecutionId,
+        parentNodeId: dependency.parentNodeId,
+      })),
+      [
+        {
+          childNodeId: "video",
+          parentItemIndex: 0,
+          parentNodeExecutionId: "empty-image-execution",
+          parentNodeId: "image",
+        },
+        {
+          childNodeId: "video",
+          parentItemIndex: 1,
+          parentNodeExecutionId: "empty-image-execution",
+          parentNodeId: "image",
+        },
+      ],
+    );
+    assertPlanInvariants(plan, document, latestTaskRuns);
+  });
+
+  test("planner rerun-node contract fills empty reused upstream Node Execution slots before children wait on them", () => {
+    const document = generatedImageToGeneratedVideoDocument();
+    const latestTaskRuns: ReturnType<typeof latestTaskRun>[] = [];
+    const plan = unwrapPlan(
+      planWorkflowRun({
+        command: { type: "rerun-node", nodeId: "video" },
+        createNodeExecutionId: nextId("runtime-node-execution-empty-parent"),
+        createTaskRunId: nextId("runtime-task-run-empty-parent"),
+        document,
+        latestNodeExecutions: [
+          { id: "empty-image-execution", nodeId: "image" },
+        ],
+        latestTaskRuns,
+        ownerId: "owner-user",
+        plannedItemCountByNodeId: { image: 2, video: 2 },
+        workflowId: "workflow-id",
+      }),
+    );
+
+    assert.deepEqual(plan.nodeExecutionsToReuse, [
+      { id: "empty-image-execution", nodeId: "image" },
+    ]);
+    assert.deepEqual(
+      plan.taskRunsToCreate.map((taskRun) => ({
+        itemIndex: taskRun.itemIndex,
+        nodeExecutionId: taskRun.nodeExecutionId,
+        nodeId: taskRun.nodeId,
+        status: taskRun.status,
+      })),
+      [
+        {
+          itemIndex: 0,
+          nodeExecutionId: "empty-image-execution",
+          nodeId: "image",
+          status: "QUEUED",
+        },
+        {
+          itemIndex: 1,
+          nodeExecutionId: "empty-image-execution",
+          nodeId: "image",
+          status: "QUEUED",
+        },
+        {
+          itemIndex: 0,
+          nodeExecutionId: "runtime-node-execution-empty-parent-1",
+          nodeId: "video",
+          status: "WAITING_UPSTREAM",
+        },
+        {
+          itemIndex: 1,
+          nodeExecutionId: "runtime-node-execution-empty-parent-1",
+          nodeId: "video",
+          status: "WAITING_UPSTREAM",
+        },
+      ],
+    );
+    assertPlanInvariants(plan, document, latestTaskRuns);
   });
 
   test("repository and gatekeeper contract commits materialized Task Runs, gates review, freezes dependencies, and keeps Wake-Up Calls idempotent", async () => {
@@ -1071,6 +1229,13 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
       taskRunId: "broadcast-source-approved",
       text: "broadcast prompt",
     });
+    const broadcastLatestTaskRuns = [
+      latestTaskRun({
+        id: "broadcast-source-approved",
+        nodeExecutionId: "node-execution-broadcast-source",
+        status: "APPROVED",
+      }),
+    ];
     const broadcastPlan = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-target", targetNodeIds: ["script"] },
@@ -1080,19 +1245,17 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
         latestNodeExecutions: [
           { id: "node-execution-broadcast-source", nodeId: "source" },
         ],
-        latestTaskRuns: [
-          latestTaskRun({
-            id: "broadcast-source-approved",
-            nodeExecutionId: "node-execution-broadcast-source",
-            status: "APPROVED",
-          }),
-        ],
+        latestTaskRuns: broadcastLatestTaskRuns,
         ownerId: "owner-user",
         plannedItemCountByNodeId: { script: 3, source: 1 },
         workflowId: "workflow-id",
       }),
     );
-    assertPlanInvariants(broadcastPlan, broadcastGeneratedTextDocument());
+    assertPlanInvariants(
+      broadcastPlan,
+      broadcastGeneratedTextDocument(),
+      broadcastLatestTaskRuns,
+    );
     assert.deepEqual(
       broadcastPlan.taskDependenciesToCreate.map((dependency) => ({
         childTaskRunId: dependency.childTaskRunId,
@@ -1152,6 +1315,20 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
       nodeExecutionId: "node-execution-reorder-source",
       outputCount: 2,
     });
+    const reorderLatestTaskRuns = [
+      latestTaskRun({
+        id: "reorder-source-approved-0",
+        itemIndex: 0,
+        nodeExecutionId: "node-execution-reorder-source",
+        status: "APPROVED",
+      }),
+      latestTaskRun({
+        id: "reorder-source-approved-1",
+        itemIndex: 1,
+        nodeExecutionId: "node-execution-reorder-source",
+        status: "APPROVED",
+      }),
+    ];
     const reorderPlan = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-target", targetNodeIds: ["script"] },
@@ -1161,26 +1338,17 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
         latestNodeExecutions: [
           { id: "node-execution-reorder-source", nodeId: "source" },
         ],
-        latestTaskRuns: [
-          latestTaskRun({
-            id: "reorder-source-approved-0",
-            itemIndex: 0,
-            nodeExecutionId: "node-execution-reorder-source",
-            status: "APPROVED",
-          }),
-          latestTaskRun({
-            id: "reorder-source-approved-1",
-            itemIndex: 1,
-            nodeExecutionId: "node-execution-reorder-source",
-            status: "APPROVED",
-          }),
-        ],
+        latestTaskRuns: reorderLatestTaskRuns,
         ownerId: "owner-user",
         plannedItemCountByNodeId: { script: 2, source: 2 },
         workflowId: "workflow-id",
       }),
     );
-    assertPlanInvariants(reorderPlan, outputReorderDocument());
+    assertPlanInvariants(
+      reorderPlan,
+      outputReorderDocument(),
+      reorderLatestTaskRuns,
+    );
     assert.deepEqual(
       reorderPlan.taskDependenciesToCreate.map(
         (dependency) => dependency.parentItemIndex,

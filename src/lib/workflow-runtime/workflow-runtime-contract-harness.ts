@@ -26,6 +26,10 @@ import type { createWorkflowRuntimeProviderExecutor } from "~/server/workflow-ru
 export function assertPlanInvariants(
   plan: ReturnType<typeof unwrapPlan>,
   document: WorkflowDocument,
+  existingTaskRuns: readonly {
+    readonly nodeExecutionId: string;
+    readonly itemIndex: number;
+  }[],
 ) {
   const generatedNodeIds = new Set(
     document.nodes
@@ -66,18 +70,21 @@ export function assertPlanInvariants(
     );
   }
   for (const dependency of plan.taskDependenciesToCreate) {
+    const hasParentTaskRun = [
+      ...plan.taskRunsToCreate,
+      ...existingTaskRuns,
+    ].some(
+      (taskRun) =>
+        taskRun.nodeExecutionId === dependency.parentNodeExecutionId &&
+        taskRun.itemIndex === dependency.parentItemIndex,
+    );
     assert.ok(generatedNodeIds.has(dependency.parentNodeId));
     assert.notEqual(dependency.parentNodeId, "prompt");
     assert.notEqual(dependency.parentNodeId, "asset");
     assert.notEqual(dependency.parentNodeId, "topic");
     assert.ok(
-      [...plan.taskRunsToCreate].some(
-        (taskRun) =>
-          taskRun.nodeExecutionId === dependency.parentNodeExecutionId ||
-          plan.nodeExecutionsToReuse.some(
-            (execution) => execution.id === dependency.parentNodeExecutionId,
-          ),
-      ),
+      hasParentTaskRun,
+      `Dependency ${dependency.childTaskRunId} points to missing parent Task Run slot ${dependency.parentNodeExecutionId}/${dependency.parentItemIndex}`,
     );
   }
   assert.deepEqual(
