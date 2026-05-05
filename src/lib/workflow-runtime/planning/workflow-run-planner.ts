@@ -26,7 +26,7 @@ import {
   type TaskRunStatus,
 } from "~/lib/workflow-runtime/domain/task-run-state";
 import type { TaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
-import { materializeDirectTaskRunInput } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
+import { materializeTaskRunInput } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
 
 export type WorkflowRunPlannerCommand =
   | { readonly type: "run-target"; readonly targetNodeIds: readonly string[] }
@@ -423,18 +423,15 @@ export function planWorkflowRun(
     const status = parentsSatisfied(dependencyAddresses)
       ? "QUEUED"
       : "WAITING_UPSTREAM";
-    const materialization =
-      status === "QUEUED" && dependencyAddresses.length === 0
-        ? materializeDirectTaskRunInput({
-            attempt: inputTaskRun.attempt,
-            document: input.document,
-            documentRevision: input.documentRevision ?? null,
-            itemIndex: inputTaskRun.itemIndex,
-            nodeExecutionId: inputTaskRun.nodeExecutionId,
-            nodeId: inputTaskRun.nodeId,
-            taskRunId,
-          })
-        : undefined;
+    const materialization = materializeTaskRunInput({
+      attempt: inputTaskRun.attempt,
+      document: input.document,
+      documentRevision: input.documentRevision ?? null,
+      itemIndex: inputTaskRun.itemIndex,
+      nodeExecutionId: inputTaskRun.nodeExecutionId,
+      nodeId: inputTaskRun.nodeId,
+      taskRunId,
+    });
     const taskRun: PlannedTaskRun = {
       ...inputTaskRun,
       estimatedCreditCost: estimatedCreditCost(inputTaskRun.nodeId, input),

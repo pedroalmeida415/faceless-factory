@@ -2220,6 +2220,79 @@ describe("WorkflowRuntimeRepository", () => {
     });
   });
 
+  test("persists the planned immutable input snapshot for Waiting Upstream Task Runs", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    const frozenSnapshot = {
+      ...inputSnapshot("task-run-waiting-frozen", 0, {
+        nodeExecutionId: "node-execution-waiting-frozen",
+        nodeId: "waiting-node",
+      }),
+      documentRevision: 91,
+      providerInput: {
+        kind: "llm-generation-request" as const,
+        request: {
+          idempotencyKey: "task_run:task-run-waiting-frozen:attempt:0",
+          maxOutputTokens: 512,
+          mode: null,
+          model: "gemini-3-flash-preview" as const,
+          prompt: "frozen waiting prompt",
+          referenceImages: [],
+          systemPrompt: "frozen system prompt",
+          temperature: 0.4,
+          thinkingLevel: "LOW" as const,
+        },
+      },
+    };
+
+    await repository.commitWorkflowRunPlan(
+      workflowRunPlan({
+        nodeExecutionsToCreate: [
+          {
+            id: "node-execution-waiting-frozen",
+            nodeId: "waiting-node",
+            ownerId: "owner-user",
+            workflowId: "workflow-id",
+          },
+        ],
+        taskRunsToCreate: [
+          {
+            attempt: 0,
+            estimatedCreditCost: 7,
+            id: "task-run-waiting-frozen",
+            inputSnapshot: frozenSnapshot,
+            itemIndex: 0,
+            nodeExecutionId: "node-execution-waiting-frozen",
+            nodeId: "waiting-node",
+            status: "WAITING_UPSTREAM",
+            targetNodeConfig: {
+              ...frozenSnapshot.targetNodeConfig,
+              config: { temperature: 1.8 },
+            },
+          },
+        ],
+      }),
+    );
+
+    assert.deepEqual(
+      await repository.getRuntimeTaskRunsForNodeExecution({
+        nodeExecutionId: "node-execution-waiting-frozen",
+      }),
+      [
+        {
+          attempt: 0,
+          inputSnapshot: frozenSnapshot,
+          itemIndex: 0,
+          nodeExecutionId: "node-execution-waiting-frozen",
+          ownerUserId: "owner-user",
+          reservedCredits: null,
+          runtimeStatus: "WAITING_UPSTREAM",
+          taskRunId: "task-run-waiting-frozen",
+          workflowId: "workflow-id",
+        },
+      ],
+    );
+  });
+
   test("persists planned Task Dependencies as unresolved child requirements", async () => {
     const repository = createWorkflowRuntimeRepository(db);
 

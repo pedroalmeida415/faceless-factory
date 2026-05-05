@@ -274,8 +274,10 @@ function buildInputSnapshot(
     readonly parent: TaskRunGatekeeperTaskRun;
   }[],
 ): TaskRunInputSnapshot {
+  const frozenSnapshot = requireInputSnapshot(child);
   return buildTaskRunInputSnapshot({
     attempt: child.attempt,
+    documentRevision: frozenSnapshot.documentRevision,
     itemIndex: child.itemIndex,
     nodeExecutionId: child.nodeExecutionId,
     nodeId: child.nodeId,
@@ -296,9 +298,9 @@ function buildInputSnapshot(
         taskRunId: parent.id,
       };
     }),
-    targetNodeConfig: child.targetNodeConfig,
+    targetNodeConfig: frozenSnapshot.targetNodeConfig,
     taskRunId: child.id,
-    workflowDefinition: requireInputSnapshot(child).workflowDefinition,
+    workflowDefinition: frozenSnapshot.workflowDefinition,
   });
 }
 

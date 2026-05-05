@@ -7,11 +7,11 @@ import {
   WORKFLOW_DOCUMENT_VERSION,
   type WorkflowDocument,
 } from "~/lib/workflow/document";
-import { materializeDirectTaskRunInput } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
+import { materializeTaskRunInput } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
 
 describe("Task Run Input Materialization", () => {
   test("materializes a direct runnable Task Run into an executable immutable input snapshot", () => {
-    const result = materializeDirectTaskRunInput({
+    const result = materializeTaskRunInput({
       attempt: 2,
       document: directLlmWorkflowDocument(),
       documentRevision: 17,

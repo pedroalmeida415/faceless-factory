@@ -125,6 +125,78 @@ describe("TaskRunGatekeeper", () => {
     ]);
   });
 
+  test("Wake-Up Calls preserve the Waiting Upstream frozen input snapshot metadata", () => {
+    const parent = taskRun({
+      id: "parent-approved",
+      nodeExecutionId: "parent-node",
+      output: {
+        assetId: "asset-parent-approved",
+        kind: "inline-text-asset",
+        text: "approved generated text",
+      },
+      status: "APPROVED",
+    });
+    const child = taskRun({
+      id: "child-waiting-frozen",
+      inputSnapshot: buildTaskRunInputSnapshot({
+        attempt: 0,
+        documentRevision: 123,
+        itemIndex: 0,
+        nodeExecutionId: "child-node",
+        nodeId: "node-child-waiting-frozen",
+        resolvedParentTaskRuns: [],
+        targetNodeConfig: {
+          ...createWorkflowNode("llmGenerator", 0),
+          config: { maxOutputTokens: 512, temperature: 0.4 },
+          id: "node-child-waiting-frozen",
+          reviewEnabled: true,
+        },
+        taskRunId: "child-waiting-frozen",
+      }),
+      nodeExecutionId: "child-node",
+      status: "WAITING_UPSTREAM",
+    });
+    const result = wakeUpTaskRunChildren(
+      gatekeeperState({
+        dependencies: [dependency(child, parent)],
+        taskRuns: [parent, child],
+      }),
+      { settledParentTaskRunId: parent.id },
+    );
+
+    const queuedChild = requireTaskRun(result.state, child.id);
+    assert.equal(queuedChild.status, "QUEUED");
+    assert.equal(queuedChild.inputSnapshot?.documentRevision, 123);
+    assert.equal(
+      queuedChild.inputSnapshot?.targetNodeConfig.kind === "llmGenerator"
+        ? queuedChild.inputSnapshot.targetNodeConfig.reviewEnabled
+        : null,
+      true,
+    );
+    assert.deepEqual(
+      queuedChild.inputSnapshot?.targetNodeConfig.kind === "llmGenerator"
+        ? queuedChild.inputSnapshot.targetNodeConfig.config
+        : null,
+      { maxOutputTokens: 512, temperature: 0.4 },
+    );
+    assert.deepEqual(queuedChild.inputSnapshot?.resolvedParentTaskRuns, [
+      {
+        address: {
+          parentItemIndex: 0,
+          parentNodeId: parent.nodeId,
+          sourceHandle: null,
+          targetHandle: null,
+          targetNodeId: child.nodeId,
+        },
+        attempt: 0,
+        itemIndex: 0,
+        nodeExecutionId: parent.nodeExecutionId,
+        output: parent.output,
+        taskRunId: parent.id,
+      },
+    ]);
+  });
+
   test("does not treat Pending Review or older approved Attempts as dependency satisfaction", () => {
     const olderApprovedParent = taskRun({
       attempt: 0,

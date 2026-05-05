@@ -117,6 +117,88 @@ function makeOutputReorderDependencyDocument(): WorkflowDocument {
   };
 }
 
+function makeWaitingUpstreamFreezeDocument(): WorkflowDocument {
+  const topic = makeNode("list", "topic");
+  const prompt = makeNode("prompt", "prompt");
+  const reference = makeNode("asset", "reference");
+  const source = makeNode("llmGenerator", "source");
+  const reorder = makeNode("outputReorder", "reorder");
+  const image = makeNode("imageGenerator", "image");
+  return {
+    version: WORKFLOW_DOCUMENT_VERSION,
+    nodes: [
+      topic.kind === "list" ? { ...topic, items: ["alpha", "beta"] } : topic,
+      prompt.kind === "prompt"
+        ? {
+            ...prompt,
+            prompt: "Paint {{topic}} with frozen lighting",
+            variables: [{ key: "topic", label: "Topic" }],
+          }
+        : prompt,
+      reference.kind === "asset"
+        ? {
+            ...reference,
+            assetKind: "image" as const,
+            assets: [workflowAsset("asset-reference-frozen")],
+          }
+        : reference,
+      { ...source, config: { maxOutputTokens: 256, temperature: 0.3 } },
+      reorder.kind === "outputReorder"
+        ? {
+            ...reorder,
+            mode: "manual" as const,
+            order: [1, 0],
+            valueType: "text" as const,
+          }
+        : reorder,
+      image.kind === "imageGenerator"
+        ? {
+            ...image,
+            config: { aspectRatio: "16:9" },
+            reviewEnabled: true,
+          }
+        : image,
+    ],
+    edges: [
+      {
+        id: "topic-to-prompt",
+        source: "topic",
+        sourceHandle: "text",
+        target: "prompt",
+        targetHandle: "topic",
+      },
+      {
+        id: "prompt-to-image",
+        source: "prompt",
+        sourceHandle: "text",
+        target: "image",
+        targetHandle: "prompt",
+      },
+      {
+        id: "reference-to-image",
+        source: "reference",
+        sourceHandle: "asset",
+        target: "image",
+        targetHandle: "image-input-0",
+      },
+      {
+        id: "source-to-reorder",
+        source: "source",
+        sourceHandle: "text",
+        target: "reorder",
+        targetHandle: "input",
+      },
+      {
+        id: "reorder-to-image",
+        source: "reorder",
+        sourceHandle: "output",
+        target: "image",
+        targetHandle: "prompt",
+      },
+    ],
+  };
+}
+
 function unwrap<T>(
   result: { ok: true; value: T } | { ok: false; error: unknown },
 ) {
@@ -141,6 +223,22 @@ function latestTaskRun(input: {
     itemIndex: input.itemIndex ?? 0,
     nodeExecutionId: input.nodeExecutionId,
     status: input.status,
+  };
+}
+
+function workflowAsset(id: string) {
+  return {
+    createdAt: "2026-01-01T00:00:00.000Z",
+    externalUri: null,
+    fileName: `${id}.png`,
+    id,
+    kind: "image" as const,
+    mimeType: "image/png",
+    model: null,
+    size: 123,
+    source: "upload" as const,
+    storagePath: `uploads/${id}.png`,
+    url: `https://cdn.example.com/${id}.png`,
   };
 }
 
@@ -269,6 +367,140 @@ describe("WorkflowRunPlanner", () => {
     assert.deepEqual(
       snapshot?.workflowDefinition,
       toWorkflowDefinitionGraphDocument(makeDocument()),
+    );
+  });
+
+  test("run-target freezes Waiting Upstream static input snapshots while dependencies stay generated-parent-only", () => {
+    let nodeExecutionIndex = 0;
+    let taskRunIndex = 0;
+    const document = makeWaitingUpstreamFreezeDocument();
+
+    const plan = unwrap(
+      planWorkflowRun({
+        command: { type: "run-target", targetNodeIds: ["image"] },
+        createNodeExecutionId: () => `node-execution-${++nodeExecutionIndex}`,
+        createTaskRunId: () => `task-run-${++taskRunIndex}`,
+        document,
+        documentRevision: 77,
+        latestNodeExecutions: [],
+        latestTaskRuns: [],
+        ownerId: "owner-1",
+        plannedItemCountByNodeId: { image: 2, source: 2 },
+        workflowId: "workflow-1",
+      }),
+    );
+
+    assert.deepEqual(
+      plan.nodeExecutionsToCreate.map((execution) => ({
+        id: execution.id,
+        nodeId: execution.nodeId,
+      })),
+      [
+        { id: "node-execution-1", nodeId: "source" },
+        { id: "node-execution-2", nodeId: "image" },
+      ],
+    );
+    assert.deepEqual(
+      plan.taskRunsToCreate.map((taskRun) => ({
+        id: taskRun.id,
+        itemIndex: taskRun.itemIndex,
+        nodeId: taskRun.nodeId,
+        status: taskRun.status,
+      })),
+      [
+        {
+          id: "task-run-1",
+          itemIndex: 0,
+          nodeId: "source",
+          status: "QUEUED",
+        },
+        {
+          id: "task-run-2",
+          itemIndex: 1,
+          nodeId: "source",
+          status: "QUEUED",
+        },
+        {
+          id: "task-run-3",
+          itemIndex: 0,
+          nodeId: "image",
+          status: "WAITING_UPSTREAM",
+        },
+        {
+          id: "task-run-4",
+          itemIndex: 1,
+          nodeId: "image",
+          status: "WAITING_UPSTREAM",
+        },
+      ],
+    );
+    assert.deepEqual(
+      plan.taskDependenciesToCreate.map((dependency) => ({
+        childTaskRunId: dependency.childTaskRunId,
+        parentItemIndex: dependency.parentItemIndex,
+        parentNodeId: dependency.parentNodeId,
+        sourceHandle: dependency.sourceHandle,
+        targetHandle: dependency.targetHandle,
+      })),
+      [
+        {
+          childTaskRunId: "task-run-3",
+          parentItemIndex: 1,
+          parentNodeId: "source",
+          sourceHandle: "text",
+          targetHandle: "prompt",
+        },
+        {
+          childTaskRunId: "task-run-4",
+          parentItemIndex: 0,
+          parentNodeId: "source",
+          sourceHandle: "text",
+          targetHandle: "prompt",
+        },
+      ],
+    );
+
+    const waitingSnapshot = plan.taskRunsToCreate.find(
+      (taskRun) => taskRun.id === "task-run-3",
+    )?.inputSnapshot;
+    assert.equal(waitingSnapshot?.documentRevision, 77);
+    assert.equal(
+      waitingSnapshot?.idempotencyKey,
+      "task_run:task-run-3:attempt:0",
+    );
+    assert.equal(waitingSnapshot?.targetNodeConfig.id, "image");
+    assert.equal(
+      waitingSnapshot?.targetNodeConfig.kind === "imageGenerator"
+        ? waitingSnapshot.targetNodeConfig.reviewEnabled
+        : null,
+      true,
+    );
+    assert.deepEqual(
+      waitingSnapshot?.targetNodeConfig.kind === "imageGenerator"
+        ? waitingSnapshot.targetNodeConfig.config
+        : null,
+      { aspectRatio: "16:9" },
+    );
+    assert.equal(
+      waitingSnapshot?.providerInput.kind,
+      "image-generation-request",
+    );
+    assert.equal(
+      waitingSnapshot?.providerInput.kind === "image-generation-request"
+        ? waitingSnapshot.providerInput.request.prompt
+        : null,
+      "Paint alpha with frozen lighting",
+    );
+    assert.equal(
+      waitingSnapshot?.providerInput.kind === "image-generation-request"
+        ? waitingSnapshot.providerInput.request.referenceImages?.[0]?.id
+        : null,
+      "asset-reference-frozen",
+    );
+    assert.deepEqual(waitingSnapshot?.resolvedParentTaskRuns, []);
+    assert.deepEqual(
+      waitingSnapshot?.workflowDefinition,
+      toWorkflowDefinitionGraphDocument(document),
     );
   });
 

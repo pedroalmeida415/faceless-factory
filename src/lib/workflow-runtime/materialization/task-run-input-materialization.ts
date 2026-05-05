@@ -8,7 +8,7 @@ import {
   type ExecutableTaskRunInputSnapshot,
 } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
 
-export type MaterializeDirectTaskRunInputCommand = {
+export type MaterializeTaskRunInputCommand = {
   readonly taskRunId: string;
   readonly nodeExecutionId: string;
   readonly nodeId: string;
@@ -27,8 +27,8 @@ export type TaskRunInputMaterializationResult =
   | { readonly ok: true; readonly value: ExecutableTaskRunInputSnapshot }
   | { readonly ok: false; readonly error: TaskRunInputMaterializationError };
 
-export function materializeDirectTaskRunInput(
-  command: MaterializeDirectTaskRunInputCommand,
+export function materializeTaskRunInput(
+  command: MaterializeTaskRunInputCommand,
 ): TaskRunInputMaterializationResult {
   const workflowDefinition = toWorkflowDefinitionGraphDocument(
     command.document,

@@ -300,7 +300,8 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             committedTaskRun.status === "QUEUED" && hasReservedCredits
               ? (freeze?.inputSnapshot ?? null)
               : committedTaskRun.status === "WAITING_UPSTREAM"
-                ? buildRepositoryInputSnapshot({
+                ? (taskRun.inputSnapshot ??
+                  buildRepositoryInputSnapshot({
                     attempt: taskRun.attempt,
                     itemIndex: taskRun.itemIndex,
                     nodeExecutionId: taskRun.nodeExecutionId,
@@ -309,7 +310,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
                     targetNodeConfig: taskRun.targetNodeConfig,
                     taskRunId: taskRun.id,
                     workflowDefinition: plan.workflowDefinition,
-                  })
+                  }))
                 : null;
 
           await tx.execute(sql`
