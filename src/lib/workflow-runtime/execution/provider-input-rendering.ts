@@ -387,7 +387,20 @@ function resolveWorkflowNodeRuntimeValue(input: {
         nodeId: inputEdge.source,
         path: nextPath,
         sourceHandle: inputEdge.sourceHandle,
+        targetHandle: input.targetHandle,
       });
+      if (
+        value &&
+        input.command.resolvedParentTaskRuns.some((parent) =>
+          providerDependencyMatches(parent.address, {
+            parentNodeId: inputEdge.source,
+            sourceHandle: inputEdge.sourceHandle,
+          }),
+        ) &&
+        value.items.length < node.order.length
+      ) {
+        return value;
+      }
       return value && value.type === node.valueType
         ? reorderRuntimeValue(
             value,

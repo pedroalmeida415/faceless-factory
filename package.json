@@ -9,6 +9,7 @@
     "preview": "next build && next start",
     "start": "next start",
     "test": "rtk bun test --dots",
+    "test:runtime-contract": "rtk bun test --dots src/lib/workflow-runtime/workflow-runtime-contract.test.ts",
     "test:verbose": "rtk bun test",
     "test:watch": "rtk bun test --watch",
     "check": "rtk biome check --no-errors-on-unmatched --max-diagnostics=none .",
