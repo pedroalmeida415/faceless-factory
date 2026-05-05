@@ -8,6 +8,10 @@ This context defines the domain language for the node-based media workflow runti
 One attempt to produce one item for one node execution.
 _Avoid_: Task, job, output job
 
+**Task Run Input Materialization**:
+The queue-time process that freezes a task run's provider-ready input snapshot from the workflow blueprint, static upstream values, resolved parent task runs, provider settings, and idempotency key.
+_Avoid_: Live rendering, worker graph resolution
+
 **Node Execution**:
 A durable batch grouping of task runs for a single graph node.
 _Avoid_: Header, node run, node job
@@ -69,6 +73,10 @@ _Avoid_: Node dependency, latest dependency
 - A **Node Execution** has one or more **Task Runs**.
 - A **Task Run** belongs to exactly one **Node Execution**, one **Item Index**, and one **Attempt**.
 - A **Task Run** is the durable source of truth for scheduling, retry, review, regeneration, and dependency gating.
+- **Task Run Input Materialization** is the only path that creates or refreshes a **Task Run** input snapshot before the task run becomes `QUEUED`.
+- **Task Run Input Materialization** freezes static upstream blueprint values and target node settings when a **Task Run** is created, including **Waiting Upstream** task runs.
+- A **Wake-Up Call** for a **Waiting Upstream** **Task Run** binds only generated parent outputs from resolved parent **Task Runs**; it does not re-read live list, prompt, asset, or target generator settings from the workflow document.
+- Later non-semantic edits such as node position changes do not affect already-created **Task Runs** because workers execute materialized input snapshots instead of live blueprint state.
 - A **Node Execution** is the durable batch record; there is no separate **Workflow Execution** concept in the domain model.
 - A **Node Execution** does not have an authoritative execution status; visible node state is derived from its latest **Task Runs**.
 - A node gets its first **Node Execution** when it is first run manually or when downstream execution needs a batch for dependency linking.
@@ -101,6 +109,7 @@ _Avoid_: Node dependency, latest dependency
 - Downstream execution may consume only `APPROVED` parent **Task Runs**; `PENDING_REVIEW` output is renderable but does not satisfy dependencies.
 - A later upstream rerun does not automatically resume a downstream **Task Run** already marked **Upstream Failed**.
 - A **Task Dependency** stores a logical requirement address while the child **Task Run** is waiting: parent **Node Execution** plus **Item Index**.
+- **Task Dependencies** represent generated parent **Task Run** requirements only; static upstream blueprint values are frozen in the **Task Run** input snapshot, not stored as **Task Dependencies**.
 - A **Task Dependency** stores the resolved exact parent **Task Run** before the child **Task Run** is queued or run.
 - Regeneration can satisfy unresolved **Task Dependencies** through the same parent **Node Execution** and **Item Index** without rewriting child dependencies.
 - An unresolved **Task Dependency** is satisfied only when the latest **Attempt** for the required **Node Execution** and **Item Index** is `APPROVED`.
