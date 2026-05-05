@@ -2,7 +2,7 @@
 
 ## 1. Proactive Excellence & End-to-End Ownership
 
-You do not settle for the smallest visible patch. Deliver the smallest complete change that solves the task goal at the correct architectural level, with the polish and verification required for the touched domain. Treat every task as mission-critical within its relevant invariant path; do not expand into unrelated systems unless they participate in the same source of truth, lifecycle, or failure mode.
+You do not settle for the smallest visible patch. Deliver the most thorough complete change that solves the task goal at the correct architectural level, with the polish and verification required for the touched domain. Treat every task as mission-critical within its relevant invariant path; do not expand into unrelated systems unless they participate in the same source of truth, lifecycle, or failure mode. 
 
 * **Microscopic Detail:** Attend to the "invisible" details that differentiate senior-grade code from amateur scripts.
 * **Anticipate the "What Ifs":** Proactively handle edge cases before they are reported.
@@ -14,7 +14,7 @@ You do not settle for the smallest visible patch. Deliver the smallest complete 
 * **No Silent Scope Reduction:** Do not silently implement a smaller or weaker version of the in-scope system. If time, ambiguity, or missing infrastructure prevents full implementation, surface the scope decision explicitly before writing a lesser substitute.
 
 ## 2. Code Brevity & Conciseness
-Brevity is a priority after correctness, domain completeness, and architectural clarity. Good code is not measured by volume, but by clarity, safety, and functionality.
+Brevity is a priority after correctness, domain completeness, and architectural clarity. Good code is not measured by volume, but by clarity, safety, and functionality. Optimize lines of code to avoid excessive verbosity and growing complexity.
 
 * **Eliminate Redundancy**: Avoid "clever" but verbose abstractions. Favor composition over inheritance and simple, declarative structures over complex, imperative chains.
 * **Directness**: Every line of code must justify its existence. If it does not directly contribute to the feature requirements, logic, or type safety, remove it.
@@ -32,7 +32,7 @@ Every change should actively seek opportunities inside the touched domain to rem
 * **Consolidation Over Expansion:** When multiple paths express the same rule, merge them into a single source of truth instead of extending each path independently.
 * **Surface Area Reduction:** Treat every exported function, component, type, prop, option, and configuration flag as long-term maintenance surface. Add one only when it carries durable domain value.
 * **Verbosity Resistance:** Eliminate excessive naming, ceremony, comments, configuration, and indirection that do not improve correctness, type safety, observability, or domain clarity.
-* **Net-Simplification Standard:** A finished change should leave the touched domain smaller, easier to reason about, and less failure-prone whenever the problem allows it.
+* **Net-Simplification Standard:** A finished change should leave the touched domain more robust, consolidated, easier to reason about, and less failure-prone whenever the problem allows it.
 * **Consolidation Requires Cohesion:** Consolidate duplicated rules into a single source of truth, not multiple architectural layers into a single component. A large file mixing rendering, state transitions, persistence models, and scheduling is a failure of cohesion.
 
 ### Proactive Architecture Deepening
@@ -140,7 +140,7 @@ When directives appear to conflict, follow this priority:
 1. Correctness and root-cause fixes.
 2. Shared domain invariants and architectural simplicity.
 3. Type safety and explicit error modeling.
-4. Minimal code surface area. “Minimal” means the smallest durable architectural fix, not the smallest patch.
+4. Optimized code surface area. 
 5. Speed of delivery.
 
 ## 5. Rapid Prototyping & Breakage Policy
