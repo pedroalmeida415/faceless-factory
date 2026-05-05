@@ -74,12 +74,26 @@ describe("TaskRunGatekeeper", () => {
       },
       resolvedParentTaskRuns: [
         {
+          address: {
+            parentItemIndex: 0,
+            parentNodeId: parentA.nodeId,
+            sourceHandle: null,
+            targetHandle: null,
+            targetNodeId: child.nodeId,
+          },
           attempt: 1,
           itemIndex: 0,
           nodeExecutionId: "parent-node-a",
           taskRunId: parentA.id,
         },
         {
+          address: {
+            parentItemIndex: 0,
+            parentNodeId: parentB.nodeId,
+            sourceHandle: null,
+            targetHandle: null,
+            targetNodeId: child.nodeId,
+          },
           attempt: 2,
           itemIndex: 0,
           nodeExecutionId: "parent-node-b",
@@ -447,8 +461,10 @@ function dependency(
   return {
     childTaskRunId: child.id,
     requiredParentItemIndex: parent.itemIndex,
+    requiredParentNodeId: parent.nodeId,
     requiredParentNodeExecutionId: parent.nodeExecutionId,
     resolvedParentTaskRunId: null,
+    targetNodeId: child.nodeId,
   };
 }
 

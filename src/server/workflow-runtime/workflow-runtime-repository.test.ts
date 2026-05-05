@@ -529,8 +529,12 @@ describe("WorkflowRuntimeRepository", () => {
         {
           childTaskRunId: "child-reject-waits-next",
           requiredParentItemIndex: 0,
+          requiredParentNodeId: "node-id",
           requiredParentNodeExecutionId: "node-execution-parent-for-reject",
           resolvedParentTaskRunId: null,
+          sourceHandle: null,
+          targetHandle: null,
+          targetNodeId: "node-id",
         },
       ],
     );
@@ -687,14 +691,17 @@ describe("WorkflowRuntimeRepository", () => {
           }),
           resolvedParentTaskRuns: [
             {
+              address: {
+                parentItemIndex: 0,
+                parentNodeId: "parent-node",
+                sourceHandle: "text",
+                targetHandle: "prompt",
+                targetNodeId: "child-node",
+              },
               attempt: 1,
               itemIndex: 0,
               nodeExecutionId: "node-execution-parent-approved-reject",
-              sourceHandle: "text",
-              sourceNodeId: "parent-node",
               taskRunId: "parent-latest-approved-for-reject",
-              targetHandle: "prompt",
-              targetNodeId: "child-node",
             },
           ],
         },
@@ -1160,12 +1167,26 @@ describe("WorkflowRuntimeRepository", () => {
         }),
         resolvedParentTaskRuns: [
           {
+            address: {
+              parentItemIndex: 0,
+              parentNodeId: "node-id",
+              sourceHandle: null,
+              targetHandle: null,
+              targetNodeId: "node-id",
+            },
             attempt: 0,
             itemIndex: 0,
             nodeExecutionId: "node-execution-parent-a",
             taskRunId: "parent-approved-a",
           },
           {
+            address: {
+              parentItemIndex: 0,
+              parentNodeId: "node-id",
+              sourceHandle: null,
+              targetHandle: null,
+              targetNodeId: "node-id",
+            },
             attempt: 0,
             itemIndex: 0,
             nodeExecutionId: "node-execution-parent-b",
@@ -1498,8 +1519,12 @@ describe("WorkflowRuntimeRepository", () => {
         {
           childTaskRunId: "child-resolution",
           requiredParentItemIndex: 0,
+          requiredParentNodeId: "node-id",
           requiredParentNodeExecutionId: "node-execution-parent-resolution",
           resolvedParentTaskRunId: "parent-latest-approved",
+          sourceHandle: null,
+          targetHandle: null,
+          targetNodeId: "node-id",
         },
       ],
     );
@@ -1918,6 +1943,13 @@ describe("WorkflowRuntimeRepository", () => {
             },
             resolvedParentTaskRuns: [
               {
+                address: {
+                  parentItemIndex: 0,
+                  parentNodeId: "parent-node",
+                  sourceHandle: "text",
+                  targetHandle: "prompt",
+                  targetNodeId: "child-node",
+                },
                 attempt: 1,
                 itemIndex: 0,
                 nodeExecutionId: "node-execution-parent-for-commit",
@@ -1926,11 +1958,7 @@ describe("WorkflowRuntimeRepository", () => {
                   kind: "inline-text-asset",
                   text: "approved parent output",
                 },
-                sourceHandle: "text",
-                sourceNodeId: "parent-node",
                 taskRunId: "parent-latest-approved-for-commit",
-                targetHandle: "prompt",
-                targetNodeId: "child-node",
               },
             ],
           },
@@ -2024,6 +2052,7 @@ describe("WorkflowRuntimeRepository", () => {
               parentItemIndex: 0,
               parentNodeExecutionId: "node-execution-parent-stale-for-commit",
               parentNodeId: "parent-node",
+              targetNodeId: "child-node",
             },
           ],
           taskRunsToCreate: [
@@ -2144,6 +2173,7 @@ describe("WorkflowRuntimeRepository", () => {
             parentItemIndex: 0,
             parentNodeExecutionId: "node-execution-parent",
             parentNodeId: "parent-node",
+            targetNodeId: "child-node",
           },
         ],
         taskRunsToCreate: [
@@ -2351,11 +2381,11 @@ async function setupRuntimeTables(db: PgliteDatabase): Promise<void> {
       id text primary key,
       child_task_run_id text not null,
       required_parent_node_execution_id text not null,
-      required_parent_node_id text,
+      required_parent_node_id text not null,
       required_parent_item_index bigint not null,
       source_handle text,
       target_handle text,
-      target_node_id text,
+      target_node_id text not null,
       resolved_parent_task_run_id text,
       created_at timestamp not null default now(),
       resolved_at timestamp
@@ -2520,11 +2550,11 @@ async function insertTaskDependency(
       ].join(":")},
       ${input.childTaskRunId},
       ${input.parentNodeExecutionId},
-      ${input.parentNodeId ?? null},
+      ${input.parentNodeId ?? "node-id"},
       ${parentItemIndex},
       ${input.sourceHandle ?? null},
       ${input.targetHandle ?? null},
-      ${input.targetNodeId ?? null},
+      ${input.targetNodeId ?? "node-id"},
       null
     )
   `);

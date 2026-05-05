@@ -36,6 +36,7 @@ import type {
   GenerateVideoRequest,
   WorkflowAsset,
 } from "~/lib/workflow/types";
+import { providerDependencyMatches } from "~/lib/workflow-runtime/domain/provider-dependency-address";
 import type { ResolvedParentTaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
 
 export type RenderedTaskRunProviderInput =
@@ -159,7 +160,7 @@ function renderPrompt(
   parents: readonly ResolvedParentTaskRunInputSnapshot[],
 ): string {
   return joinTextOutputs(
-    parents.filter((parent) => isPromptHandle(parent.targetHandle)),
+    parents.filter((parent) => isPromptHandle(parent.address.targetHandle)),
   );
 }
 
@@ -167,7 +168,9 @@ function renderSystemPrompt(
   parents: readonly ResolvedParentTaskRunInputSnapshot[],
 ): string | null {
   const text = joinTextOutputs(
-    parents.filter((parent) => isSystemPromptHandle(parent.targetHandle)),
+    parents.filter((parent) =>
+      isSystemPromptHandle(parent.address.targetHandle),
+    ),
   );
 
   return text.length ? text : null;
@@ -212,6 +215,8 @@ function renderTextInput(
       incomingByTarget,
       nodeId: edge.source,
       path: new Set(),
+      sourceHandle: edge.sourceHandle,
+      targetHandle: edge.targetHandle,
       workflowDefinition,
     });
     return value?.type === "text" ? [value] : [];
@@ -247,6 +252,8 @@ function renderWorkflowImageInputsByHandle(
         incomingByTarget,
         nodeId: edge.source,
         path: new Set(),
+        sourceHandle: edge.sourceHandle,
+        targetHandle: edge.targetHandle,
         workflowDefinition,
       });
       if (value?.type !== "image") {
@@ -297,6 +304,8 @@ function resolveWorkflowNodeRuntimeValue(input: {
   readonly incomingByTarget: ReturnType<typeof buildIncomingByTarget>;
   readonly nodeId: string;
   readonly path: ReadonlySet<string>;
+  readonly sourceHandle?: string | null;
+  readonly targetHandle?: string | null;
   readonly workflowDefinition: WorkflowDefinitionGraphDocument;
 }): RuntimeValue | null {
   if (input.path.has(input.nodeId)) {
@@ -337,6 +346,7 @@ function resolveWorkflowNodeRuntimeValue(input: {
         ...input,
         nodeId: inputEdge.source,
         path: nextPath,
+        sourceHandle: inputEdge.sourceHandle,
       });
       return value && value.type === node.valueType
         ? reorderRuntimeValue(
@@ -353,7 +363,12 @@ function resolveWorkflowNodeRuntimeValue(input: {
     case "imageGenerator":
     case "videoGenerator":
     case "llmGenerator":
-      return resolveParentTaskRunRuntimeValue(input.command, node.id);
+      return resolveParentTaskRunRuntimeValue({
+        command: input.command,
+        nodeId: node.id,
+        sourceHandle: input.sourceHandle,
+        targetHandle: input.targetHandle,
+      });
   }
 }
 
@@ -375,6 +390,8 @@ function resolvePromptRuntimeValue(input: {
       const value = resolveWorkflowNodeRuntimeValue({
         ...input,
         nodeId: edge.source,
+        sourceHandle: edge.sourceHandle,
+        targetHandle: edge.targetHandle,
       });
       return value?.type === "text" ? [value] : [];
     });
@@ -407,13 +424,19 @@ function resolvePromptRuntimeValue(input: {
   return prompts.length ? { items: prompts, type: "text" } : null;
 }
 
-function resolveParentTaskRunRuntimeValue(
-  command: RenderTaskRunProviderInputCommand,
-  nodeId: string,
-): RuntimeValue | null {
-  const parents = command.resolvedParentTaskRuns.filter(
-    (parent) => parent.sourceNodeId === nodeId,
-  );
+function resolveParentTaskRunRuntimeValue(input: {
+  readonly command: RenderTaskRunProviderInputCommand;
+  readonly nodeId: string;
+  readonly sourceHandle?: string | null;
+  readonly targetHandle?: string | null;
+}): RuntimeValue | null {
+  const parents = input.command.resolvedParentTaskRuns.filter((parent) => {
+    return providerDependencyMatches(parent.address, {
+      parentNodeId: input.nodeId,
+      sourceHandle: input.sourceHandle,
+      targetHandle: input.targetHandle,
+    });
+  });
   const textItems = parents.flatMap((parent) =>
     parent.output?.kind === "inline-text-asset" ? [parent.output.text] : [],
   );
@@ -439,7 +462,7 @@ function renderImageInputsByHandle(
   const imageInputsByHandle: Record<string, WorkflowAsset[]> = {};
 
   for (const parent of parents) {
-    const targetHandle = parent.targetHandle;
+    const targetHandle = parent.address.targetHandle;
     const asset = renderWorkflowImageAsset(parent);
     if (!targetHandle || !asset) {
       continue;

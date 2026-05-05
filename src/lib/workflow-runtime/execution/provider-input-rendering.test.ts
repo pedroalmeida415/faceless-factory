@@ -98,6 +98,70 @@ describe("renderTaskRunProviderInput", () => {
     assert.deepEqual(result.providerInput.request.referenceImages, [image]);
   });
 
+  test("renders direct and reordered image parents into first/last video frames by handle", () => {
+    const image = { ...createWorkflowNode("imageGenerator", 0), id: "image" };
+    const reorder = {
+      ...createWorkflowNode("outputReorder", 1),
+      id: "shift",
+      shift: 1,
+      valueType: "image" as const,
+    };
+    const video = {
+      ...createWorkflowNode("videoGenerator", 2),
+      id: "video",
+      mode: "first-last-frame" as const,
+    };
+    const document = toWorkflowDefinitionGraphDocument({
+      version: WORKFLOW_DOCUMENT_VERSION,
+      nodes: [image, reorder, video],
+      edges: [
+        {
+          id: "image-video-first",
+          source: image.id,
+          sourceHandle: "images",
+          target: video.id,
+          targetHandle: "first-frame",
+        },
+        {
+          id: "image-shift",
+          source: image.id,
+          sourceHandle: "images",
+          target: reorder.id,
+          targetHandle: "input",
+        },
+        {
+          id: "shift-video-last",
+          source: reorder.id,
+          sourceHandle: "output",
+          target: video.id,
+          targetHandle: "last-frame",
+        },
+      ],
+    });
+    const frame1 = workflowImageAsset("frame-1");
+    const frame3 = workflowImageAsset("frame-3");
+    const targetNodeConfig = document.nodes.find(
+      (node) => node.id === video.id,
+    );
+    assert.equal(targetNodeConfig?.kind, "videoGenerator");
+
+    const result = renderTaskRunProviderInput({
+      idempotencyKey: "task_run:video-task:attempt:0",
+      itemIndex: 2,
+      resolvedParentTaskRuns: [
+        mediaParent(frame1, "last-frame", image.id, 0),
+        mediaParent(frame3, "first-frame", image.id, 2),
+      ],
+      targetNodeConfig,
+      workflowDefinition: document,
+    });
+
+    assert.equal(result.kind, "executable");
+    assert.equal(result.providerInput.kind, "video-generation-request");
+    assert.equal(result.providerInput.request.firstFrame?.id, frame3.id);
+    assert.equal(result.providerInput.request.lastFrame?.id, frame1.id);
+  });
+
   test("preserves non-local parent Asset metadata for provider materialization", () => {
     const node = {
       ...createWorkflowNode("imageGenerator", 0),
@@ -136,7 +200,13 @@ describe("renderTaskRunProviderInput", () => {
       resolvedParentTaskRuns: [
         {
           ...textParent("clockwork birds", "topic"),
-          sourceNodeId: "topic-source",
+          address: {
+            parentItemIndex: 0,
+            parentNodeId: "topic-source",
+            sourceHandle: "text",
+            targetHandle: "topic",
+            targetNodeId: "prompt",
+          },
         },
       ],
       targetNodeConfig,
@@ -176,6 +246,13 @@ function textParent(
   targetHandle: string,
 ): ResolvedParentTaskRunInputSnapshot {
   return {
+    address: {
+      parentItemIndex: 0,
+      parentNodeId: `source-${targetHandle}`,
+      sourceHandle: "text",
+      targetHandle,
+      targetNodeId: "target-node",
+    },
     attempt: 0,
     itemIndex: 0,
     nodeExecutionId: `node-execution-${targetHandle}`,
@@ -184,8 +261,6 @@ function textParent(
       kind: "inline-text-asset",
       text,
     },
-    sourceHandle: "text",
-    targetHandle,
     taskRunId: `task-run-${targetHandle}`,
   };
 }
@@ -193,11 +268,20 @@ function textParent(
 function mediaParent(
   asset: WorkflowAsset,
   targetHandle: string,
+  parentNodeId?: string,
+  itemIndex = 0,
 ): ResolvedParentTaskRunInputSnapshot {
   return {
+    address: {
+      parentItemIndex: itemIndex,
+      parentNodeId: parentNodeId ?? `source-${targetHandle}`,
+      sourceHandle: "images",
+      targetHandle,
+      targetNodeId: "target-node",
+    },
     attempt: 0,
     asset,
-    itemIndex: 0,
+    itemIndex,
     nodeExecutionId: `node-execution-${targetHandle}`,
     output: {
       assetId: asset.id,
@@ -205,8 +289,6 @@ function mediaParent(
       contentType: asset.mimeType,
       kind: "cdn-asset",
     },
-    sourceHandle: "images",
-    targetHandle,
     taskRunId: `task-run-${targetHandle}`,
   };
 }

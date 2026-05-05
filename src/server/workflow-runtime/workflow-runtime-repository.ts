@@ -156,12 +156,12 @@ type RuntimeTaskRunRow = {
 type TaskDependencyRow = {
   readonly childTaskRunId: string;
   readonly requiredParentItemIndex: number;
-  readonly requiredParentNodeId?: string | null;
+  readonly requiredParentNodeId: string;
   readonly requiredParentNodeExecutionId: string;
   readonly resolvedParentTaskRunId: string | null;
   readonly sourceHandle?: string | null;
   readonly targetHandle?: string | null;
-  readonly targetNodeId?: string | null;
+  readonly targetNodeId: string;
 };
 
 type RejectedTaskRunRow = {
@@ -185,6 +185,13 @@ type ResolvedParentTaskRunSnapshot =
 type ResolvedGeneratedParentOutput = {
   readonly asset?: WorkflowAsset;
   readonly output: NonNullable<ResolvedParentTaskRunSnapshot["output"]>;
+};
+
+type LatestApprovedParentTaskRun = Omit<
+  ResolvedParentTaskRunSnapshot,
+  "address"
+> & {
+  readonly runtimeStatus: string;
 };
 
 type QueuedTaskRunFreeze = {
@@ -377,7 +384,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               ${dependency.parentItemIndex},
               ${dependency.sourceHandle ?? null},
               ${dependency.targetHandle ?? null},
-              ${dependency.targetNodeId ?? dependency.childNodeId},
+              ${dependency.targetNodeId},
               ${
                 queuedTaskRunFreezes
                   .get(dependency.childTaskRunId)
@@ -1074,33 +1081,18 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
         `),
       );
 
-      return rows.map((row) => {
-        const requiredParentNodeId = optionalString(row.requiredParentNodeId);
-        const targetNodeId = optionalString(row.targetNodeId);
-        const hasAddress = Boolean(
-          requiredParentNodeId ??
-            targetNodeId ??
-            row.sourceHandle ??
-            row.targetHandle,
-        );
-
-        return {
-          childTaskRunId: requireString(row.childTaskRunId),
-          requiredParentItemIndex: requireNumber(row.requiredParentItemIndex),
-          ...(requiredParentNodeId ? { requiredParentNodeId } : {}),
-          requiredParentNodeExecutionId: requireString(
-            row.requiredParentNodeExecutionId,
-          ),
-          resolvedParentTaskRunId: optionalString(row.resolvedParentTaskRunId),
-          ...(hasAddress
-            ? { sourceHandle: optionalString(row.sourceHandle) }
-            : {}),
-          ...(hasAddress
-            ? { targetHandle: optionalString(row.targetHandle) }
-            : {}),
-          ...(targetNodeId ? { targetNodeId } : {}),
-        };
-      });
+      return rows.map((row) => ({
+        childTaskRunId: requireString(row.childTaskRunId),
+        requiredParentItemIndex: requireNumber(row.requiredParentItemIndex),
+        requiredParentNodeId: requireString(row.requiredParentNodeId),
+        requiredParentNodeExecutionId: requireString(
+          row.requiredParentNodeExecutionId,
+        ),
+        resolvedParentTaskRunId: optionalString(row.resolvedParentTaskRunId),
+        sourceHandle: optionalString(row.sourceHandle),
+        targetHandle: optionalString(row.targetHandle),
+        targetNodeId: requireString(row.targetNodeId),
+      }));
     },
 
     async getCreditLedgerForUser(command: {
@@ -1216,14 +1208,14 @@ async function loadTaskDependencyRequirements(
   return rows.map((row) => ({
     childTaskRunId: requireString(row.childTaskRunId),
     requiredParentItemIndex: requireNumber(row.requiredParentItemIndex),
-    requiredParentNodeId: optionalString(row.requiredParentNodeId),
+    requiredParentNodeId: requireString(row.requiredParentNodeId),
     requiredParentNodeExecutionId: requireString(
       row.requiredParentNodeExecutionId,
     ),
     resolvedParentTaskRunId: optionalString(row.resolvedParentTaskRunId),
     sourceHandle: optionalString(row.sourceHandle),
     targetHandle: optionalString(row.targetHandle),
-    targetNodeId: optionalString(row.targetNodeId),
+    targetNodeId: requireString(row.targetNodeId),
   }));
 }
 
@@ -1244,7 +1236,7 @@ async function resolveLatestApprovedParents(
       itemIndex: parent.itemIndex,
       nodeExecutionId: parent.nodeExecutionId,
       ...(parent.output ? { output: parent.output } : {}),
-      ...dependencyAddressProvenance(dependency),
+      address: dependencyAddress(dependency),
       taskRunId: parent.taskRunId,
     });
   }
@@ -1255,14 +1247,12 @@ async function resolveLatestApprovedParents(
 async function loadLatestParentTaskRun(
   db: DbExecutor,
   dependency: TaskDependencyRow,
-): Promise<
-  (ResolvedParentTaskRunSnapshot & { readonly runtimeStatus: string }) | null
-> {
+): Promise<LatestApprovedParentTaskRun | null> {
   const rows = rowsFromResult(
     await db.execute(sql`
-      select
-        id as "taskRunId",
-        node_execution_id as "nodeExecutionId",
+        select
+          id as "taskRunId",
+          node_execution_id as "nodeExecutionId",
         item_index as "itemIndex",
         attempt,
         runtime_status as "runtimeStatus"
@@ -1316,30 +1306,14 @@ function buildRepositoryInputSnapshot(input: {
   });
 }
 
-function dependencyAddressProvenance(input: {
-  readonly requiredParentNodeId?: string | null;
-  readonly sourceHandle?: string | null;
-  readonly targetHandle?: string | null;
-  readonly targetNodeId?: string | null;
-}) {
-  const hasAddress = Boolean(
-    input.requiredParentNodeId ??
-      input.targetNodeId ??
-      input.sourceHandle ??
-      input.targetHandle,
-  );
-  if (!hasAddress) {
-    return {} satisfies Partial<ResolvedParentTaskRunSnapshot>;
-  }
-
+function dependencyAddress(dependency: TaskDependencyRow) {
   return {
-    ...(input.requiredParentNodeId
-      ? { sourceNodeId: input.requiredParentNodeId }
-      : {}),
-    ...(input.targetNodeId ? { targetNodeId: input.targetNodeId } : {}),
-    sourceHandle: input.sourceHandle ?? null,
-    targetHandle: input.targetHandle ?? null,
-  } satisfies Partial<ResolvedParentTaskRunSnapshot>;
+    parentItemIndex: dependency.requiredParentItemIndex,
+    parentNodeId: dependency.requiredParentNodeId,
+    sourceHandle: dependency.sourceHandle ?? null,
+    targetHandle: dependency.targetHandle ?? null,
+    targetNodeId: dependency.targetNodeId,
+  };
 }
 
 function nodeExecutionIdsRequiredByTaskRuns(plan: WorkflowRunPlan) {
@@ -1440,12 +1414,13 @@ async function buildQueuedTaskRunFreezes(
       });
       resolvedParents.push({
         ...parent,
-        ...dependencyAddressProvenance({
-          requiredParentNodeId: dependency.parentNodeId,
+        address: {
+          parentItemIndex: dependency.parentItemIndex,
+          parentNodeId: dependency.parentNodeId,
           sourceHandle: dependency.sourceHandle ?? null,
           targetHandle: dependency.targetHandle ?? null,
-          targetNodeId: dependency.targetNodeId ?? dependency.childNodeId,
-        }),
+          targetNodeId: dependency.targetNodeId,
+        },
       });
       resolvedParentTaskRunByDependencyId.set(
         buildTaskDependencyId(dependency),
@@ -1480,7 +1455,7 @@ async function loadLatestApprovedParentTaskRunForCommit(
     readonly sourceHandle?: string | null;
     readonly targetHandle?: string | null;
   },
-): Promise<ResolvedParentTaskRunSnapshot> {
+): Promise<Omit<ResolvedParentTaskRunSnapshot, "address">> {
   const rows = rowsFromResult(
     await db.execute(sql`
       select

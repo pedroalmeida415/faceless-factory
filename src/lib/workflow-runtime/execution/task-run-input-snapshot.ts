@@ -4,6 +4,10 @@ import {
   type WorkflowDefinitionGraphDocument,
 } from "~/lib/workflow/document";
 import type { WorkflowAsset } from "~/lib/workflow/types";
+import {
+  isProviderDependencyAddress,
+  type ProviderDependencyAddress,
+} from "~/lib/workflow-runtime/domain/provider-dependency-address";
 import { buildTaskRunIdempotencyKey } from "~/lib/workflow-runtime/domain/task-run-state";
 import {
   type RenderedTaskRunProviderInput,
@@ -19,12 +23,9 @@ export type ResolvedParentTaskRunInputSnapshot = {
   readonly nodeExecutionId: string;
   readonly itemIndex: number;
   readonly attempt: number;
+  readonly address: ProviderDependencyAddress;
   readonly asset?: WorkflowAsset;
   readonly output?: RenderableTaskOutput;
-  readonly sourceNodeId?: string;
-  readonly targetNodeId?: string;
-  readonly sourceHandle?: string | null;
-  readonly targetHandle?: string | null;
 };
 
 export type TaskRunInputSnapshot = {
@@ -136,16 +137,7 @@ function isResolvedParentTaskRunInputSnapshot(value: unknown): boolean {
     typeof value.nodeExecutionId === "string" &&
     typeof value.itemIndex === "number" &&
     typeof value.attempt === "number" &&
-    (value.sourceNodeId === undefined ||
-      typeof value.sourceNodeId === "string") &&
-    (value.targetNodeId === undefined ||
-      typeof value.targetNodeId === "string") &&
-    (value.sourceHandle === undefined ||
-      value.sourceHandle === null ||
-      typeof value.sourceHandle === "string") &&
-    (value.targetHandle === undefined ||
-      value.targetHandle === null ||
-      typeof value.targetHandle === "string") &&
+    isProviderDependencyAddress(value.address) &&
     (value.output === undefined || isRenderableTaskOutput(value.output)) &&
     (value.asset === undefined || isWorkflowAsset(value.asset))
   );

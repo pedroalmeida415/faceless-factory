@@ -233,14 +233,14 @@ async function loadGatekeeperDependencies(
   return rows.map((row) => ({
     childTaskRunId: requireString(row.childTaskRunId),
     requiredParentItemIndex: requireNumber(row.requiredParentItemIndex),
-    requiredParentNodeId: optionalString(row.requiredParentNodeId),
+    requiredParentNodeId: requireString(row.requiredParentNodeId),
     requiredParentNodeExecutionId: requireString(
       row.requiredParentNodeExecutionId,
     ),
     resolvedParentTaskRunId: optionalString(row.resolvedParentTaskRunId),
     sourceHandle: optionalString(row.sourceHandle),
     targetHandle: optionalString(row.targetHandle),
-    targetNodeId: optionalString(row.targetNodeId),
+    targetNodeId: requireString(row.targetNodeId),
   }));
 }
 

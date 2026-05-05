@@ -344,13 +344,13 @@ export const taskDependencies = pgTable(
     requiredParentNodeExecutionId: text("required_parent_node_execution_id")
       .notNull()
       .references(() => nodeExecutions.id, { onDelete: "cascade" }),
-    requiredParentNodeId: text("required_parent_node_id"),
+    requiredParentNodeId: text("required_parent_node_id").notNull(),
     requiredParentItemIndex: bigint("required_parent_item_index", {
       mode: "number",
     }).notNull(),
     sourceHandle: text("source_handle"),
     targetHandle: text("target_handle"),
-    targetNodeId: text("target_node_id"),
+    targetNodeId: text("target_node_id").notNull(),
     resolvedParentTaskRunId: text("resolved_parent_task_run_id").references(
       () => taskRuns.id,
       { onDelete: "set null" },

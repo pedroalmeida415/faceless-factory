@@ -39,10 +39,10 @@ export type TaskRunGatekeeperDependency = {
   readonly requiredParentNodeExecutionId: string;
   readonly requiredParentItemIndex: number;
   readonly resolvedParentTaskRunId: string | null;
-  readonly requiredParentNodeId?: string | null;
+  readonly requiredParentNodeId: string;
   readonly sourceHandle?: string | null;
   readonly targetHandle?: string | null;
-  readonly targetNodeId?: string | null;
+  readonly targetNodeId: string;
 };
 
 export type TaskRunGatekeeperState = {
@@ -280,32 +280,20 @@ function buildInputSnapshot(
     nodeExecutionId: child.nodeExecutionId,
     nodeId: child.nodeId,
     resolvedParentTaskRuns: parents.map(({ dependency, parent }) => {
-      const hasAddress = Boolean(
-        dependency.requiredParentNodeId ??
-          dependency.targetNodeId ??
-          dependency.sourceHandle ??
-          dependency.targetHandle,
-      );
-
       return {
+        address: {
+          parentItemIndex: dependency.requiredParentItemIndex,
+          parentNodeId: dependency.requiredParentNodeId,
+          sourceHandle: dependency.sourceHandle ?? null,
+          targetHandle: dependency.targetHandle ?? null,
+          targetNodeId: dependency.targetNodeId,
+        },
         attempt: parent.attempt,
         ...(parent.asset ? { asset: parent.asset } : {}),
         itemIndex: parent.itemIndex,
         nodeExecutionId: parent.nodeExecutionId,
         ...(parent.output ? { output: parent.output } : {}),
-        ...(hasAddress && dependency.requiredParentNodeId
-          ? { sourceNodeId: dependency.requiredParentNodeId }
-          : {}),
-        ...(hasAddress
-          ? { sourceHandle: dependency.sourceHandle ?? null }
-          : {}),
         taskRunId: parent.id,
-        ...(hasAddress
-          ? { targetHandle: dependency.targetHandle ?? null }
-          : {}),
-        ...(hasAddress && dependency.targetNodeId
-          ? { targetNodeId: dependency.targetNodeId }
-          : {}),
       };
     }),
     targetNodeConfig: child.targetNodeConfig,

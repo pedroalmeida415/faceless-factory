@@ -16,6 +16,10 @@ import { parseWorkflowBlueprint } from "~/lib/workflow/runtime/planning/blueprin
 import { resolveOutputPermutation } from "~/lib/workflow/runtime-values";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
 import {
+  type ProviderDependencyAddress,
+  providerDependencyAddressKey,
+} from "~/lib/workflow-runtime/domain/provider-dependency-address";
+import {
   isActiveTaskRunStatus,
   isRecoverableByDownstreamPlanningStatus,
   isTaskRunDependencySatisfiedStatus,
@@ -89,7 +93,7 @@ export type PlannedTaskDependency = {
   readonly parentItemIndex: number;
   readonly sourceHandle?: string | null;
   readonly targetHandle?: string | null;
-  readonly targetNodeId?: string;
+  readonly targetNodeId: string;
 };
 
 export type WorkflowRunPlan = {
@@ -108,14 +112,6 @@ export type WorkflowRunPlannerError = {
 export type WorkflowRunPlannerResult =
   | { readonly ok: true; readonly value: WorkflowRunPlan }
   | { readonly ok: false; readonly error: WorkflowRunPlannerError };
-
-type ProviderDependencyAddress = {
-  readonly parentNodeId: string;
-  readonly parentItemIndex: number;
-  readonly sourceHandle?: string | null;
-  readonly targetHandle?: string | null;
-  readonly targetNodeId?: string;
-};
 
 function plannerError(message: string): WorkflowRunPlannerResult {
   return { error: { _tag: "WorkflowRunPlannerError", message }, ok: false };
@@ -588,7 +584,7 @@ function collectProviderDependencyAddresses(input: {
     readonly itemIndex: number;
     readonly sourceHandle?: string | null;
     readonly targetHandle?: string | null;
-    readonly targetNodeId?: string;
+    readonly targetNodeId: string;
     readonly path: ReadonlySet<string>;
   }) => {
     if (params.path.has(params.nodeId)) {
@@ -681,13 +677,7 @@ function collectProviderDependencyAddresses(input: {
 
   const seen = new Set<string>();
   return dependencies.filter((dependency) => {
-    const key = [
-      dependency.parentNodeId,
-      dependency.parentItemIndex,
-      dependency.sourceHandle ?? "",
-      dependency.targetHandle ?? "",
-      dependency.targetNodeId ?? "",
-    ].join("\0");
+    const key = providerDependencyAddressKey(dependency);
     if (seen.has(key)) {
       return false;
     }
