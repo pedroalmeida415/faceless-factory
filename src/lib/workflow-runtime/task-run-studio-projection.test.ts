@@ -1,5 +1,5 @@
+import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
 import { WorkflowEngine } from "~/lib/workflow/workflow-engine";
 import { applyTaskRunStudioProjection } from "~/lib/workflow-runtime/task-run-studio-projection";
 

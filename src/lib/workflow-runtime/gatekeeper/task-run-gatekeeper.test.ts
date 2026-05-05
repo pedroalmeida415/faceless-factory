@@ -1,5 +1,5 @@
+import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
 
 import { createWorkflowNode } from "~/lib/workflow/document";
 import { buildTaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";

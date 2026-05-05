@@ -1,5 +1,5 @@
+import { afterAll, beforeAll, beforeEach, describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, test } from "node:test";
 
 import { PGlite } from "@electric-sql/pglite";
 import { sql } from "drizzle-orm";
@@ -11,13 +11,17 @@ describe("getTaskRunProjectionForWorkflow", () => {
   let client: PGlite;
   let db: PgliteDatabase;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     client = new PGlite();
     db = drizzle(client);
     await setupProjectionTables(db);
   });
 
-  afterEach(async () => {
+  beforeEach(async () => {
+    await resetProjectionTables(db);
+  });
+
+  afterAll(async () => {
     await client.close();
   });
 
@@ -275,6 +279,12 @@ async function setupProjectionTables(db: PgliteDatabase) {
       deleted_at timestamp,
       created_at timestamp not null default now()
     )
+  `);
+}
+
+async function resetProjectionTables(db: PgliteDatabase) {
+  await db.execute(sql`
+    truncate table assets, task_runs, node_executions
   `);
 }
 

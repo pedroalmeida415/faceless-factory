@@ -1,5 +1,5 @@
+import { afterAll, beforeAll, beforeEach, describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, test } from "node:test";
 
 import { PGlite } from "@electric-sql/pglite";
 import { sql } from "drizzle-orm";
@@ -11,13 +11,17 @@ describe("getPlanningStateForWorkflow", () => {
   let client: PGlite;
   let db: PgliteDatabase;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     client = new PGlite();
     db = drizzle(client);
     await setupPlanningStateTables(db);
   });
 
-  afterEach(async () => {
+  beforeEach(async () => {
+    await resetPlanningStateTables(db);
+  });
+
+  afterAll(async () => {
     await client.close();
   });
 
@@ -171,6 +175,12 @@ async function setupPlanningStateTables(db: PgliteDatabase) {
       attempt bigint,
       runtime_status task_run_runtime_status
     )
+  `);
+}
+
+async function resetPlanningStateTables(db: PgliteDatabase) {
+  await db.execute(sql`
+    truncate table task_runs, node_executions
   `);
 }
 

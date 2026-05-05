@@ -1,7 +1,7 @@
+import { afterAll, beforeAll, beforeEach, describe, test } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, test } from "node:test";
 
 import { PGlite } from "@electric-sql/pglite";
 import { sql } from "drizzle-orm";
@@ -21,13 +21,17 @@ describe("WorkflowRuntimeRepository", () => {
   let client: PGlite;
   let db: PgliteDatabase;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     client = new PGlite();
     db = drizzle(client);
     await setupRuntimeTables(db);
   });
 
-  afterEach(async () => {
+  beforeEach(async () => {
+    await resetRuntimeTables(db);
+  });
+
+  afterAll(async () => {
     await client.close();
     await rm(path.join(process.cwd(), ".data", "workflow-assets", "test"), {
       force: true,
@@ -2379,6 +2383,18 @@ async function setupRuntimeTables(db: PgliteDatabase): Promise<void> {
       source_key text unique,
       created_at timestamp not null default now()
     )
+  `);
+}
+
+async function resetRuntimeTables(db: PgliteDatabase): Promise<void> {
+  await db.execute(sql`
+    truncate table
+      credit_ledger_entries,
+      task_dependencies,
+      task_runs,
+      node_executions,
+      assets,
+      "user"
   `);
 }
 
