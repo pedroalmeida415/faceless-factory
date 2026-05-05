@@ -2,12 +2,7 @@ import type {
   WorkflowDocument,
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
-import {
-  type GeneratorIterationInfo,
-  toWorkflowValidationError,
-  WorkflowExecutionPlanner,
-  WorkflowExecutionPlanningError,
-} from "~/lib/workflow/execution/planning";
+import { WorkflowValidationError } from "~/lib/workflow/errors";
 import type { StartWorkflowExecutionRequest } from "~/lib/workflow/execution/types";
 import {
   getImageGeneratorModelCreditCost,
@@ -22,6 +17,7 @@ import type {
   GenerateLlmResponse,
   GenerateVideoRequest,
 } from "~/lib/workflow/types";
+import { materializeWorkflowRunTaskFacts } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
 
 export type WorkflowExecutionPriceLineItem = {
   nodeId: string;
@@ -46,12 +42,25 @@ type WorkflowExecutionEstimateOptions = {
   completedOutputKeys?: ReadonlySet<string>;
 };
 
+export type WorkflowRuntimeCreditEstimateCommand =
+  | { readonly type: "run-target"; readonly targetNodeIds: readonly string[] }
+  | { readonly type: "rerun-node"; readonly nodeId: string }
+  | {
+      readonly type: "regenerate-item";
+      readonly nodeExecutionId: string;
+      readonly itemIndexes: readonly number[];
+    };
+
+export type WorkflowRuntimeCreditEstimateNodeExecution = {
+  readonly id: string;
+  readonly nodeId: string;
+};
+
 function buildWorkflowExecutionPriceLineItem(
   node: WorkflowDocumentNode,
-  iterationInfo: GeneratorIterationInfo,
+  plannedIterations: number,
   completedOutputKeys: ReadonlySet<string> | undefined,
 ): WorkflowExecutionPriceLineItem | null {
-  const plannedIterations = Math.max(1, iterationInfo.iterations);
   const iterations = completedOutputKeys
     ? Array.from({ length: plannedIterations }).filter(
         (_, outputIndex) =>
@@ -103,22 +112,18 @@ function buildWorkflowExecutionPriceLineItem(
 
 function buildWorkflowExecutionPriceQuote(
   document: WorkflowDocument,
-  executionPlan: ReturnType<typeof WorkflowExecutionPlanner.forQuote>,
+  iterationCountByNodeId: ReadonlyMap<string, number>,
   options?: WorkflowExecutionEstimateOptions,
 ): WorkflowExecutionPriceQuote {
   const nodeMap = new Map(document.nodes.map((node) => [node.id, node]));
-  const lineItems = executionPlan.priceNodeIds
+  const lineItems = Array.from(iterationCountByNodeId.keys())
     .map((nodeId) => nodeMap.get(nodeId))
     .flatMap((node) =>
       node
         ? [
             buildWorkflowExecutionPriceLineItem(
               node,
-              executionPlan.generatorIterationById.get(node.id) ?? {
-                hasIterator: false,
-                iterations: 1,
-                mismatchedIterators: false,
-              },
+              Math.max(1, iterationCountByNodeId.get(node.id) ?? 1),
               options?.completedOutputKeys,
             ),
           ]
@@ -180,24 +185,83 @@ export function estimateWorkflowRuntimeCreditCostByNodeId(input: {
   );
 }
 
+export function estimateWorkflowRuntimeCommand(input: {
+  readonly command: WorkflowRuntimeCreditEstimateCommand;
+  readonly document: WorkflowDocument;
+  readonly latestNodeExecutions?: readonly WorkflowRuntimeCreditEstimateNodeExecution[];
+  readonly options?: WorkflowExecutionEstimateOptions;
+}): WorkflowExecutionPriceQuote {
+  const targetNodeIds = resolveCreditEstimateTargetNodeIds(input);
+  const facts = materializeWorkflowRunTaskFacts({
+    document: input.document,
+    targetNodeIds,
+  });
+  if (!facts.ok) {
+    throw new WorkflowValidationError({ message: facts.error.message });
+  }
+
+  const quotedNodeIds =
+    input.command.type === "run-target"
+      ? facts.value.executableNodeIds
+      : targetNodeIds;
+  const quotedNodeIdSet = new Set(quotedNodeIds);
+  const selectedItemIndexes =
+    input.command.type === "regenerate-item"
+      ? new Set(input.command.itemIndexes)
+      : null;
+  const iterationCountByNodeId = new Map<string, number>();
+
+  for (const fact of facts.value.taskFacts) {
+    if (!quotedNodeIdSet.has(fact.nodeId)) {
+      continue;
+    }
+    if (selectedItemIndexes && !selectedItemIndexes.has(fact.itemIndex)) {
+      continue;
+    }
+    iterationCountByNodeId.set(
+      fact.nodeId,
+      (iterationCountByNodeId.get(fact.nodeId) ?? 0) + 1,
+    );
+  }
+
+  return buildWorkflowExecutionPriceQuote(
+    input.document,
+    iterationCountByNodeId,
+    input.options,
+  );
+}
+
+function resolveCreditEstimateTargetNodeIds(input: {
+  readonly command: WorkflowRuntimeCreditEstimateCommand;
+  readonly latestNodeExecutions?: readonly WorkflowRuntimeCreditEstimateNodeExecution[];
+}) {
+  switch (input.command.type) {
+    case "run-target":
+      return input.command.targetNodeIds;
+    case "rerun-node":
+      return [input.command.nodeId];
+    case "regenerate-item": {
+      const nodeExecutionId = input.command.nodeExecutionId;
+      const nodeExecution = input.latestNodeExecutions?.find(
+        (execution) => execution.id === nodeExecutionId,
+      );
+      if (!nodeExecution) {
+        throw new WorkflowValidationError({
+          message: `Cannot estimate regeneration for missing Node Execution ${nodeExecutionId}.`,
+        });
+      }
+      return [nodeExecution.nodeId];
+    }
+  }
+}
+
 export function estimateWorkflowExecution(
   request: StartWorkflowExecutionRequest,
   options?: WorkflowExecutionEstimateOptions,
 ): WorkflowExecutionPriceQuote {
-  try {
-    return buildWorkflowExecutionPriceQuote(
-      request.document,
-      WorkflowExecutionPlanner.forQuote({
-        document: request.document,
-        selectionNodeIds: request.selection?.nodeIds ?? [],
-        target: request.target,
-      }),
-      options,
-    );
-  } catch (error) {
-    if (error instanceof WorkflowExecutionPlanningError) {
-      throw toWorkflowValidationError(error);
-    }
-    throw error;
-  }
+  return estimateWorkflowRuntimeCommand({
+    command: { targetNodeIds: [request.target.nodeId], type: "run-target" },
+    document: request.document,
+    options,
+  });
 }
