@@ -2,13 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import { and, eq, gte, sql } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
-
+import type { WorkflowCreditsSummary } from "~/lib/billing";
 import {
   getErrorMessage,
   WorkflowCreditsError,
   WorkflowInfrastructureError,
 } from "~/lib/workflow/errors";
-import type { WorkflowCreditsSummary } from "~/lib/workflow/execution/types";
 import { syncSubscriptionCreditsForUser } from "~/server/billing/service";
 import { db } from "~/server/db";
 import { creditLedgerEntries, user } from "~/server/db/schema";

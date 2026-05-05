@@ -9,7 +9,7 @@ import {
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-
+import type { WorkflowCreditsSummary } from "~/lib/billing";
 import {
   hydrateWorkflowGraphDocument,
   toWorkflowGraphDocument,
@@ -20,7 +20,6 @@ import {
 } from "~/lib/workflow/document";
 import { getErrorMessage } from "~/lib/workflow/errors";
 import { collectTaskRunMaterializationNodeIds } from "~/lib/workflow/execution/subgraph";
-import type { WorkflowCreditsSummary } from "~/lib/workflow/execution/types";
 import type { WorkflowHandleReference } from "~/lib/workflow/graph";
 import type { WorkflowValueType } from "~/lib/workflow/node-definitions";
 import {

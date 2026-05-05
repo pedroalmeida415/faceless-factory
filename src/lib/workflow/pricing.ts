@@ -3,7 +3,6 @@ import type {
   WorkflowDocumentNode,
 } from "~/lib/workflow/document";
 import { WorkflowValidationError } from "~/lib/workflow/errors";
-import type { StartWorkflowExecutionRequest } from "~/lib/workflow/execution/types";
 import {
   getImageGeneratorModelCreditCost,
   getVideoGeneratorModelCreditCost,
@@ -247,12 +246,12 @@ function resolveCreditEstimateTargetNodeIds(input: {
   }
 }
 
-export function estimateWorkflowExecution(
-  request: StartWorkflowExecutionRequest,
+export function estimateWorkflowRuntimeNode(
+  request: { readonly document: WorkflowDocument; readonly nodeId: string },
   options?: WorkflowExecutionEstimateOptions,
 ): WorkflowExecutionPriceQuote {
   return estimateWorkflowRuntimeCommand({
-    command: { nodeId: request.target.nodeId, type: "run-node" },
+    command: { nodeId: request.nodeId, type: "run-node" },
     document: request.document,
     options,
   });

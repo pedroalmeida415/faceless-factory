@@ -1,6 +1,13 @@
 export type BillingPlanName = "starter" | "plus" | "ultra";
 export type BillingInterval = "month" | "year";
 
+export type WorkflowCreditsSummary = {
+  available: number;
+  reserved: number;
+  used: number;
+  totalCost: number;
+};
+
 type BillingPlanDefinition = {
   readonly annualPriceCents: number;
   readonly annualPriceLookupKey: string;

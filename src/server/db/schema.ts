@@ -14,10 +14,6 @@ import {
 
 import type { WorkflowDefinitionGraphDocument } from "~/lib/workflow/document";
 import type {
-  TaskRunExecutionDocumentSnapshot,
-  WorkflowExecutionStatus,
-} from "~/lib/workflow/execution/types";
-import type {
   AssetKind,
   AssetSource,
   OutputTransformValueType,
@@ -258,7 +254,7 @@ export const taskRuns = pgTable(
     attempt: bigint("attempt", { mode: "number" }),
     executionId: text("execution_id").notNull(),
     jobId: text("job_id").notNull(),
-    status: text("status").$type<WorkflowExecutionStatus>().notNull(),
+    status: text("status").notNull(),
     runtimeStatus:
       taskRunRuntimeStatusEnum("runtime_status").$type<TaskRunStatus>(),
     targetReason: text("target_reason")
@@ -272,7 +268,7 @@ export const taskRuns = pgTable(
     idempotencyKey: text("idempotency_key"),
     model: text("model"),
     promptSnapshot: text("prompt_snapshot"),
-    inputData: jsonb("input_data").$type<TaskRunExecutionDocumentSnapshot>(),
+    inputData: jsonb("input_data"),
     inputSnapshot: jsonb("input_snapshot"),
     reviewStatus: text("review_status").$type<WorkflowOutputReviewStatus>(),
     error: text("error"),

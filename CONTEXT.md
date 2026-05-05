@@ -98,7 +98,6 @@ _Avoid_: Node dependency, latest dependency
 - **Run Task Slot** preserves the **Node Execution** and creates a new **Attempt** only for the selected **Item Index**.
 - **Run Node** creates the first **Node Execution** when none exists, or a new **Node Execution** with fresh **Task Runs** for all planned **Item Indexes** when one already exists.
 - **Run Node** is rejected when the node's latest **Node Execution** has any **Active Task Runs**.
-- **Run Node** is rejected when that node's latest **Node Execution** has any **Active Task Runs**.
 - At most one active non-terminal **Attempt** may exist for a **Node Execution** and **Item Index**.
 - The server enforces the one-active-attempt invariant transactionally; frontend controls only prevent obvious duplicate user actions.
 - The database enforces active-slot uniqueness for each **Node Execution** and **Item Index** across `WAITING_UPSTREAM`, `QUEUED`, `RUNNING`, and `PENDING_REVIEW` attempts.
@@ -138,7 +137,7 @@ _Avoid_: Node dependency, latest dependency
 - Failed **Task Runs** do not auto-resume after external conditions change; retry requires explicit user action.
 - Input-hash-based output reuse is not part of the domain; **Run Node** and **Run Task Slot** always create new generation attempts for their selected runtime addresses.
 - Input hashes are not stored in the workflow runtime schema.
-- Existing execution/runtime data is disposable during the overhaul; backward compatibility with old task runs, node executions, and execution artifacts is not required.
+- Existing execution/runtime data is disposable during the overhaul; backward compatibility with old task runs, node executions, and legacy execution artifact records is not required.
 - A saved workflow document is a blueprint: it stores creative configuration and graph structure, not execution history, review state, or generated output attempts.
 - Review state lives in the **Task Run** status machine; no separate review metadata is required.
 - Generated outputs are stored as **Assets**, including generated text.

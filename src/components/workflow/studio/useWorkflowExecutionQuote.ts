@@ -2,15 +2,15 @@
 
 import { useMemo } from "react";
 import { useWorkflowStudioStore } from "~/components/workflow/studio/store";
-import { estimateWorkflowExecution } from "~/lib/workflow/pricing";
+import { estimateWorkflowRuntimeNode } from "~/lib/workflow/pricing";
 
 export function useWorkflowExecutionQuote(nodeId: string) {
   const document = useWorkflowStudioStore((state) => state.document);
   const localPriceQuote = useMemo(() => {
     try {
-      return estimateWorkflowExecution({
+      return estimateWorkflowRuntimeNode({
         document,
-        target: { type: "node", nodeId },
+        nodeId,
       });
     } catch {
       return null;
