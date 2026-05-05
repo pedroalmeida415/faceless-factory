@@ -8,10 +8,7 @@ import {
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { db } from "~/server/db";
 import { createRedisSubscriber } from "~/server/redis";
-import {
-  buildExecutionCostProjection,
-  estimateWorkflowRuntimeCreditCostByNodeId,
-} from "~/server/workflow/pricing-catalog";
+import { buildExecutionCostProjection } from "~/server/workflow/pricing-catalog";
 import {
   assertWorkflowProjectAccess,
   getWorkflowProject,
@@ -94,9 +91,6 @@ export const workflowRuntimeRouter = createTRPCRouter({
                 type: "run-task-slot",
               },
         document: project.document,
-        estimatedCreditCostByNodeId: estimateWorkflowRuntimeCreditCostByNodeId({
-          document: project.document,
-        }),
         ownerId: ownerUserId,
         workflowId: project.id,
       });

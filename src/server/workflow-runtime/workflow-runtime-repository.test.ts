@@ -1821,7 +1821,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunsToCreate: [
           {
             attempt: 0,
-            estimatedCreditCost: 0,
+            creditCost: 0,
             id: "child-already-queued",
             itemIndex: 0,
             nodeExecutionId: "node-execution-child-already-queued",
@@ -1984,7 +1984,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunsToCreate: [
           {
             attempt: 0,
-            estimatedCreditCost: 0,
+            creditCost: 0,
             id: "task-run-source-0",
             itemIndex: 0,
             nodeExecutionId: "node-execution-source",
@@ -1993,7 +1993,7 @@ describe("WorkflowRuntimeRepository", () => {
           },
           {
             attempt: 0,
-            estimatedCreditCost: 0,
+            creditCost: 0,
             id: "task-run-source-1",
             itemIndex: 1,
             nodeExecutionId: "node-execution-source",
@@ -2164,7 +2164,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunsToCreate: [
           {
             attempt: 3,
-            estimatedCreditCost: 0,
+            creditCost: 0,
             id: "task-run-regenerated",
             inputSnapshot: regeneratedSnapshot,
             itemIndex: 0,
@@ -2249,7 +2249,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunsToCreate: [
           {
             attempt: 0,
-            estimatedCreditCost: 0,
+            creditCost: 0,
             id: "task-run-frozen",
             inputSnapshot: frozenSnapshot,
             itemIndex: 0,
@@ -2298,7 +2298,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunsToCreate: [
           {
             attempt: 0,
-            estimatedCreditCost: 0,
+            creditCost: 0,
             id: "task-run-list",
             itemIndex: 0,
             nodeExecutionId: "node-execution-list",
@@ -2349,7 +2349,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunsToCreate: [
           {
             attempt: 0,
-            estimatedCreditCost: 12,
+            creditCost: 12,
             id: "task-run-funded-source",
             itemIndex: 0,
             nodeExecutionId: "node-execution-funded-source",
@@ -2409,7 +2409,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunsToCreate: [
           {
             attempt: 0,
-            estimatedCreditCost: 9,
+            creditCost: 9,
             id: "task-run-unfunded-source",
             itemIndex: 0,
             nodeExecutionId: "node-execution-unfunded-source",
@@ -2508,7 +2508,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunsToCreate: [
           {
             attempt: 0,
-            estimatedCreditCost: 0,
+            creditCost: 0,
             id: "task-run-child-commit-ready",
             itemIndex: 0,
             nodeExecutionId: "node-execution-child-commit-ready",
@@ -2676,7 +2676,7 @@ describe("WorkflowRuntimeRepository", () => {
           taskRunsToCreate: [
             {
               attempt: 0,
-              estimatedCreditCost: 0,
+              creditCost: 0,
               id: "task-run-child-unsafe-commit",
               itemIndex: 0,
               nodeExecutionId: "node-execution-child-unsafe-commit",
@@ -2711,7 +2711,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunsToCreate: [
           {
             attempt: 0,
-            estimatedCreditCost: 7,
+            creditCost: 7,
             id: "task-run-child-0",
             itemIndex: 0,
             nodeExecutionId: "node-execution-child",
@@ -2803,7 +2803,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunsToCreate: [
           {
             attempt: 0,
-            estimatedCreditCost: 7,
+            creditCost: 7,
             id: "task-run-waiting-frozen",
             inputSnapshot: frozenSnapshot,
             itemIndex: 0,
@@ -2872,7 +2872,7 @@ describe("WorkflowRuntimeRepository", () => {
         taskRunsToCreate: [
           {
             attempt: 0,
-            estimatedCreditCost: 0,
+            creditCost: 0,
             id: "task-run-parent-dependent",
             itemIndex: 0,
             nodeExecutionId: "node-execution-parent",
@@ -2881,7 +2881,7 @@ describe("WorkflowRuntimeRepository", () => {
           },
           {
             attempt: 0,
-            estimatedCreditCost: 0,
+            creditCost: 0,
             id: "task-run-child-dependent",
             itemIndex: 0,
             nodeExecutionId: "node-execution-child-with-parent",
@@ -2937,7 +2937,7 @@ describe("WorkflowRuntimeRepository", () => {
           taskRunsToCreate: [
             {
               attempt: 0,
-              estimatedCreditCost: 0,
+              creditCost: 0,
               id: "task-run-would-insert-first",
               itemIndex: 0,
               nodeExecutionId: "node-execution-rolled-back",
@@ -2946,7 +2946,7 @@ describe("WorkflowRuntimeRepository", () => {
             },
             {
               attempt: 1,
-              estimatedCreditCost: 0,
+              creditCost: 0,
               id: "task-run-duplicate-active-slot",
               itemIndex: 0,
               nodeExecutionId: "node-execution-existing",

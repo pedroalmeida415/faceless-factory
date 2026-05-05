@@ -432,7 +432,6 @@ describe("Workflow runtime state-machine contract", () => {
         createTaskRunId: nextId("runtime-task-run"),
         document,
         documentRevision: 44,
-        estimatedCreditCostByNodeId: { image: 7, video: 11 },
         latestNodeExecutions: [],
         latestTaskRuns: [],
         ownerId: "owner-user",
@@ -463,11 +462,13 @@ describe("Workflow runtime state-machine contract", () => {
         taskRunId: "runtime-task-run-2",
       },
     ]);
-    assert.equal(await getUserCreditBalance(db, "owner-user"), 93);
-    assert.equal(
-      (await getTaskRunCreditState(db, "runtime-task-run-2")).reservedCredits,
-      null,
-    );
+    assert.equal(await getUserCreditBalance(db, "owner-user"), 90);
+    assert.deepEqual(await getTaskRunCreditState(db, "runtime-task-run-2"), {
+      estimatedCreditCost: 40,
+      failureReason: null,
+      reservedCredits: null,
+      runtimeStatus: "WAITING_UPSTREAM",
+    });
     await assertRuntimeInvariants(db);
 
     const claimed = await repository.claimQueuedTaskRun({
@@ -546,7 +547,13 @@ describe("Workflow runtime state-machine contract", () => {
       },
     ]);
     assertNoColonJobIds(wake.executionJobs);
-    assert.equal(await getUserCreditBalance(db, "owner-user"), 83);
+    assert.equal(await getUserCreditBalance(db, "owner-user"), 54);
+    assert.deepEqual(await getTaskRunCreditState(db, "runtime-task-run-2"), {
+      estimatedCreditCost: 40,
+      failureReason: null,
+      reservedCredits: 40,
+      runtimeStatus: "QUEUED",
+    });
     const duplicateWake = await repository.wakeUpTaskRunChildren({
       ownerUserId: "owner-user",
       settledParentTaskRunId: "runtime-task-run-1",
@@ -555,7 +562,7 @@ describe("Workflow runtime state-machine contract", () => {
       executionJobs: [],
       taskStatusEvents: [],
     });
-    assert.equal(await getUserCreditBalance(db, "owner-user"), 83);
+    assert.equal(await getUserCreditBalance(db, "owner-user"), 54);
 
     const dependencies = await repository.getTaskDependenciesForChild({
       childTaskRunId: "runtime-task-run-2",

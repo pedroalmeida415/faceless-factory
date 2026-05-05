@@ -92,6 +92,10 @@ export type WorkflowRuntimeEstimatedCreditCostByNodeId = Readonly<
   Record<string, number>
 >;
 
+export type WorkflowRuntimeTaskRunCreditCostByNodeId = Readonly<
+  Record<string, number>
+>;
+
 function unsupportedPricing(node: WorkflowDocumentNode): never {
   const model = "model" in node ? String(node.model) : "unknown";
   throw new WorkflowValidationError({
@@ -181,6 +185,12 @@ export function priceVideoGeneration(request: GenerateVideoRequest) {
 export function estimateWorkflowRuntimeCreditCostByNodeId(input: {
   readonly document: WorkflowDocument;
 }): WorkflowRuntimeEstimatedCreditCostByNodeId {
+  return getWorkflowRuntimeTaskRunCreditCostByNodeId(input);
+}
+
+export function getWorkflowRuntimeTaskRunCreditCostByNodeId(input: {
+  readonly document: WorkflowDocument;
+}): WorkflowRuntimeTaskRunCreditCostByNodeId {
   return Object.fromEntries(
     buildExecutionCostProjection(input.document).lineItems.map((lineItem) => [
       lineItem.nodeId,

@@ -418,12 +418,17 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
-  test("carries estimated credit costs onto planned Task Runs", () => {
+  test("assigns immutable credit costs from the Pricing Catalog onto planned Task Runs", () => {
+    const document = makeDocument();
     const plan = unwrap(
       planWorkflowRun({
         command: { type: "run-node", nodeId: "script" },
-        document: makeDocument(),
-        estimatedCreditCostByNodeId: { prompt: 3, script: 8, topic: 1 },
+        document: {
+          ...document,
+          nodes: document.nodes.map((node) =>
+            node.id === "script" ? { ...node, creditCost: 999 } : node,
+          ) as WorkflowDocument["nodes"],
+        },
         latestNodeExecutions: [],
         latestTaskRuns: [],
         ownerId: "owner-1",
@@ -433,13 +438,13 @@ describe("WorkflowRunPlanner", () => {
 
     assert.deepEqual(
       plan.taskRunsToCreate.map((taskRun) => ({
-        estimatedCreditCost: taskRun.estimatedCreditCost,
+        creditCost: taskRun.creditCost,
         nodeId: taskRun.nodeId,
         status: taskRun.status,
       })),
       [
         {
-          estimatedCreditCost: 8,
+          creditCost: 1,
           nodeId: "script",
           status: "QUEUED",
         },

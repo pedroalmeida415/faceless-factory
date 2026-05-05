@@ -4,6 +4,7 @@ import {
   type WorkflowDefinitionGraphDocument,
   type WorkflowDocument,
 } from "~/lib/workflow/document";
+import { WorkflowValidationError } from "~/lib/workflow/errors";
 import { parseWorkflowBlueprint } from "~/lib/workflow/runtime/planning/blueprint/parser";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
 import type { ProviderDependencyAddress } from "~/lib/workflow-runtime/domain/provider-dependency-address";
@@ -18,10 +19,7 @@ import {
   materializeTaskRunInput,
   materializeWorkflowRunTaskFacts,
 } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
-
-type WorkflowRuntimeEstimatedCreditCostByNodeId = Readonly<
-  Record<string, number>
->;
+import { getWorkflowRuntimeTaskRunCreditCostByNodeId } from "~/server/workflow/pricing-catalog";
 
 export type WorkflowRunPlannerCommand =
   | { readonly type: "run-node"; readonly nodeId: string }
@@ -54,7 +52,6 @@ export type WorkflowRunPlannerInput = {
   readonly latestTaskRuns: readonly ExistingTaskRun[];
   readonly ownerId: string;
   readonly workflowId: string;
-  readonly estimatedCreditCostByNodeId?: WorkflowRuntimeEstimatedCreditCostByNodeId;
   readonly plannedItemCountByNodeId?: Readonly<Record<string, number>>;
 };
 
@@ -77,7 +74,7 @@ export type PlannedTaskRun = {
   readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
   readonly itemIndex: number;
   readonly attempt: number;
-  readonly estimatedCreditCost: number;
+  readonly creditCost: number;
   readonly failureReason?: "EXECUTION_FAILED";
   readonly inputSnapshot?: TaskRunInputSnapshot;
   readonly status: Extract<
@@ -117,10 +114,6 @@ export type WorkflowRunPlannerResult =
 
 function plannerError(message: string): WorkflowRunPlannerResult {
   return { error: { _tag: "WorkflowRunPlannerError", message }, ok: false };
-}
-
-function estimatedCreditCost(nodeId: string, input: WorkflowRunPlannerInput) {
-  return input.estimatedCreditCostByNodeId?.[nodeId] ?? 0;
 }
 
 function taskRunSlotKey(input: {
@@ -163,6 +156,11 @@ export function planWorkflowRun(
     ]),
   );
   const workflowDefinition = toWorkflowDefinitionGraphDocument(input.document);
+  const creditCostByNodeIdResult = pricingCatalogCreditCosts(input.document);
+  if (!creditCostByNodeIdResult.ok) {
+    return plannerError(creditCostByNodeIdResult.error.message);
+  }
+  const creditCostByNodeId = creditCostByNodeIdResult.value;
   const latestNodeExecutionByNodeId = new Map(
     input.latestNodeExecutions.map((execution) => [
       execution.nodeId,
@@ -404,7 +402,7 @@ export function planWorkflowRun(
     });
     const taskRun: PlannedTaskRun = {
       ...inputTaskRun,
-      estimatedCreditCost: estimatedCreditCost(inputTaskRun.nodeId, input),
+      creditCost: creditCostByNodeId[inputTaskRun.nodeId] ?? 0,
       ...(taskFact?.error
         ? { failureReason: "EXECUTION_FAILED" as const }
         : materialization?.ok
@@ -628,4 +626,28 @@ export function planWorkflowRun(
       taskRunsToCreate,
     },
   };
+}
+
+function pricingCatalogCreditCosts(document: WorkflowDocument):
+  | {
+      readonly ok: true;
+      readonly value: ReturnType<
+        typeof getWorkflowRuntimeTaskRunCreditCostByNodeId
+      >;
+    }
+  | { readonly ok: false; readonly error: WorkflowRunPlannerError } {
+  try {
+    return {
+      ok: true,
+      value: getWorkflowRuntimeTaskRunCreditCostByNodeId({ document }),
+    };
+  } catch (error) {
+    if (error instanceof WorkflowValidationError) {
+      return {
+        error: { _tag: "WorkflowRunPlannerError", message: error.message },
+        ok: false,
+      };
+    }
+    throw error;
+  }
 }
