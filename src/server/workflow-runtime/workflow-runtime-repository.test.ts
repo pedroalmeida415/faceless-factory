@@ -1302,6 +1302,65 @@ describe("WorkflowRuntimeRepository", () => {
     );
   });
 
+  test("Wake-Up Calls ignore unrelated rows without execution snapshots", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    await insertUser(db, { creditBalance: 100 });
+    await insertTaskRun(db, {
+      id: "unrelated-approved-without-snapshot",
+      nodeExecutionId: "node-execution-unrelated-null-snapshot",
+      runtimeStatus: "APPROVED",
+    });
+    await db.execute(sql`
+      update task_runs
+      set input_snapshot = null
+      where id = 'unrelated-approved-without-snapshot'
+    `);
+    await insertTaskRun(db, {
+      id: "parent-approved-parallel-slot",
+      nodeExecutionId: "node-execution-parallel-parent",
+      runtimeStatus: "APPROVED",
+    });
+    await insertGeneratedMediaAsset(db, {
+      assetId: "asset-parent-approved-parallel-slot",
+      taskRunId: "parent-approved-parallel-slot",
+    });
+    await insertTaskRun(db, {
+      estimatedCreditCost: 10,
+      id: "child-waiting-parallel-slot",
+      inputSnapshot: inputSnapshot("child-waiting-parallel-slot", 0, {
+        nodeExecutionId: "node-execution-parallel-child",
+      }),
+      nodeExecutionId: "node-execution-parallel-child",
+      runtimeStatus: "WAITING_UPSTREAM",
+    });
+    await insertTaskDependency(db, {
+      childTaskRunId: "child-waiting-parallel-slot",
+      parentNodeExecutionId: "node-execution-parallel-parent",
+    });
+
+    const result = await repository.wakeUpTaskRunChildren({
+      ownerUserId: "owner-user",
+      settledParentTaskRunId: "parent-approved-parallel-slot",
+    });
+
+    assert.deepEqual(result.executionJobs, [
+      {
+        attempt: 0,
+        itemIndex: 0,
+        jobId: "task-run~child-waiting-parallel-slot~attempt~0~execute",
+        nodeExecutionId: "node-execution-parallel-child",
+        ownerUserId: "owner-user",
+        taskRunId: "child-waiting-parallel-slot",
+        workflowId: "workflow-id",
+      },
+    ]);
+    assert.equal(
+      (await getWakeUpTaskRunState(db, "child-waiting-parallel-slot"))
+        .runtimeStatus,
+      "QUEUED",
+    );
+  });
+
   test("does not wake children while a latest parent Task Run is Pending Review", async () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 100 });

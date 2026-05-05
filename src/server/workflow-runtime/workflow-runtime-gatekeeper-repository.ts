@@ -189,7 +189,10 @@ async function loadGatekeeperTaskRuns(
     attempt: requireNumber(row.attempt),
     estimatedCreditCost: requireNumber(row.estimatedCreditCost),
     failureReason: optionalTaskRunFailureReason(row.failureReason, row.error),
-    inputSnapshot: optionalTaskRunInputSnapshot(row.inputSnapshot) ?? undefined,
+    inputSnapshot:
+      row.status === "WAITING_UPSTREAM"
+        ? (optionalTaskRunInputSnapshot(row.inputSnapshot) ?? undefined)
+        : undefined,
     itemIndex: requireNumber(row.itemIndex),
     nodeId: requireString(row.nodeId),
     nodeExecutionId: requireString(row.nodeExecutionId),
@@ -510,8 +513,7 @@ function projectGatekeeperTaskRun(
     output: row.output,
     reservedCredits: row.reservedCredits,
     status: row.status,
-    targetNodeConfig: requireTaskRunInputSnapshot(row.inputSnapshot)
-      .targetNodeConfig,
+    targetNodeConfig: row.inputSnapshot?.targetNodeConfig,
   };
 }
 

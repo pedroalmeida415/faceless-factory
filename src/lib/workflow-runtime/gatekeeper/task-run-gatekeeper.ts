@@ -26,7 +26,7 @@ export type TaskRunGatekeeperTaskRun = {
   readonly attempt: number;
   readonly status: TaskRunStatus;
   readonly estimatedCreditCost: number;
-  readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
+  readonly targetNodeConfig?: WorkflowDefinitionDocumentNode;
   readonly asset?: WorkflowAsset;
   readonly output?: RenderableTaskOutput;
   readonly reservedCredits?: number;
