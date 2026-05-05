@@ -341,15 +341,6 @@ function resolveNodePlan(
         };
       }
 
-      if (reviewOutputCount > 0 && !context.targetNodeIdSet.has(node.id)) {
-        context.reviewBarrierNodeIds.add(node.id);
-        return {
-          outputCount: reviewOutputCount,
-          mismatched: false,
-          type: node.review.valueType ?? outputType,
-        };
-      }
-
       const info = planGeneratorNode(context, node, nextPath);
       return {
         outputCount: info.iterations,

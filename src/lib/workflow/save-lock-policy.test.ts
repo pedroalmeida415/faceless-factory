@@ -48,6 +48,30 @@ describe("active Task Run save-lock policy", () => {
     );
   });
 
+  test("allows active node movement when the client document carries runtime output payloads", () => {
+    const currentDocument = documentWithActiveGenerator();
+    const nextDocument = {
+      ...currentDocument,
+      nodes: currentDocument.nodes.map((node) => ({
+        ...node,
+        outputs: [{ id: "client-runtime-output" }],
+        position: { x: 240, y: 360 },
+        review: {
+          items: [{ id: "client-review-item" }],
+          valueType: "image",
+        },
+      })),
+    } as WorkflowDocument;
+
+    assert.doesNotThrow(() =>
+      assertActiveTaskRunSaveAllowed({
+        activeTargetNodeIds: ["generator-active"],
+        currentDocument,
+        nextDocument,
+      }),
+    );
+  });
+
   test("blocks semantic generator edits in the active materialization slice", () => {
     const currentDocument = documentWithActiveGenerator();
     const nextDocument = {

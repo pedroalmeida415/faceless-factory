@@ -124,6 +124,48 @@ function makeOutputReorderDependencyDocument(): WorkflowDocument {
   };
 }
 
+function makeReviewEnabledUpstreamImageDocument(): WorkflowDocument {
+  const upstreamPrompt = makeNode("prompt", "upstream-prompt");
+  const upstreamImage = makeNode("imageGenerator", "upstream-image");
+  const downstreamPrompt = makeNode("prompt", "downstream-prompt");
+  const downstreamImage = makeNode("imageGenerator", "downstream-image");
+
+  return {
+    version: WORKFLOW_DOCUMENT_VERSION,
+    nodes: [
+      upstreamPrompt,
+      upstreamImage.kind === "imageGenerator"
+        ? { ...upstreamImage, reviewEnabled: true }
+        : upstreamImage,
+      downstreamPrompt,
+      downstreamImage,
+    ],
+    edges: [
+      {
+        id: "upstream-prompt-to-image",
+        source: "upstream-prompt",
+        sourceHandle: "text",
+        target: "upstream-image",
+        targetHandle: "prompt",
+      },
+      {
+        id: "downstream-prompt-to-image",
+        source: "downstream-prompt",
+        sourceHandle: "text",
+        target: "downstream-image",
+        targetHandle: "prompt",
+      },
+      {
+        id: "upstream-to-downstream-image",
+        source: "upstream-image",
+        sourceHandle: "images",
+        target: "downstream-image",
+        targetHandle: "image-input-0",
+      },
+    ],
+  };
+}
+
 function makeWaitingUpstreamFreezeDocument(): WorkflowDocument {
   const topic = makeNode("list", "topic");
   const prompt = makeNode("prompt", "prompt");
@@ -283,6 +325,97 @@ describe("WorkflowRunPlanner", () => {
       ],
     );
     assert.deepEqual(plan.taskDependenciesToCreate, []);
+  });
+
+  test("run-target executes a new review-enabled upstream generator before its downstream child waits", () => {
+    const plan = unwrap(
+      planWorkflowRun({
+        command: { type: "run-target", targetNodeIds: ["downstream-image"] },
+        createNodeExecutionId: (() => {
+          let index = 0;
+          return () => `node-execution-${++index}`;
+        })(),
+        createTaskRunId: (() => {
+          let index = 0;
+          return () => `task-run-${++index}`;
+        })(),
+        document: makeReviewEnabledUpstreamImageDocument(),
+        latestNodeExecutions: [],
+        latestTaskRuns: [],
+        ownerId: "owner-1",
+        plannedItemCountByNodeId: {
+          "downstream-image": 3,
+          "upstream-image": 3,
+        },
+        workflowId: "workflow-1",
+      }),
+    );
+
+    assert.deepEqual(
+      plan.nodeExecutionsToCreate.map((execution) => ({
+        id: execution.id,
+        nodeId: execution.nodeId,
+      })),
+      [
+        { id: "node-execution-1", nodeId: "upstream-image" },
+        { id: "node-execution-2", nodeId: "downstream-image" },
+      ],
+    );
+    assert.deepEqual(
+      plan.taskRunsToCreate.map((taskRun) => ({
+        itemIndex: taskRun.itemIndex,
+        nodeId: taskRun.nodeId,
+        status: taskRun.status,
+      })),
+      [
+        { itemIndex: 0, nodeId: "upstream-image", status: "QUEUED" },
+        { itemIndex: 1, nodeId: "upstream-image", status: "QUEUED" },
+        { itemIndex: 2, nodeId: "upstream-image", status: "QUEUED" },
+        {
+          itemIndex: 0,
+          nodeId: "downstream-image",
+          status: "WAITING_UPSTREAM",
+        },
+        {
+          itemIndex: 1,
+          nodeId: "downstream-image",
+          status: "WAITING_UPSTREAM",
+        },
+        {
+          itemIndex: 2,
+          nodeId: "downstream-image",
+          status: "WAITING_UPSTREAM",
+        },
+      ],
+    );
+    assert.deepEqual(
+      plan.taskDependenciesToCreate.map((dependency) => ({
+        childTaskRunId: dependency.childTaskRunId,
+        parentItemIndex: dependency.parentItemIndex,
+        parentNodeExecutionId: dependency.parentNodeExecutionId,
+        parentNodeId: dependency.parentNodeId,
+      })),
+      [
+        {
+          childTaskRunId: "task-run-4",
+          parentItemIndex: 0,
+          parentNodeExecutionId: "node-execution-1",
+          parentNodeId: "upstream-image",
+        },
+        {
+          childTaskRunId: "task-run-5",
+          parentItemIndex: 1,
+          parentNodeExecutionId: "node-execution-1",
+          parentNodeId: "upstream-image",
+        },
+        {
+          childTaskRunId: "task-run-6",
+          parentItemIndex: 2,
+          parentNodeExecutionId: "node-execution-1",
+          parentNodeId: "upstream-image",
+        },
+      ],
+    );
   });
 
   test("carries estimated credit costs onto planned Task Runs", () => {

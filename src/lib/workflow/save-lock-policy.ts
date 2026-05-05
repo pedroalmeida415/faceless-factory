@@ -1,4 +1,7 @@
-import type { WorkflowDocument } from "~/lib/workflow/document";
+import {
+  toWorkflowDefinitionGraphDocument,
+  type WorkflowDocument,
+} from "~/lib/workflow/document";
 import { WorkflowValidationError } from "~/lib/workflow/errors";
 import { extractTaskRunMaterializationSlice } from "~/lib/workflow/execution/subgraph";
 
@@ -12,9 +15,11 @@ type ActiveTaskRunSaveLockParams = {
 };
 
 function materializationSemanticDocument(document: WorkflowDocument) {
+  const definitionDocument = toWorkflowDefinitionGraphDocument(document);
+
   return {
-    ...document,
-    nodes: document.nodes.map(({ position, ...node }) => {
+    ...definitionDocument,
+    nodes: definitionDocument.nodes.map(({ position, ...node }) => {
       void position;
       return node;
     }),
