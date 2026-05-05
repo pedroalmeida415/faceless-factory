@@ -31,6 +31,18 @@ const runNodeInputSchema = z.object({
   projectId: z.string().min(1),
 });
 
+const regenerateItemsInputSchema = z.object({
+  estimatedCreditCostByNodeId: estimatedCreditCostByNodeIdSchema.optional(),
+  itemIndexes: z
+    .array(z.number().int().nonnegative())
+    .min(1)
+    .refine((itemIndexes) => new Set(itemIndexes).size === itemIndexes.length, {
+      message: "Item Indexes must be unique.",
+    }),
+  nodeExecutionId: z.string().min(1),
+  projectId: z.string().min(1),
+});
+
 const taskRunDecisionInputSchema = z.object({
   attempt: z.number().int().nonnegative(),
   projectId: z.string().min(1),
@@ -90,6 +102,40 @@ export const workflowRuntimeRouter = createTRPCRouter({
       const result = await orchestrator.startWorkflowRun({
         ...planningState,
         command: { nodeId: input.nodeId, type: "rerun-node" },
+        document: project.document,
+        estimatedCreditCostByNodeId: estimateWorkflowRuntimeCreditCostByNodeId({
+          document: project.document,
+          overrides: input.estimatedCreditCostByNodeId,
+        }),
+        ownerId: ownerUserId,
+        workflowId: project.id,
+      });
+
+      return unwrapOrchestratorResult(result);
+    }),
+
+  regenerateItems: protectedProcedure
+    .input(regenerateItemsInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      const ownerUserId = ctx.session.user.id;
+      const project = await getWorkflowProject({
+        ownerUserId,
+        projectId: input.projectId,
+      }).catch(throwTRPCError);
+      const planningState = await getPlanningStateForWorkflow(db, {
+        ownerUserId,
+        workflowId: project.id,
+      }).catch(throwTRPCError);
+      const { orchestrator } =
+        await createWorkflowRuntimeComposition().catch(throwTRPCError);
+
+      const result = await orchestrator.startWorkflowRun({
+        ...planningState,
+        command: {
+          itemIndexes: input.itemIndexes,
+          nodeExecutionId: input.nodeExecutionId,
+          type: "regenerate-item",
+        },
         document: project.document,
         estimatedCreditCostByNodeId: estimateWorkflowRuntimeCreditCostByNodeId({
           document: project.document,

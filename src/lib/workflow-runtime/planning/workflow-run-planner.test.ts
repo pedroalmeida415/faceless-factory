@@ -926,6 +926,124 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
+  test("rerun-node materializes fresh snapshots for every planned Item Index from current blueprint settings", () => {
+    const topic = makeNode("list", "topic");
+    const prompt = makeNode("prompt", "prompt");
+    const script = makeNode("llmGenerator", "script");
+    const document: WorkflowDocument = {
+      version: WORKFLOW_DOCUMENT_VERSION,
+      nodes: [
+        topic.kind === "list" ? { ...topic, items: ["alpha", "beta"] } : topic,
+        prompt.kind === "prompt"
+          ? {
+              ...prompt,
+              prompt: "Current {{topic}} blueprint",
+              variables: [{ key: "topic", label: "Topic" }],
+            }
+          : prompt,
+        {
+          ...script,
+          config: { maxOutputTokens: 64, temperature: 0.2 },
+        },
+      ],
+      edges: makeDocument().edges,
+    };
+
+    const plan = unwrap(
+      planWorkflowRun({
+        command: { type: "rerun-node", nodeId: "script" },
+        createNodeExecutionId: () => "node-execution-script-current",
+        createTaskRunId: (() => {
+          let index = 0;
+          return () => `task-run-script-current-${index++}`;
+        })(),
+        document,
+        documentRevision: 88,
+        latestNodeExecutions: [
+          latestNodeExecution("script-execution-old", "script"),
+        ],
+        latestTaskRuns: [
+          latestTaskRun({
+            attempt: 5,
+            id: "script-old-attempt",
+            itemIndex: 0,
+            nodeExecutionId: "script-execution-old",
+            status: "APPROVED",
+          }),
+        ],
+        ownerId: "owner-1",
+        plannedItemCountByNodeId: { script: 2 },
+        workflowId: "workflow-1",
+      }),
+    );
+
+    assert.deepEqual(
+      plan.taskRunsToCreate.map((taskRun) => ({
+        attempt: taskRun.attempt,
+        id: taskRun.id,
+        itemIndex: taskRun.itemIndex,
+        nodeExecutionId: taskRun.nodeExecutionId,
+        status: taskRun.status,
+      })),
+      [
+        {
+          attempt: 0,
+          id: "task-run-script-current-0",
+          itemIndex: 0,
+          nodeExecutionId: "node-execution-script-current",
+          status: "QUEUED",
+        },
+        {
+          attempt: 0,
+          id: "task-run-script-current-1",
+          itemIndex: 1,
+          nodeExecutionId: "node-execution-script-current",
+          status: "QUEUED",
+        },
+      ],
+    );
+    assert.deepEqual(
+      plan.taskRunsToCreate.map((taskRun) => {
+        const snapshot = taskRun.inputSnapshot;
+        assert.ok(snapshot);
+        assert.equal(snapshot.targetNodeConfig.id, "script");
+        assert.deepEqual(
+          snapshot.targetNodeConfig.kind === "llmGenerator"
+            ? snapshot.targetNodeConfig.config
+            : null,
+          { maxOutputTokens: 64, temperature: 0.2, thinkingLevel: "LOW" },
+        );
+
+        return {
+          attempt: snapshot.attempt,
+          documentRevision: snapshot.documentRevision,
+          idempotencyKey: snapshot.idempotencyKey,
+          prompt:
+            snapshot.providerInput.kind === "llm-generation-request"
+              ? snapshot.providerInput.request.prompt
+              : null,
+          taskRunId: snapshot.taskRunId,
+        };
+      }),
+      [
+        {
+          attempt: 0,
+          documentRevision: 88,
+          idempotencyKey: "task_run:task-run-script-current-0:attempt:0",
+          prompt: "Current alpha blueprint",
+          taskRunId: "task-run-script-current-0",
+        },
+        {
+          attempt: 0,
+          documentRevision: 88,
+          idempotencyKey: "task_run:task-run-script-current-1:attempt:0",
+          prompt: "Current beta blueprint",
+          taskRunId: "task-run-script-current-1",
+        },
+      ],
+    );
+  });
+
   test("rerun-node rejects when the latest Node Execution has active Task Runs", () => {
     const result = planWorkflowRun({
       command: { type: "rerun-node", nodeId: "script" },
@@ -1076,6 +1194,132 @@ describe("WorkflowRunPlanner", () => {
     ]);
   });
 
+  test("regenerate-item materializes selected next Attempt snapshots while historical Attempts stay frozen", () => {
+    const document = makeWaitingUpstreamFreezeDocument();
+    const plan = unwrap(
+      planWorkflowRun({
+        command: {
+          itemIndexes: [1],
+          nodeExecutionId: "image-execution",
+          type: "regenerate-item",
+        },
+        createTaskRunId: () => "image-task-regenerated-1",
+        document,
+        documentRevision: 101,
+        latestNodeExecutions: [
+          latestNodeExecution("source-execution", "source"),
+          latestNodeExecution("image-execution", "image"),
+        ],
+        latestTaskRuns: [
+          latestTaskRun({
+            attempt: 0,
+            id: "source-task-0",
+            itemIndex: 0,
+            nodeExecutionId: "source-execution",
+            status: "APPROVED",
+          }),
+          latestTaskRun({
+            attempt: 0,
+            id: "source-task-1",
+            itemIndex: 1,
+            nodeExecutionId: "source-execution",
+            status: "APPROVED",
+          }),
+          latestTaskRun({
+            attempt: 2,
+            id: "image-task-historical-0",
+            itemIndex: 0,
+            nodeExecutionId: "image-execution",
+            status: "APPROVED",
+          }),
+          latestTaskRun({
+            attempt: 3,
+            id: "image-task-historical-1",
+            itemIndex: 1,
+            nodeExecutionId: "image-execution",
+            status: "APPROVED",
+          }),
+        ],
+        ownerId: "owner-1",
+        plannedItemCountByNodeId: { image: 2, source: 2 },
+        workflowId: "workflow-1",
+      }),
+    );
+
+    assert.deepEqual(
+      plan.taskRunsToCreate.map((taskRun) => ({
+        attempt: taskRun.attempt,
+        id: taskRun.id,
+        itemIndex: taskRun.itemIndex,
+        nodeExecutionId: taskRun.nodeExecutionId,
+        nodeId: taskRun.nodeId,
+        status: taskRun.status,
+      })),
+      [
+        {
+          attempt: 4,
+          id: "image-task-regenerated-1",
+          itemIndex: 1,
+          nodeExecutionId: "image-execution",
+          nodeId: "image",
+          status: "QUEUED",
+        },
+      ],
+    );
+    assert.deepEqual(
+      plan.taskRunsToCreate.map((taskRun) => {
+        const snapshot = taskRun.inputSnapshot;
+        assert.ok(snapshot);
+
+        return {
+          attempt: snapshot.attempt,
+          documentRevision: snapshot.documentRevision,
+          idempotencyKey: snapshot.idempotencyKey,
+          prompt:
+            snapshot.providerInput.kind === "image-generation-request"
+              ? snapshot.providerInput.request.prompt
+              : null,
+          referenceAssetId:
+            snapshot.providerInput.kind === "image-generation-request"
+              ? snapshot.providerInput.request.referenceImages?.[0]?.id
+              : null,
+          resolvedParents: snapshot.resolvedParentTaskRuns,
+          targetConfig:
+            snapshot.targetNodeConfig.kind === "imageGenerator"
+              ? snapshot.targetNodeConfig.config
+              : null,
+        };
+      }),
+      [
+        {
+          attempt: 4,
+          documentRevision: 101,
+          idempotencyKey: "task_run:image-task-regenerated-1:attempt:4",
+          prompt: "Paint beta with frozen lighting",
+          referenceAssetId: "asset-reference-frozen",
+          resolvedParents: [],
+          targetConfig: { aspectRatio: "16:9" },
+        },
+      ],
+    );
+    assert.deepEqual(
+      plan.taskDependenciesToCreate.map((dependency) => ({
+        childTaskRunId: dependency.childTaskRunId,
+        parentItemIndex: dependency.parentItemIndex,
+        parentNodeExecutionId: dependency.parentNodeExecutionId,
+        parentNodeId: dependency.parentNodeId,
+      })),
+      [
+        {
+          childTaskRunId: "image-task-regenerated-1",
+          parentItemIndex: 0,
+          parentNodeExecutionId: "source-execution",
+          parentNodeId: "source",
+        },
+      ],
+    );
+  });
+
   test("regenerate-item rejects when a selected latest Attempt is active", () => {
     const result = planWorkflowRun({
       command: {
@@ -1102,6 +1346,79 @@ describe("WorkflowRunPlanner", () => {
       _tag: "WorkflowRunPlannerError",
       message:
         "Cannot regenerate item 0 for Node Execution script-execution because the latest Attempt is active.",
+    });
+  });
+
+  test("regenerate-item rejects an empty selected Item Index set", () => {
+    const result = planWorkflowRun({
+      command: {
+        itemIndexes: [],
+        nodeExecutionId: "script-execution",
+        type: "regenerate-item",
+      },
+      document: makeDocument(),
+      latestNodeExecutions: [latestNodeExecution("script-execution", "script")],
+      latestTaskRuns: [],
+      ownerId: "owner-1",
+      workflowId: "workflow-1",
+    });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.error, {
+      _tag: "WorkflowRunPlannerError",
+      message:
+        "Cannot regenerate items for Node Execution script-execution without selected Item Indexes.",
+    });
+  });
+
+  test("regenerate-item rejects duplicate selected Item Indexes", () => {
+    const result = planWorkflowRun({
+      command: {
+        itemIndexes: [0, 0],
+        nodeExecutionId: "script-execution",
+        type: "regenerate-item",
+      },
+      document: makeDocument(),
+      latestNodeExecutions: [latestNodeExecution("script-execution", "script")],
+      latestTaskRuns: [
+        latestTaskRun({
+          id: "script-task",
+          itemIndex: 0,
+          nodeExecutionId: "script-execution",
+          status: "APPROVED",
+        }),
+      ],
+      ownerId: "owner-1",
+      workflowId: "workflow-1",
+    });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.error, {
+      _tag: "WorkflowRunPlannerError",
+      message:
+        "Cannot regenerate item 0 for Node Execution script-execution more than once in the same command.",
+    });
+  });
+
+  test("regenerate-item rejects invalid selected Item Indexes", () => {
+    const result = planWorkflowRun({
+      command: {
+        itemIndexes: [-1],
+        nodeExecutionId: "script-execution",
+        type: "regenerate-item",
+      },
+      document: makeDocument(),
+      latestNodeExecutions: [latestNodeExecution("script-execution", "script")],
+      latestTaskRuns: [],
+      ownerId: "owner-1",
+      workflowId: "workflow-1",
+    });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.error, {
+      _tag: "WorkflowRunPlannerError",
+      message:
+        "Cannot regenerate invalid Item Index -1 for Node Execution script-execution.",
     });
   });
 });

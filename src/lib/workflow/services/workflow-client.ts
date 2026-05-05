@@ -50,6 +50,25 @@ export const WorkflowClientService = {
     });
   },
 
+  regenerateItems(input: {
+    itemIndexes: readonly number[];
+    nodeExecutionId: string;
+    projectId: string;
+  }) {
+    return Effect.tryPromise({
+      try: () =>
+        trpcClient.workflowRuntime.regenerateItems.mutate({
+          ...input,
+          itemIndexes: [...input.itemIndexes],
+        }),
+      catch: (cause) =>
+        new WorkflowRequestError({
+          message: getErrorMessage(cause),
+          cause,
+        }),
+    });
+  },
+
   getTaskProjection(projectId: string) {
     return Effect.tryPromise({
       try: () => trpcClient.workflowRuntime.taskProjection.query({ projectId }),

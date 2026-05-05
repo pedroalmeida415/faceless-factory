@@ -174,6 +174,30 @@ export function planWorkflowRun(
     input.command.type === "regenerate-item"
       ? nodeExecutionById.get(input.command.nodeExecutionId)
       : undefined;
+  if (
+    input.command.type === "regenerate-item" &&
+    input.command.itemIndexes.length === 0
+  ) {
+    return plannerError(
+      `Cannot regenerate items for Node Execution ${input.command.nodeExecutionId} without selected Item Indexes.`,
+    );
+  }
+  if (input.command.type === "regenerate-item") {
+    const selectedItemIndexes = new Set<number>();
+    for (const itemIndex of input.command.itemIndexes) {
+      if (!Number.isInteger(itemIndex) || itemIndex < 0) {
+        return plannerError(
+          `Cannot regenerate invalid Item Index ${itemIndex} for Node Execution ${input.command.nodeExecutionId}.`,
+        );
+      }
+      if (selectedItemIndexes.has(itemIndex)) {
+        return plannerError(
+          `Cannot regenerate item ${itemIndex} for Node Execution ${input.command.nodeExecutionId} more than once in the same command.`,
+        );
+      }
+      selectedItemIndexes.add(itemIndex);
+    }
+  }
   if (input.command.type === "regenerate-item" && !regenerationNodeExecution) {
     return plannerError(
       `Cannot regenerate items for missing Node Execution ${input.command.nodeExecutionId}.`,

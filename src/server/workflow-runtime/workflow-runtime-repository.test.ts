@@ -1710,6 +1710,205 @@ describe("WorkflowRuntimeRepository", () => {
     );
   });
 
+  test("regenerated parent Attempts satisfy unresolved downstream dependencies without rewriting queued children", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    const childNodeConfig = {
+      ...createWorkflowNode("llmGenerator", 0),
+      id: "child-node",
+      label: "Child Script",
+    };
+    await insertUser(db, { creditBalance: 100 });
+    await insertTaskRun(db, {
+      attempt: 0,
+      id: "parent-before-regeneration",
+      nodeExecutionId: "node-execution-parent-regenerated-slot",
+      runtimeStatus: "APPROVED",
+    });
+    await insertGeneratedTextAsset(db, {
+      assetId: "asset-parent-before-regeneration",
+      taskRunId: "parent-before-regeneration",
+      text: "old parent output",
+    });
+
+    await repository.commitWorkflowRunPlan(
+      workflowRunPlan({
+        nodeExecutionsToCreate: [
+          {
+            id: "node-execution-child-already-queued",
+            nodeId: "child-node",
+            ownerId: "owner-user",
+            workflowId: "workflow-id",
+          },
+        ],
+        nodeExecutionsToReuse: [
+          {
+            id: "node-execution-parent-regenerated-slot",
+            nodeId: "parent-node",
+          },
+        ],
+        taskDependenciesToCreate: [
+          {
+            childNodeExecutionId: "node-execution-child-already-queued",
+            childNodeId: "child-node",
+            childTaskRunId: "child-already-queued",
+            parentItemIndex: 0,
+            parentNodeExecutionId: "node-execution-parent-regenerated-slot",
+            parentNodeId: "parent-node",
+            sourceHandle: "text",
+            targetHandle: "prompt",
+            targetNodeId: "child-node",
+          },
+        ],
+        taskRunsToCreate: [
+          {
+            attempt: 0,
+            estimatedCreditCost: 0,
+            id: "child-already-queued",
+            itemIndex: 0,
+            nodeExecutionId: "node-execution-child-already-queued",
+            nodeId: "child-node",
+            status: "QUEUED",
+            targetNodeConfig: childNodeConfig,
+          },
+        ],
+      }),
+    );
+    await insertTaskRun(db, {
+      estimatedCreditCost: 1,
+      id: "child-waiting-for-regeneration",
+      inputSnapshot: inputSnapshot("child-waiting-for-regeneration", 0, {
+        nodeExecutionId: "node-execution-child-waiting-regeneration",
+        nodeId: "child-node",
+        targetNodeConfig: childNodeConfig,
+      }),
+      nodeId: "child-node",
+      nodeExecutionId: "node-execution-child-waiting-regeneration",
+      runtimeStatus: "WAITING_UPSTREAM",
+    });
+    await insertTaskDependency(db, {
+      childTaskRunId: "child-waiting-for-regeneration",
+      parentNodeExecutionId: "node-execution-parent-regenerated-slot",
+      parentNodeId: "parent-node",
+      sourceHandle: "text",
+      targetHandle: "prompt",
+      targetNodeId: "child-node",
+    });
+    await insertTaskRun(db, {
+      attempt: 1,
+      id: "parent-regenerated-approved",
+      nodeExecutionId: "node-execution-parent-regenerated-slot",
+      runtimeStatus: "APPROVED",
+    });
+    await insertGeneratedTextAsset(db, {
+      assetId: "asset-parent-regenerated-approved",
+      taskRunId: "parent-regenerated-approved",
+      text: "regenerated parent output",
+    });
+
+    const result = await repository.wakeUpTaskRunChildren({
+      ownerUserId: "owner-user",
+      settledParentTaskRunId: "parent-regenerated-approved",
+    });
+
+    assert.deepEqual(result.executionJobs, [
+      {
+        attempt: 0,
+        itemIndex: 0,
+        jobId: "task-run~child-waiting-for-regeneration~attempt~0~execute",
+        nodeExecutionId: "node-execution-child-waiting-regeneration",
+        ownerUserId: "owner-user",
+        taskRunId: "child-waiting-for-regeneration",
+        workflowId: "workflow-id",
+      },
+    ]);
+    assert.deepEqual(
+      await repository.getTaskDependenciesForChild({
+        childTaskRunId: "child-already-queued",
+      }),
+      [
+        {
+          childTaskRunId: "child-already-queued",
+          requiredParentItemIndex: 0,
+          requiredParentNodeId: "parent-node",
+          requiredParentNodeExecutionId:
+            "node-execution-parent-regenerated-slot",
+          resolvedParentTaskRunId: "parent-before-regeneration",
+          sourceHandle: "text",
+          targetHandle: "prompt",
+          targetNodeId: "child-node",
+        },
+      ],
+    );
+    assert.deepEqual(
+      await repository.getTaskDependenciesForChild({
+        childTaskRunId: "child-waiting-for-regeneration",
+      }),
+      [
+        {
+          childTaskRunId: "child-waiting-for-regeneration",
+          requiredParentItemIndex: 0,
+          requiredParentNodeId: "parent-node",
+          requiredParentNodeExecutionId:
+            "node-execution-parent-regenerated-slot",
+          resolvedParentTaskRunId: "parent-regenerated-approved",
+          sourceHandle: "text",
+          targetHandle: "prompt",
+          targetNodeId: "child-node",
+        },
+      ],
+    );
+    assert.deepEqual(
+      await getWakeUpTaskRunState(db, "child-waiting-for-regeneration"),
+      {
+        error: null,
+        inputSnapshot: {
+          ...inputSnapshot("child-waiting-for-regeneration", 0, {
+            nodeExecutionId: "node-execution-child-waiting-regeneration",
+            nodeId: "child-node",
+            targetNodeConfig: childNodeConfig,
+          }),
+          providerInput: {
+            kind: "llm-generation-request",
+            request: {
+              idempotencyKey:
+                "task_run:child-waiting-for-regeneration:attempt:0",
+              maxOutputTokens: 2048,
+              mode: null,
+              model: "gemini-3-flash-preview",
+              prompt: "regenerated parent output",
+              referenceImages: [],
+              systemPrompt: null,
+              temperature: 1,
+              thinkingLevel: "LOW",
+            },
+          },
+          resolvedParentTaskRuns: [
+            {
+              address: {
+                parentItemIndex: 0,
+                parentNodeId: "parent-node",
+                sourceHandle: "text",
+                targetHandle: "prompt",
+                targetNodeId: "child-node",
+              },
+              attempt: 1,
+              itemIndex: 0,
+              nodeExecutionId: "node-execution-parent-regenerated-slot",
+              output: {
+                assetId: "asset-parent-regenerated-approved",
+                kind: "inline-text-asset",
+                text: "regenerated parent output",
+              },
+              taskRunId: "parent-regenerated-approved",
+            },
+          ],
+        },
+        reservedCredits: 1,
+        runtimeStatus: "QUEUED",
+      },
+    );
+  });
+
   test("transactionally persists planned Node Executions and queued Task Runs", async () => {
     const repository = createWorkflowRuntimeRepository(db);
 
@@ -1841,6 +2040,112 @@ describe("WorkflowRuntimeRepository", () => {
           nodeId: "source-node",
         }),
       },
+    );
+  });
+
+  test("committing a regeneration plan preserves historical Attempt snapshots and inserts a new materialized snapshot", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    const historicalSnapshot = {
+      ...inputSnapshot("task-run-historical", 2, {
+        nodeExecutionId: "node-execution-regenerate-existing",
+        nodeId: "script-node",
+      }),
+      providerInput: {
+        kind: "llm-generation-request",
+        request: {
+          idempotencyKey: "task_run:task-run-historical:attempt:2",
+          maxOutputTokens: 2048,
+          mode: null,
+          model: "gemini-3-flash-preview",
+          prompt: "historical frozen prompt",
+          referenceImages: [],
+          systemPrompt: null,
+          temperature: 1,
+          thinkingLevel: "LOW",
+        },
+      },
+    } satisfies TaskRunInputSnapshot;
+    const regeneratedSnapshot = {
+      ...inputSnapshot("task-run-regenerated", 3, {
+        nodeExecutionId: "node-execution-regenerate-existing",
+        nodeId: "script-node",
+      }),
+      providerInput: {
+        kind: "llm-generation-request",
+        request: {
+          idempotencyKey: "task_run:task-run-regenerated:attempt:3",
+          maxOutputTokens: 2048,
+          mode: null,
+          model: "gemini-3-flash-preview",
+          prompt: "current regenerated prompt",
+          referenceImages: [],
+          systemPrompt: null,
+          temperature: 1,
+          thinkingLevel: "LOW",
+        },
+      },
+    } satisfies TaskRunInputSnapshot;
+    await insertTaskRun(db, {
+      attempt: 2,
+      id: "task-run-historical",
+      inputSnapshot: historicalSnapshot,
+      nodeExecutionId: "node-execution-regenerate-existing",
+      nodeId: "script-node",
+      runtimeStatus: "APPROVED",
+    });
+
+    await repository.commitWorkflowRunPlan(
+      workflowRunPlan({
+        nodeExecutionsToReuse: [
+          {
+            id: "node-execution-regenerate-existing",
+            nodeId: "script-node",
+          },
+        ],
+        taskRunsToCreate: [
+          {
+            attempt: 3,
+            estimatedCreditCost: 0,
+            id: "task-run-regenerated",
+            inputSnapshot: regeneratedSnapshot,
+            itemIndex: 0,
+            nodeExecutionId: "node-execution-regenerate-existing",
+            nodeId: "script-node",
+            status: "QUEUED",
+            targetNodeConfig: regeneratedSnapshot.targetNodeConfig,
+          },
+        ],
+      }),
+    );
+
+    assert.deepEqual(
+      await repository.getRuntimeTaskRunsForNodeExecution({
+        nodeExecutionId: "node-execution-regenerate-existing",
+      }),
+      [
+        {
+          attempt: 2,
+          inputSnapshot: historicalSnapshot,
+          itemIndex: 0,
+          nodeExecutionId: "node-execution-regenerate-existing",
+          ownerUserId: "owner-user",
+          reservedCredits: null,
+          runtimeStatus: "APPROVED",
+          taskRunId: "task-run-historical",
+          workflowId: "workflow-id",
+        },
+        {
+          attempt: 3,
+          inputSnapshot: regeneratedSnapshot,
+          itemIndex: 0,
+          nodeExecutionId: "node-execution-regenerate-existing",
+          ownerUserId: "owner-user",
+          reservedCredits: 0,
+          runtimeStatus: "QUEUED",
+          taskRunId: "task-run-regenerated",
+          workflowId: "workflow-id",
+        },
+      ],
     );
   });
 
@@ -2763,6 +3068,7 @@ type InsertTaskRunInput = {
   readonly attempt?: number;
   readonly estimatedCreditCost?: number;
   readonly inputSnapshot?: TaskRunInputSnapshot;
+  readonly nodeId?: string;
   readonly nodeExecutionId?: string;
   readonly ownerUserId?: string;
   readonly reservedCredits?: number;
@@ -2781,7 +3087,7 @@ async function insertTaskRun(
     input.inputSnapshot ??
     inputSnapshot(input.id, attempt, {
       nodeExecutionId,
-      nodeId: "node-id",
+      nodeId: input.nodeId ?? "node-id",
     });
   const updatedAt = input.updatedAt ?? "2026-01-01T00:00:00.000Z";
 
@@ -2814,7 +3120,7 @@ async function insertTaskRun(
       ${nodeExecutionId},
       'workflow-id',
       ${ownerUserId},
-      'node-id',
+      ${input.nodeId ?? "node-id"},
       0,
       ${attempt},
       0,
