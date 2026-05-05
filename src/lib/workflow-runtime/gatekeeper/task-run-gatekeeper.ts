@@ -157,18 +157,6 @@ function runGatekeeper(
         continue;
       }
 
-      if (nextState.creditBalance < child.estimatedCreditCost) {
-        const failedChild = {
-          ...child,
-          failureReason: { type: "INSUFFICIENT_CREDITS" },
-          status: "FAILED",
-        } satisfies TaskRunGatekeeperTaskRun;
-        nextState = replaceTaskRun(nextState, failedChild);
-        taskStatusEvents.push(buildStatusEvent(failedChild));
-        cascadeQueue.push(failedChild);
-        continue;
-      }
-
       const inputSnapshot = buildInputSnapshot(child, resolvedDependencies);
       if (inputSnapshot.providerInput.kind === "non-executable-node") {
         const failedChild = {
@@ -198,7 +186,7 @@ function runGatekeeper(
       } satisfies TaskRunGatekeeperTaskRun;
 
       nextState = {
-        creditBalance: nextState.creditBalance - child.estimatedCreditCost,
+        creditBalance: nextState.creditBalance,
         dependencies: nextState.dependencies.map((dependency) => {
           if (dependency.childTaskRunId !== child.id) {
             return dependency;

@@ -44,7 +44,7 @@ describe("TaskRunGatekeeper", () => {
 
     assert.equal(queuedChild.status, "QUEUED");
     assert.equal(queuedChild.reservedCredits, 30);
-    assert.equal(result.state.creditBalance, 70);
+    assert.equal(result.state.creditBalance, 100);
     assert.deepEqual(
       result.state.dependencies.map(
         (candidate) => candidate.resolvedParentTaskRunId,
@@ -545,7 +545,7 @@ describe("TaskRunGatekeeper", () => {
     }
   });
 
-  test("fails a ready child with insufficient credits before queueing and cascades its waiting descendants", () => {
+  test("queues a ready child without using future credit balance as a readiness check", () => {
     const parent = taskRun({
       id: "approved-parent",
       nodeExecutionId: "parent-node",
@@ -572,24 +572,21 @@ describe("TaskRunGatekeeper", () => {
       settledParentTaskRunId: parent.id,
     });
 
-    assert.equal(requireTaskRun(result.state, child.id).status, "FAILED");
-    assert.deepEqual(requireTaskRun(result.state, child.id).failureReason, {
-      type: "INSUFFICIENT_CREDITS",
-    });
-    assert.equal(
-      requireTaskRun(result.state, child.id).reservedCredits,
-      undefined,
-    );
-    assert.equal(
-      requireTaskRun(result.state, child.id).inputSnapshot,
-      child.inputSnapshot,
-    );
+    assert.equal(requireTaskRun(result.state, child.id).status, "QUEUED");
+    assert.equal(requireTaskRun(result.state, child.id).reservedCredits, 50);
     assert.equal(result.state.creditBalance, 10);
     assert.equal(
       requireTaskRun(result.state, grandchild.id).status,
-      "UPSTREAM_FAILED",
+      "WAITING_UPSTREAM",
     );
-    assert.deepEqual(result.executionJobs, []);
+    assert.deepEqual(result.executionJobs, [
+      {
+        attempt: 0,
+        id: "task-run~expensive-child~attempt~0~execute",
+        inputSnapshot: requireTaskRun(result.state, child.id).inputSnapshot,
+        taskRunId: child.id,
+      },
+    ]);
     assert.deepEqual(
       result.taskStatusEvents.map((event) => ({
         failureReason: event.failureReason,
@@ -598,14 +595,9 @@ describe("TaskRunGatekeeper", () => {
       })),
       [
         {
-          failureReason: "INSUFFICIENT_CREDITS",
-          status: "FAILED",
+          failureReason: undefined,
+          status: "QUEUED",
           taskRunId: child.id,
-        },
-        {
-          failureReason: "UPSTREAM_FAILED",
-          status: "UPSTREAM_FAILED",
-          taskRunId: grandchild.id,
         },
       ],
     );

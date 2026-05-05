@@ -124,9 +124,9 @@ describe("WorkflowRuntimeRepository", () => {
           targetNodeId: "child-node",
         },
       ],
-      [{ creditBalance: 100 }],
-      [{ id: "child-debit-denied" }],
       [{ creditBalance: 0 }],
+      [],
+      [{ id: "child-debit-denied" }],
       [],
       [],
     ];
@@ -1531,6 +1531,15 @@ describe("WorkflowRuntimeRepository", () => {
     assert.equal(
       (await getWakeUpTaskRunState(db, "child-unfunded")).runtimeStatus,
       "FAILED",
+    );
+    assert.ok(
+      isTaskRunInputSnapshot(
+        (await getWakeUpTaskRunState(db, "child-unfunded")).inputSnapshot,
+      ),
+    );
+    assert.equal(
+      (await getWakeUpTaskRunState(db, "child-unfunded")).reservedCredits,
+      null,
     );
     assert.equal(
       (await getWakeUpTaskRunState(db, "grandchild-cascaded")).runtimeStatus,
