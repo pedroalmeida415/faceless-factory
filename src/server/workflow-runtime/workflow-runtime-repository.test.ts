@@ -1664,6 +1664,80 @@ describe("WorkflowRuntimeRepository", () => {
     );
   });
 
+  test("persists the planned immutable input snapshot before a Task Run becomes Queued", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    const frozenSnapshot = {
+      ...inputSnapshot("task-run-frozen", 0, {
+        nodeExecutionId: "node-execution-frozen",
+        nodeId: "frozen-node",
+      }),
+      documentRevision: 88,
+      providerInput: {
+        kind: "llm-generation-request" as const,
+        request: {
+          idempotencyKey: "task_run:task-run-frozen:attempt:0",
+          maxOutputTokens: 1024,
+          mode: null,
+          model: "gemini-3-flash-preview" as const,
+          prompt: "frozen provider prompt",
+          referenceImages: [],
+          systemPrompt: null,
+          temperature: 0.2,
+          thinkingLevel: "LOW" as const,
+        },
+      },
+    };
+    const liveTargetNodeConfig = {
+      ...frozenSnapshot.targetNodeConfig,
+      config: { temperature: 1 },
+    };
+
+    await repository.commitWorkflowRunPlan(
+      workflowRunPlan({
+        nodeExecutionsToCreate: [
+          {
+            id: "node-execution-frozen",
+            nodeId: "frozen-node",
+            ownerId: "owner-user",
+            workflowId: "workflow-id",
+          },
+        ],
+        taskRunsToCreate: [
+          {
+            attempt: 0,
+            estimatedCreditCost: 0,
+            id: "task-run-frozen",
+            inputSnapshot: frozenSnapshot,
+            itemIndex: 0,
+            nodeExecutionId: "node-execution-frozen",
+            nodeId: "frozen-node",
+            status: "QUEUED",
+            targetNodeConfig: liveTargetNodeConfig,
+          },
+        ],
+      }),
+    );
+
+    assert.deepEqual(
+      await repository.claimQueuedTaskRun({
+        attempt: 0,
+        ownerUserId: "owner-user",
+        taskRunId: "task-run-frozen",
+      }),
+      {
+        claimed: true,
+        event: {
+          attempt: 0,
+          itemIndex: 0,
+          nodeExecutionId: "node-execution-frozen",
+          status: "RUNNING",
+          taskRunId: "task-run-frozen",
+        },
+        inputSnapshot: frozenSnapshot,
+      },
+    );
+  });
+
   test("marks unsupported planned node kinds failed and does not enqueue them", async () => {
     const repository = createWorkflowRuntimeRepository(db);
 
@@ -2947,6 +3021,7 @@ function inputSnapshot(
     input.targetNodeConfig ?? defaultTargetNodeConfig(nodeId);
   return {
     attempt,
+    documentRevision: null,
     idempotencyKey: `task_run:${taskRunId}:attempt:${attempt}`,
     itemIndex: input.itemIndex ?? 0,
     kind: "task-run-input-snapshot",

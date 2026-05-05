@@ -135,7 +135,7 @@ type CommitWorkflowRunPlanResult = {
 
 type CommittedPlanTaskRun = Omit<
   WorkflowRunPlan["taskRunsToCreate"][number],
-  "status"
+  "failureReason" | "status"
 > & {
   readonly failureReason?: "EXECUTION_FAILED" | "INSUFFICIENT_CREDITS";
   readonly status: "FAILED" | "QUEUED" | "WAITING_UPSTREAM";
@@ -1403,8 +1403,16 @@ async function buildQueuedTaskRunFreezes(
 
     const resolvedParents: ResolvedParentTaskRunSnapshot[] = [];
     const resolvedParentTaskRunByDependencyId = new Map<string, string>();
-    for (const dependency of dependenciesByChildTaskRunId.get(taskRun.id) ??
-      []) {
+    const dependencies = dependenciesByChildTaskRunId.get(taskRun.id) ?? [];
+    if (taskRun.inputSnapshot && dependencies.length === 0) {
+      freezes.set(taskRun.id, {
+        inputSnapshot: taskRun.inputSnapshot,
+        resolvedParentTaskRunByDependencyId,
+      });
+      continue;
+    }
+
+    for (const dependency of dependencies) {
       const parent = await loadLatestApprovedParentTaskRunForCommit(db, {
         childTaskRunId: taskRun.id,
         parentItemIndex: dependency.parentItemIndex,

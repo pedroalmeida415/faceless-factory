@@ -25,6 +25,8 @@ import {
   isTaskRunDependencySatisfiedStatus,
   type TaskRunStatus,
 } from "~/lib/workflow-runtime/domain/task-run-state";
+import type { TaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
+import { materializeDirectTaskRunInput } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
 
 export type WorkflowRunPlannerCommand =
   | { readonly type: "run-target"; readonly targetNodeIds: readonly string[] }
@@ -53,6 +55,7 @@ export type WorkflowRunPlannerInput = {
   readonly createNodeExecutionId?: () => string;
   readonly createTaskRunId?: () => string;
   readonly document: WorkflowDocument;
+  readonly documentRevision?: number | null;
   readonly latestNodeExecutions: readonly ExistingNodeExecution[];
   readonly latestTaskRuns: readonly ExistingTaskRun[];
   readonly ownerId: string;
@@ -81,7 +84,12 @@ export type PlannedTaskRun = {
   readonly itemIndex: number;
   readonly attempt: number;
   readonly estimatedCreditCost: number;
-  readonly status: Extract<TaskRunStatus, "QUEUED" | "WAITING_UPSTREAM">;
+  readonly failureReason?: "EXECUTION_FAILED";
+  readonly inputSnapshot?: TaskRunInputSnapshot;
+  readonly status: Extract<
+    TaskRunStatus,
+    "FAILED" | "QUEUED" | "WAITING_UPSTREAM"
+  >;
 };
 
 export type PlannedTaskDependency = {
@@ -388,18 +396,55 @@ export function planWorkflowRun(
     if (!isProviderBackedNode(targetNodeConfig)) {
       return false;
     }
-    const dependencyAddresses = parentDependencyAddresses(
-      inputTaskRun.nodeId,
-      inputTaskRun.itemIndex,
-    );
+    const taskRunId = createTaskRunId();
+    const dependencyAddressesResult = (() => {
+      try {
+        return parentDependencyAddresses(
+          inputTaskRun.nodeId,
+          inputTaskRun.itemIndex,
+        );
+      } catch {
+        return null;
+      }
+    })();
+    if (!dependencyAddressesResult) {
+      taskRunsToCreate.push({
+        ...inputTaskRun,
+        estimatedCreditCost: estimatedCreditCost(inputTaskRun.nodeId, input),
+        failureReason: "EXECUTION_FAILED",
+        id: taskRunId,
+        status: "FAILED",
+        targetNodeConfig,
+      });
+      return true;
+    }
 
+    const dependencyAddresses = dependencyAddressesResult;
+    const status = parentsSatisfied(dependencyAddresses)
+      ? "QUEUED"
+      : "WAITING_UPSTREAM";
+    const materialization =
+      status === "QUEUED" && dependencyAddresses.length === 0
+        ? materializeDirectTaskRunInput({
+            attempt: inputTaskRun.attempt,
+            document: input.document,
+            documentRevision: input.documentRevision ?? null,
+            itemIndex: inputTaskRun.itemIndex,
+            nodeExecutionId: inputTaskRun.nodeExecutionId,
+            nodeId: inputTaskRun.nodeId,
+            taskRunId,
+          })
+        : undefined;
     const taskRun: PlannedTaskRun = {
       ...inputTaskRun,
       estimatedCreditCost: estimatedCreditCost(inputTaskRun.nodeId, input),
-      id: createTaskRunId(),
-      status: parentsSatisfied(dependencyAddresses)
-        ? "QUEUED"
-        : "WAITING_UPSTREAM",
+      ...(materialization?.ok
+        ? { inputSnapshot: materialization.value }
+        : materialization
+          ? { failureReason: "EXECUTION_FAILED" as const }
+          : {}),
+      id: taskRunId,
+      status: materialization && !materialization.ok ? "FAILED" : status,
       targetNodeConfig,
     };
     taskRunsToCreate.push(taskRun);

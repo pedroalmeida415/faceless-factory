@@ -338,6 +338,7 @@ function inputSnapshot(
   };
   return {
     attempt,
+    documentRevision: null,
     idempotencyKey: `task_run:${taskRunId}:attempt:${attempt}`,
     itemIndex: 0,
     kind: "task-run-input-snapshot",

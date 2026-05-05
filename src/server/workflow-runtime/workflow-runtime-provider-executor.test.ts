@@ -142,6 +142,50 @@ describe("WorkflowRuntimeProviderExecutor", () => {
     });
   });
 
+  test("uses the immutable snapshot provider input for the provider call", async () => {
+    const vertexAi = new FakeVertexAi();
+    const executor = createWorkflowRuntimeProviderExecutor({
+      createAssetId: () => "text-asset-frozen",
+      vertexAi,
+    });
+    const baseSnapshot = inputSnapshot({ kind: "llmGenerator" });
+    if (baseSnapshot.targetNodeConfig.kind !== "llmGenerator") {
+      throw new Error("Expected LLM generator target node config");
+    }
+    const snapshot = {
+      ...baseSnapshot,
+      providerInput: {
+        kind: "llm-generation-request" as const,
+        request: {
+          idempotencyKey: "task_run:task-run-1:attempt:0",
+          maxOutputTokens: 512,
+          mode: null,
+          model: "gemini-3-flash-preview" as const,
+          prompt: "frozen snapshot prompt",
+          referenceImages: [],
+          systemPrompt: "frozen system prompt",
+          temperature: 0.3,
+          thinkingLevel: "LOW" as const,
+        },
+      },
+      targetNodeConfig: {
+        ...baseSnapshot.targetNodeConfig,
+        config: { maxOutputTokens: 2048, temperature: 1, thinkingLevel: "LOW" },
+      },
+    } satisfies ExecutableTaskRunInputSnapshot;
+
+    await executor.execute({
+      inputSnapshot: snapshot,
+      ownerUserId: "owner-1",
+      workflowId: "workflow-1",
+    });
+
+    assert.deepEqual(
+      vertexAi.llmCalls.map((call) => call.request),
+      [snapshot.providerInput.request],
+    );
+  });
+
   test("rejects multiple generated media assets instead of picking one", async () => {
     const vertexAi = new FakeVertexAi();
     vertexAi.imageResponse = {
@@ -286,6 +330,7 @@ function inputSnapshot(input: {
 
   return {
     attempt: 0,
+    documentRevision: null,
     idempotencyKey: "task_run:task-run-1:attempt:0",
     itemIndex: 0,
     kind: "task-run-input-snapshot",

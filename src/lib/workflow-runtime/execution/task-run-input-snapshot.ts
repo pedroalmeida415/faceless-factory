@@ -31,6 +31,7 @@ export type ResolvedParentTaskRunInputSnapshot = {
 export type TaskRunInputSnapshot = {
   readonly kind: "task-run-input-snapshot";
   readonly version: 1;
+  readonly documentRevision: number | null;
   readonly taskRunId: string;
   readonly nodeExecutionId: string;
   readonly nodeId: string;
@@ -53,6 +54,7 @@ export function buildTaskRunInputSnapshot(input: {
   readonly nodeId: string;
   readonly itemIndex: number;
   readonly attempt: number;
+  readonly documentRevision?: number | null;
   readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
   readonly workflowDefinition?: WorkflowDefinitionGraphDocument;
   readonly resolvedParentTaskRuns: readonly ResolvedParentTaskRunInputSnapshot[];
@@ -67,6 +69,7 @@ export function buildTaskRunInputSnapshot(input: {
 
   return {
     attempt: input.attempt,
+    documentRevision: input.documentRevision ?? null,
     idempotencyKey,
     itemIndex: input.itemIndex,
     kind: "task-run-input-snapshot",
@@ -94,6 +97,8 @@ export function isTaskRunInputSnapshot(
     isRecord(value) &&
     value.kind === "task-run-input-snapshot" &&
     value.version === 1 &&
+    (value.documentRevision === null ||
+      typeof value.documentRevision === "number") &&
     typeof value.idempotencyKey === "string" &&
     typeof value.taskRunId === "string" &&
     typeof value.nodeExecutionId === "string" &&

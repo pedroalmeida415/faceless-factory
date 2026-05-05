@@ -99,15 +99,25 @@ describe("renderTaskRunProviderInput", () => {
   });
 
   test("renders direct and reordered image parents into first/last video frames by handle", () => {
-    const image = { ...createWorkflowNode("imageGenerator", 0), id: "image" };
+    const imageNode = createWorkflowNode("imageGenerator", 0);
+    const reorderNode = createWorkflowNode("outputReorder", 1);
+    const videoNode = createWorkflowNode("videoGenerator", 2);
+    if (
+      imageNode.kind !== "imageGenerator" ||
+      reorderNode.kind !== "outputReorder" ||
+      videoNode.kind !== "videoGenerator"
+    ) {
+      throw new Error("Unexpected workflow node kind");
+    }
+    const image = { ...imageNode, id: "image" };
     const reorder = {
-      ...createWorkflowNode("outputReorder", 1),
+      ...reorderNode,
       id: "shift",
       shift: 1,
       valueType: "image" as const,
     };
     const video = {
-      ...createWorkflowNode("videoGenerator", 2),
+      ...videoNode,
       id: "video",
       mode: "first-last-frame" as const,
     };

@@ -53,6 +53,7 @@ describe("TaskRunGatekeeper", () => {
     );
     assert.deepEqual(queuedChild.inputSnapshot, {
       attempt: 0,
+      documentRevision: null,
       idempotencyKey: "task_run:child-task-run:attempt:0",
       itemIndex: 0,
       kind: "task-run-input-snapshot",

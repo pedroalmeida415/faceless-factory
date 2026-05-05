@@ -232,6 +232,46 @@ describe("WorkflowRunPlanner", () => {
     );
   });
 
+  test("materializes direct queued Task Run input snapshots before persistence", () => {
+    const plan = unwrap(
+      planWorkflowRun({
+        command: { type: "run-target", targetNodeIds: ["script"] },
+        createNodeExecutionId: () => "node-execution-script",
+        createTaskRunId: () => "task-run-script",
+        document: makeDocument(),
+        documentRevision: 42,
+        latestNodeExecutions: [],
+        latestTaskRuns: [],
+        ownerId: "owner-1",
+        workflowId: "workflow-1",
+      }),
+    );
+
+    const snapshot = plan.taskRunsToCreate[0]?.inputSnapshot;
+    assert.equal(snapshot?.taskRunId, "task-run-script");
+    assert.equal(snapshot?.nodeExecutionId, "node-execution-script");
+    assert.equal(snapshot?.itemIndex, 0);
+    assert.equal(snapshot?.attempt, 0);
+    assert.equal(snapshot?.documentRevision, 42);
+    assert.equal(
+      snapshot?.idempotencyKey,
+      "task_run:task-run-script:attempt:0",
+    );
+    assert.equal(snapshot?.providerInput.kind, "llm-generation-request");
+    assert.equal(
+      snapshot?.providerInput.kind === "llm-generation-request"
+        ? snapshot.providerInput.request.prompt
+        : null,
+      "",
+    );
+    assert.deepEqual(snapshot?.resolvedParentTaskRuns, []);
+    assert.equal(snapshot?.targetNodeConfig.id, "script");
+    assert.deepEqual(
+      snapshot?.workflowDefinition,
+      toWorkflowDefinitionGraphDocument(makeDocument()),
+    );
+  });
+
   test("run-target uses injected plan identities consistently across Task Dependencies", () => {
     let nodeExecutionIndex = 0;
     let taskRunIndex = 0;
@@ -323,6 +363,68 @@ describe("WorkflowRunPlanner", () => {
           parentNodeId: "source",
           sourceHandle: "text",
           targetHandle: "prompt",
+        },
+      ],
+    );
+  });
+
+  test("fails malformed direct Task Run Input Materialization before worker execution", () => {
+    const document = makeOutputReorderDependencyDocument();
+    const reorder = document.nodes.find((node) => node.id === "reorder");
+    const malformedDocument: WorkflowDocument = {
+      ...document,
+      nodes: document.nodes.map((node) =>
+        node === reorder && node.kind === "outputReorder"
+          ? { ...node, order: [0] }
+          : node,
+      ),
+    };
+
+    const plan = unwrap(
+      planWorkflowRun({
+        command: { type: "run-target", targetNodeIds: ["script"] },
+        document: malformedDocument,
+        latestNodeExecutions: [
+          latestNodeExecution("source-execution", "source"),
+        ],
+        latestTaskRuns: [
+          latestTaskRun({
+            id: "source-task-0",
+            itemIndex: 0,
+            nodeExecutionId: "source-execution",
+            status: "APPROVED",
+          }),
+          latestTaskRun({
+            id: "source-task-1",
+            itemIndex: 1,
+            nodeExecutionId: "source-execution",
+            status: "APPROVED",
+          }),
+        ],
+        ownerId: "owner-1",
+        plannedItemCountByNodeId: { script: 2, source: 2 },
+        workflowId: "workflow-1",
+      }),
+    );
+
+    assert.deepEqual(
+      plan.taskRunsToCreate
+        .filter((taskRun) => taskRun.nodeId === "script")
+        .map((taskRun) => ({
+          failureReason: taskRun.failureReason,
+          inputSnapshot: taskRun.inputSnapshot ?? null,
+          status: taskRun.status,
+        })),
+      [
+        {
+          failureReason: "EXECUTION_FAILED",
+          inputSnapshot: null,
+          status: "FAILED",
+        },
+        {
+          failureReason: "EXECUTION_FAILED",
+          inputSnapshot: null,
+          status: "FAILED",
         },
       ],
     );
