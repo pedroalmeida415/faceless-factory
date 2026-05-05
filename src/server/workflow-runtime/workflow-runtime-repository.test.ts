@@ -84,6 +84,83 @@ describe("WorkflowRuntimeRepository", () => {
     assert.deepEqual(calls, ["transaction"]);
   });
 
+  test("Wake-Up Call persistence fails a Task Run instead of queueing without a debit", async () => {
+    const results: readonly unknown[][] = [
+      [{ ownerUserId: "owner-user", workflowId: "workflow-id" }],
+      [
+        gatekeeperTaskRunRow({
+          id: "parent-approved-for-debit-denied",
+          nodeExecutionId: "node-execution-parent-debit-denied",
+          status: "APPROVED",
+        }),
+        gatekeeperTaskRunRow({
+          estimatedCreditCost: 30,
+          id: "child-debit-denied",
+          inputSnapshot: inputSnapshot("child-debit-denied", 0, {
+            nodeExecutionId: "node-execution-child-debit-denied",
+          }),
+          nodeExecutionId: "node-execution-child-debit-denied",
+          status: "WAITING_UPSTREAM",
+        }),
+      ],
+      [
+        {
+          assetId: "asset-parent-debit-denied",
+          contentType: "text/plain",
+          kind: "text",
+          text: "approved parent text",
+        },
+      ],
+      [],
+      [
+        {
+          childTaskRunId: "child-debit-denied",
+          requiredParentItemIndex: 0,
+          requiredParentNodeExecutionId: "node-execution-parent-debit-denied",
+          requiredParentNodeId: "parent-node",
+          resolvedParentTaskRunId: null,
+          sourceHandle: null,
+          targetHandle: null,
+          targetNodeId: "child-node",
+        },
+      ],
+      [{ creditBalance: 100 }],
+      [{ id: "child-debit-denied" }],
+      [{ creditBalance: 0 }],
+      [],
+      [],
+    ];
+    let queryIndex = 0;
+
+    const result = await wakeUpTaskRunChildrenInRepository(
+      {
+        execute: async () => {
+          throw new Error("Wake-Up Call SQL escaped the transaction API");
+        },
+        transaction: async (callback) =>
+          callback({ execute: async () => results[queryIndex++] ?? [] }),
+      },
+      {
+        ownerUserId: "owner-user",
+        settledParentTaskRunId: "parent-approved-for-debit-denied",
+      },
+    );
+
+    assert.deepEqual(result, {
+      executionJobs: [],
+      taskStatusEvents: [
+        {
+          attempt: 0,
+          failureReason: "INSUFFICIENT_CREDITS",
+          itemIndex: 0,
+          nodeExecutionId: "node-execution-child-debit-denied",
+          status: "FAILED",
+          taskRunId: "child-debit-denied",
+        },
+      ],
+    });
+  });
+
   test("claims a queued Task Run and returns the post-commit Running Task Status Event with the input snapshot", async () => {
     const repository = createWorkflowRuntimeRepository(db);
     const snapshot = inputSnapshot("task-run-claimable", 0);
@@ -747,7 +824,7 @@ describe("WorkflowRuntimeRepository", () => {
     );
   });
 
-  test("refunds unconsumed reserved credits once when cancelling an active Task Run", async () => {
+  test("refunds unspent Task Run Debit once when cancelling an active Task Run", async () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 70 });
     await insertTaskRun(db, {
@@ -777,14 +854,14 @@ describe("WorkflowRuntimeRepository", () => {
             amount: 30,
             balanceAfter: 100,
             kind: "refund",
-            sourceKey: "task_run:task-run-reserved-cancelled:credit_refund",
+            sourceKey: "task_run:task-run-reserved-cancelled:refund",
           },
         ],
       },
     );
   });
 
-  test("cancelling Pending Review refunds only reserved credits not already consumed", async () => {
+  test("cancelling Pending Review refunds only unspent Task Run Debit", async () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 80 });
     await insertTaskRun(db, {
@@ -809,7 +886,7 @@ describe("WorkflowRuntimeRepository", () => {
             amount: 13,
             balanceAfter: 93,
             kind: "refund",
-            sourceKey: "task_run:task-run-review-partial-cancel:credit_refund",
+            sourceKey: "task_run:task-run-review-partial-cancel:refund",
           },
         ],
       },
@@ -879,7 +956,7 @@ describe("WorkflowRuntimeRepository", () => {
     });
   });
 
-  test("refunds reserved credits above failure final cost and treats omitted cost as zero", async () => {
+  test("failure refunds debited credits above final cost and treats omitted cost as zero", async () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 50 });
     await insertTaskRun(db, {
@@ -932,21 +1009,20 @@ describe("WorkflowRuntimeRepository", () => {
             amount: 25,
             balanceAfter: 75,
             kind: "refund",
-            sourceKey: "task_run:task-run-failed-partial-refund:credit_refund",
+            sourceKey: "task_run:task-run-failed-partial-refund:refund",
           },
           {
             amount: 10,
             balanceAfter: 85,
             kind: "refund",
-            sourceKey:
-              "task_run:task-run-failed-zero-cost-refund:credit_refund",
+            sourceKey: "task_run:task-run-failed-zero-cost-refund:refund",
           },
         ],
       },
     );
   });
 
-  test("completion refunds unused reservation without overdrafting when final cost exceeds reserved credits", async () => {
+  test("completion refunds unused Task Run Debit without overdrafting when final cost exceeds debited credits", async () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 60 });
     await insertTaskRun(db, {
@@ -986,7 +1062,7 @@ describe("WorkflowRuntimeRepository", () => {
             amount: 18,
             balanceAfter: 78,
             kind: "refund",
-            sourceKey: "task_run:task-run-complete-refund:credit_refund",
+            sourceKey: "task_run:task-run-complete-refund:refund",
           },
         ],
       },
@@ -1203,7 +1279,7 @@ describe("WorkflowRuntimeRepository", () => {
         amount: 30,
         balanceAfter: 70,
         kind: "debit",
-        sourceKey: "task_run:child-ready:credit_reservation",
+        sourceKey: "task_run:child-ready:debit",
         userId: "owner-user",
       },
     ]);
@@ -1516,7 +1592,7 @@ describe("WorkflowRuntimeRepository", () => {
       childTaskRunId: "child-stale-wake",
       parentNodeExecutionId: "node-execution-parent-stale-wake",
     });
-    await insertCreditReservationLedgerEntry(db, {
+    await insertTaskRunDebitLedgerEntry(db, {
       amount: 12,
       balanceAfter: 88,
       taskRunId: "child-stale-wake",
@@ -1534,7 +1610,7 @@ describe("WorkflowRuntimeRepository", () => {
         amount: 12,
         balanceAfter: 88,
         kind: "debit",
-        sourceKey: "task_run:child-stale-wake:credit_reservation",
+        sourceKey: "task_run:child-stale-wake:debit",
         userId: "owner-user",
       },
     ]);
@@ -2386,7 +2462,7 @@ describe("WorkflowRuntimeRepository", () => {
         amount: 12,
         balanceAfter: 38,
         kind: "debit",
-        sourceKey: "task_run:task-run-funded-source:credit_reservation",
+        sourceKey: "task_run:task-run-funded-source:debit",
         userId: "owner-user",
       },
     ]);
@@ -3135,6 +3211,30 @@ type InsertTaskRunInput = {
   readonly updatedAt?: string;
 };
 
+function gatekeeperTaskRunRow(input: {
+  readonly estimatedCreditCost?: number;
+  readonly id: string;
+  readonly inputSnapshot?: TaskRunInputSnapshot;
+  readonly nodeExecutionId: string;
+  readonly status: TaskRunStatus;
+}) {
+  return {
+    attempt: 0,
+    error: null,
+    estimatedCreditCost: input.estimatedCreditCost ?? 0,
+    failureReason: null,
+    inputSnapshot: input.inputSnapshot ?? null,
+    itemIndex: 0,
+    nodeExecutionId: input.nodeExecutionId,
+    nodeId: "node-id",
+    ownerUserId: "owner-user",
+    reservedCredits: null,
+    status: input.status,
+    taskRunId: input.id,
+    workflowId: "workflow-id",
+  };
+}
+
 async function insertTaskRun(
   db: PgliteDatabase,
   input: InsertTaskRunInput,
@@ -3150,6 +3250,7 @@ async function insertTaskRun(
     });
   const updatedAt = input.updatedAt ?? "2026-01-01T00:00:00.000Z";
 
+  await ensureUser(db, { id: ownerUserId });
   await insertNodeExecution(db, { id: nodeExecutionId, ownerUserId });
 
   await db.execute(sql`
@@ -3207,6 +3308,18 @@ async function insertUser(
   await db.execute(sql`
     insert into "user" (id, name, email, credit_balance)
     values (${id}, 'Owner User', ${`${id}@example.com`}, ${input.creditBalance})
+    on conflict (id) do update set credit_balance = excluded.credit_balance
+  `);
+}
+
+async function ensureUser(
+  db: PgliteDatabase,
+  input: { readonly id: string },
+): Promise<void> {
+  await db.execute(sql`
+    insert into "user" (id, name, email, credit_balance)
+    values (${input.id}, 'Owner User', ${`${input.id}@example.com`}, 0)
+    on conflict (id) do nothing
   `);
 }
 
@@ -3331,7 +3444,7 @@ async function insertGeneratedMediaAsset(
   `);
 }
 
-async function insertCreditReservationLedgerEntry(
+async function insertTaskRunDebitLedgerEntry(
   db: PgliteDatabase,
   input: {
     readonly amount: number;
@@ -3341,7 +3454,7 @@ async function insertCreditReservationLedgerEntry(
     readonly workflowId?: string;
   },
 ): Promise<void> {
-  const sourceKey = `task_run:${input.taskRunId}:credit_reservation`;
+  const sourceKey = `task_run:${input.taskRunId}:debit`;
   await db.execute(sql`
     insert into credit_ledger_entries (
       id,
@@ -3359,7 +3472,7 @@ async function insertCreditReservationLedgerEntry(
       'debit',
       ${input.amount},
       ${input.balanceAfter},
-      'task_run_credit_reservation',
+      'task_run_debit',
       ${sourceKey}
     )
   `);
@@ -3609,6 +3722,7 @@ function workflowRunPlan(input: WorkflowRunPlanInput): WorkflowRunPlan {
   return {
     nodeExecutionsToCreate: input.nodeExecutionsToCreate ?? [],
     nodeExecutionsToReuse: input.nodeExecutionsToReuse ?? [],
+    runCostPreview: input.runCostPreview ?? emptyRunCostPreview(),
     taskDependenciesToCreate: input.taskDependenciesToCreate ?? [],
     taskRunsToCreate,
     workflowDefinition: input.workflowDefinition ?? {
@@ -3623,6 +3737,18 @@ function workflowRunPlan(input: WorkflowRunPlanInput): WorkflowRunPlan {
       ),
       version: 9,
     },
+  };
+}
+
+function emptyRunCostPreview(): WorkflowRunPlan["runCostPreview"] {
+  return {
+    excludedExisting: { items: [], totalCreditCost: 0 },
+    failedBeforeQueue: { items: [], totalCreditCost: 0 },
+    immediateDebitTotal: 0,
+    items: [],
+    newCostTotal: 0,
+    queuedImmediate: { items: [], totalCreditCost: 0 },
+    waitingUpstream: { items: [], totalCreditCost: 0 },
   };
 }
 

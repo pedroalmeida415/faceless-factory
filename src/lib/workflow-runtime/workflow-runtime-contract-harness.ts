@@ -433,7 +433,13 @@ export async function insertUser(
 ) {
   const id = input.id ?? "owner-user";
   await db.execute(
-    sql`insert into "user" (id, name, email, credit_balance) values (${id}, 'Owner User', ${`${id}@example.com`}, ${input.creditBalance})`,
+    sql`insert into "user" (id, name, email, credit_balance) values (${id}, 'Owner User', ${`${id}@example.com`}, ${input.creditBalance}) on conflict (id) do update set credit_balance = excluded.credit_balance`,
+  );
+}
+
+async function ensureUser(db: PgliteDatabase, ownerUserId: string) {
+  await db.execute(
+    sql`insert into "user" (id, name, email, credit_balance) values (${ownerUserId}, 'Owner User', ${`${ownerUserId}@example.com`}, 0) on conflict (id) do nothing`,
   );
 }
 
@@ -478,6 +484,7 @@ export async function insertTaskRun(
   const attempt = input.attempt ?? 0;
   const nodeExecutionId = input.nodeExecutionId ?? `node-execution-${input.id}`;
   const nodeId = input.nodeId ?? "node-id";
+  await ensureUser(db, input.ownerUserId ?? "owner-user");
   await insertNodeExecution(db, {
     id: nodeExecutionId,
     nodeId,
@@ -661,6 +668,15 @@ export function workflowRunPlan(input: {
   return {
     nodeExecutionsToCreate: [],
     nodeExecutionsToReuse: input.nodeExecutionsToReuse ?? [],
+    runCostPreview: {
+      excludedExisting: { items: [], totalCreditCost: 0 },
+      failedBeforeQueue: { items: [], totalCreditCost: 0 },
+      immediateDebitTotal: 0,
+      items: [],
+      newCostTotal: 0,
+      queuedImmediate: { items: [], totalCreditCost: 0 },
+      waitingUpstream: { items: [], totalCreditCost: 0 },
+    },
     taskDependenciesToCreate: [],
     taskRunsToCreate: input.taskRunsToCreate ?? [],
     workflowDefinition: { edges: [], nodes: [], version: 9 as const },

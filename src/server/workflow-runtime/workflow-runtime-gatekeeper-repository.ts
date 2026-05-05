@@ -18,7 +18,11 @@ import {
   type TaskRunGatekeeperState,
   type TaskRunGatekeeperTaskRun,
 } from "~/lib/workflow-runtime/gatekeeper/task-run-gatekeeper";
-import type { TaskStatusEvent } from "~/lib/workflow-runtime/runtime/task-status-events";
+import {
+  buildTaskStatusEvent,
+  type TaskStatusEvent,
+} from "~/lib/workflow-runtime/runtime/task-status-events";
+import { debitTaskRunCredits } from "~/server/workflow-runtime/task-run-credit-ledger";
 import {
   buildWorkflowRuntimeExecutionJobPayload,
   type WorkflowRuntimeExecutionJobPayload,
@@ -63,6 +67,11 @@ type GatekeeperTaskRunRow = {
 
 type QueryRow = Record<string, unknown>;
 
+type PersistedGatekeeperResult = {
+  readonly debitDeniedTaskRunIds: ReadonlySet<string>;
+  readonly persistedTaskRunIds: ReadonlySet<string>;
+};
+
 export async function wakeUpTaskRunChildrenInRepository(
   db: DbLike,
   command: WakeUpTaskRunChildrenRepositoryCommand,
@@ -91,7 +100,7 @@ export async function wakeUpTaskRunChildrenInRepository(
       { settledParentTaskRunId: command.settledParentTaskRunId },
     );
 
-    const persistedTaskRunIds = await persistGatekeeperResult(tx, {
+    const persisted = await persistGatekeeperResult(tx, {
       initialDependencies,
       initialTaskRuns,
       ownerUserId: command.ownerUserId,
@@ -104,7 +113,7 @@ export async function wakeUpTaskRunChildrenInRepository(
     );
     return {
       executionJobs: result.executionJobs.flatMap((job) => {
-        if (!persistedTaskRunIds.has(job.taskRunId)) {
+        if (!persisted.persistedTaskRunIds.has(job.taskRunId)) {
           return [];
         }
         const taskRun = requireTaskRunRow(taskRunRowsById, job.taskRunId);
@@ -117,9 +126,22 @@ export async function wakeUpTaskRunChildrenInRepository(
           workflowId: taskRun.workflowId,
         });
       }),
-      taskStatusEvents: result.taskStatusEvents.filter((event) =>
-        persistedTaskRunIds.has(event.taskRunId),
-      ),
+      taskStatusEvents: [
+        ...result.taskStatusEvents.filter((event) =>
+          persisted.persistedTaskRunIds.has(event.taskRunId),
+        ),
+        ...Array.from(persisted.debitDeniedTaskRunIds).map((taskRunId) => {
+          const taskRun = requireTaskRunRow(taskRunRowsById, taskRunId);
+          return buildTaskStatusEvent({
+            attempt: taskRun.attempt,
+            failureReason: "INSUFFICIENT_CREDITS",
+            itemIndex: taskRun.itemIndex,
+            nodeExecutionId: taskRun.nodeExecutionId,
+            status: "FAILED",
+            taskRunId,
+          });
+        }),
+      ],
     };
   });
 }
@@ -360,11 +382,12 @@ async function persistGatekeeperResult(
     readonly resultState: TaskRunGatekeeperState;
     readonly taskRunRows: readonly GatekeeperTaskRunRow[];
   },
-): Promise<ReadonlySet<string>> {
+): Promise<PersistedGatekeeperResult> {
   const taskRunRowsById = new Map(
     input.taskRunRows.map((taskRun) => [taskRun.taskRunId, taskRun]),
   );
   const persistedTaskRunIds = new Set<string>();
+  const debitDeniedTaskRunIds = new Set<string>();
 
   for (const taskRun of input.resultState.taskRuns) {
     const initial = input.initialTaskRuns.get(taskRun.id);
@@ -380,12 +403,17 @@ async function persistGatekeeperResult(
 
     if (initial.status !== "QUEUED" && taskRun.status === "QUEUED") {
       const row = requireTaskRunRow(taskRunRowsById, taskRun.id);
-      await reserveTaskRunCredits(db, {
+      const debit = await debitTaskRunCredits(db, {
         amount: taskRun.reservedCredits ?? 0,
         ownerUserId: input.ownerUserId,
         taskRunId: taskRun.id,
         workflowId: row.workflowId,
       });
+      if (!debit.debited) {
+        await failTaskRunAfterDebitDenied(db, taskRun.id);
+        persistedTaskRunIds.delete(taskRun.id);
+        debitDeniedTaskRunIds.add(taskRun.id);
+      }
     }
   }
 
@@ -414,7 +442,24 @@ async function persistGatekeeperResult(
     `);
   }
 
-  return persistedTaskRunIds;
+  return { debitDeniedTaskRunIds, persistedTaskRunIds };
+}
+
+async function failTaskRunAfterDebitDenied(
+  db: DbExecutor,
+  taskRunId: string,
+): Promise<void> {
+  await db.execute(sql`
+    update task_runs
+    set runtime_status = 'FAILED',
+      reserved_credits = null,
+      failure_reason = 'INSUFFICIENT_CREDITS',
+      queued_at = null,
+      failed_at = now(),
+      updated_at = now()
+    where id = ${taskRunId}
+      and runtime_status = 'QUEUED'
+  `);
 }
 
 async function updateGatekeeperTaskRun(
@@ -441,54 +486,6 @@ async function updateGatekeeperTaskRun(
   );
 
   return rows.length > 0;
-}
-
-async function reserveTaskRunCredits(
-  db: DbExecutor,
-  input: {
-    readonly amount: number;
-    readonly ownerUserId: string;
-    readonly taskRunId: string;
-    readonly workflowId: string;
-  },
-): Promise<void> {
-  const sourceKey = buildCreditReservationSourceKey(input.taskRunId);
-  const rows = rowsFromResult(
-    await db.execute(sql`
-      update "user"
-      set credit_balance = credit_balance - ${input.amount}
-      where id = ${input.ownerUserId}
-      returning credit_balance as "creditBalance"
-    `),
-  );
-  const row = rows[0];
-  if (!row) {
-    throw new TypeError(`Missing owner user ${input.ownerUserId}`);
-  }
-
-  await db.execute(sql`
-    insert into credit_ledger_entries (
-      id,
-      user_id,
-      execution_id,
-      kind,
-      amount,
-      balance_after,
-      reason,
-      source_key,
-      created_at
-    ) values (
-      ${sourceKey},
-      ${input.ownerUserId},
-      ${input.workflowId},
-      'debit',
-      ${input.amount},
-      ${requireNumber(row.creditBalance)},
-      'task_run_credit_reservation',
-      ${sourceKey},
-      now()
-    )
-  `);
 }
 
 function inputSnapshotJson(
@@ -554,10 +551,6 @@ function taskDependencyKey(dependency: TaskRunGatekeeperDependency): string {
     dependency.sourceHandle ?? "",
     dependency.targetHandle ?? "",
   ].join(":");
-}
-
-function buildCreditReservationSourceKey(taskRunId: string): string {
-  return `task_run:${taskRunId}:credit_reservation`;
 }
 
 function requireTaskRunRow(

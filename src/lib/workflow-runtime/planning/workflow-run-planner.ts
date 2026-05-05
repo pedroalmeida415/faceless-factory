@@ -36,7 +36,9 @@ export type ExistingNodeExecution = {
 
 export type ExistingTaskRun = {
   readonly id: string;
+  readonly creditCost?: number;
   readonly nodeExecutionId: string;
+  readonly nodeId?: string;
   readonly itemIndex: number;
   readonly attempt: number;
   readonly status: TaskRunStatus;
@@ -95,10 +97,50 @@ export type PlannedTaskDependency = {
   readonly targetNodeId: string;
 };
 
+export type RunCostPreviewItem = {
+  readonly attempt: number;
+  readonly creditCost: number;
+  readonly debitTiming:
+    | "queued-immediately"
+    | "waiting-upstream"
+    | "excluded-existing"
+    | "failed-before-queue";
+  readonly itemIndex: number;
+  readonly nodeExecutionId: string;
+  readonly nodeId: string;
+  readonly role: "target" | "upstream";
+  readonly source: "planned" | "stored";
+  readonly status: TaskRunStatus;
+  readonly taskRunId: string;
+};
+
+export type RunCostPreview = {
+  readonly items: readonly RunCostPreviewItem[];
+  readonly queuedImmediate: {
+    readonly items: readonly RunCostPreviewItem[];
+    readonly totalCreditCost: number;
+  };
+  readonly waitingUpstream: {
+    readonly items: readonly RunCostPreviewItem[];
+    readonly totalCreditCost: number;
+  };
+  readonly excludedExisting: {
+    readonly items: readonly RunCostPreviewItem[];
+    readonly totalCreditCost: number;
+  };
+  readonly failedBeforeQueue: {
+    readonly items: readonly RunCostPreviewItem[];
+    readonly totalCreditCost: number;
+  };
+  readonly newCostTotal: number;
+  readonly immediateDebitTotal: number;
+};
+
 export type WorkflowRunPlan = {
   readonly workflowDefinition: WorkflowDefinitionGraphDocument;
   readonly nodeExecutionsToCreate: readonly PlannedNodeExecution[];
   readonly nodeExecutionsToReuse: readonly ReusedNodeExecution[];
+  readonly runCostPreview: RunCostPreview;
   readonly taskRunsToCreate: readonly PlannedTaskRun[];
   readonly taskDependenciesToCreate: readonly PlannedTaskDependency[];
 };
@@ -233,8 +275,11 @@ export function planWorkflowRun(
   const nodeExecutionsToReuse: ReusedNodeExecution[] = [];
   const taskRunsToCreate: PlannedTaskRun[] = [];
   const taskDependenciesToCreate: PlannedTaskDependency[] = [];
+  const storedPreviewItems: RunCostPreviewItem[] = [];
+  const storedPreviewItemKeys = new Set<string>();
   const executionIdByNodeId = new Map<string, string>();
   const plannedTaskRunBySlot = new Map<string, PlannedTaskRun>();
+  const targetNodeId = schedulingTargetNodeIds[0] ?? null;
 
   const latestTaskRun = (nodeExecutionId: string, itemIndex: number) =>
     latestTaskRunBySlot.get(taskRunSlotKey({ itemIndex, nodeExecutionId }));
@@ -435,9 +480,29 @@ export function planWorkflowRun(
       return createTaskRun({ ...params, attempt: 0 });
     }
 
-    return isRecoverableByDownstreamPlanningStatus(latest.status)
-      ? createTaskRun({ ...params, attempt: latest.attempt + 1 })
-      : true;
+    if (isRecoverableByDownstreamPlanningStatus(latest.status)) {
+      return createTaskRun({ ...params, attempt: latest.attempt + 1 });
+    }
+
+    const key = taskRunSlotKey(params);
+    if (!storedPreviewItemKeys.has(key)) {
+      storedPreviewItemKeys.add(key);
+      const nodeId = latest.nodeId ?? params.nodeId;
+      storedPreviewItems.push({
+        attempt: latest.attempt,
+        creditCost: latest.creditCost ?? 0,
+        debitTiming: "excluded-existing",
+        itemIndex: latest.itemIndex,
+        nodeExecutionId: latest.nodeExecutionId,
+        nodeId,
+        role: nodeId === targetNodeId ? "target" : "upstream",
+        source: "stored",
+        status: latest.status,
+        taskRunId: latest.id,
+      });
+    }
+
+    return true;
   };
 
   const ensureProviderTaskRunSlot = (
@@ -531,6 +596,11 @@ export function planWorkflowRun(
           workflowDefinition,
           nodeExecutionsToCreate,
           nodeExecutionsToReuse,
+          runCostPreview: buildRunCostPreview({
+            storedPreviewItems,
+            targetNodeId: input.command.nodeId,
+            taskRunsToCreate,
+          }),
           taskDependenciesToCreate,
           taskRunsToCreate,
         },
@@ -565,6 +635,11 @@ export function planWorkflowRun(
         workflowDefinition,
         nodeExecutionsToCreate,
         nodeExecutionsToReuse,
+        runCostPreview: buildRunCostPreview({
+          storedPreviewItems,
+          targetNodeId: input.command.nodeId,
+          taskRunsToCreate,
+        }),
         taskDependenciesToCreate,
         taskRunsToCreate,
       },
@@ -622,10 +697,76 @@ export function planWorkflowRun(
       workflowDefinition,
       nodeExecutionsToCreate,
       nodeExecutionsToReuse,
+      runCostPreview: buildRunCostPreview({
+        storedPreviewItems,
+        targetNodeId: nodeExecution.nodeId,
+        taskRunsToCreate,
+      }),
       taskDependenciesToCreate,
       taskRunsToCreate,
     },
   };
+}
+
+function buildRunCostPreview(input: {
+  readonly storedPreviewItems: readonly RunCostPreviewItem[];
+  readonly targetNodeId: string;
+  readonly taskRunsToCreate: readonly PlannedTaskRun[];
+}): RunCostPreview {
+  const plannedItems = input.taskRunsToCreate.map(
+    (taskRun): RunCostPreviewItem => ({
+      attempt: taskRun.attempt,
+      creditCost: taskRun.creditCost,
+      debitTiming:
+        taskRun.status === "QUEUED"
+          ? "queued-immediately"
+          : taskRun.status === "WAITING_UPSTREAM"
+            ? "waiting-upstream"
+            : "failed-before-queue",
+      itemIndex: taskRun.itemIndex,
+      nodeExecutionId: taskRun.nodeExecutionId,
+      nodeId: taskRun.nodeId,
+      role: taskRun.nodeId === input.targetNodeId ? "target" : "upstream",
+      source: "planned",
+      status: taskRun.status,
+      taskRunId: taskRun.id,
+    }),
+  );
+  const items = [...input.storedPreviewItems, ...plannedItems];
+  const queuedImmediate = items.filter(
+    (item) => item.debitTiming === "queued-immediately",
+  );
+  const waitingUpstream = items.filter(
+    (item) => item.debitTiming === "waiting-upstream",
+  );
+  const excludedExisting = items.filter(
+    (item) => item.debitTiming === "excluded-existing",
+  );
+  const failedBeforeQueue = items.filter(
+    (item) => item.debitTiming === "failed-before-queue",
+  );
+  const queuedTotal = totalCreditCost(queuedImmediate);
+  const waitingTotal = totalCreditCost(waitingUpstream);
+
+  return {
+    excludedExisting: {
+      items: excludedExisting,
+      totalCreditCost: totalCreditCost(excludedExisting),
+    },
+    failedBeforeQueue: {
+      items: failedBeforeQueue,
+      totalCreditCost: totalCreditCost(failedBeforeQueue),
+    },
+    immediateDebitTotal: queuedTotal,
+    items,
+    newCostTotal: queuedTotal + waitingTotal,
+    queuedImmediate: { items: queuedImmediate, totalCreditCost: queuedTotal },
+    waitingUpstream: { items: waitingUpstream, totalCreditCost: waitingTotal },
+  };
+}
+
+function totalCreditCost(items: readonly RunCostPreviewItem[]) {
+  return items.reduce((total, item) => total + item.creditCost, 0);
 }
 
 function pricingCatalogCreditCosts(document: WorkflowDocument):

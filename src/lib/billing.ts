@@ -3,7 +3,6 @@ export type BillingInterval = "month" | "year";
 
 export type WorkflowCreditsSummary = {
   available: number;
-  reserved: number;
   used: number;
   totalCost: number;
 };

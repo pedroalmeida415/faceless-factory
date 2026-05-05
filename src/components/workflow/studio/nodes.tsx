@@ -38,7 +38,10 @@ import {
   createIdentityOutputPermutation,
   getOutputPermutationValidationMessage,
 } from "~/lib/workflow/runtime-values";
-import { WorkflowClientService } from "~/lib/workflow/services/workflow-client";
+import {
+  WorkflowClientService,
+  type WorkflowRuntimeRunCostPreview,
+} from "~/lib/workflow/services/workflow-client";
 import type {
   AssetNodeData,
   GeneratorConfigValue,
@@ -444,6 +447,157 @@ function WorkflowExecutionCostBadge({ nodeId }: { nodeId: string }) {
       {`${priceQuote.isEstimate ? "~" : ""}${formatCredits(priceQuote.creditCostPerSlot)} / slot`}
     </Badge>
   );
+}
+
+function GeneratorRunButton({
+  children,
+  nodeId,
+}: {
+  children: string;
+  nodeId: string;
+}) {
+  const { previewRunNode, runNode } = useStudioContext();
+  const [preview, setPreview] = useState<WorkflowRuntimeRunCostPreview | null>(
+    null,
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+
+  const loadPreview = async () => {
+    setIsPreviewing(true);
+    setError(null);
+    try {
+      setPreview(await previewRunNode(nodeId));
+    } catch (cause) {
+      setPreview(null);
+      setError(getErrorMessage(cause));
+    } finally {
+      setIsPreviewing(false);
+    }
+  };
+
+  const confirmRun = async () => {
+    setIsRunning(true);
+    setError(null);
+    try {
+      await runNode(nodeId);
+      setPreview(null);
+    } catch (cause) {
+      setError(getErrorMessage(cause));
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {preview ? <RunCostPreviewPanel preview={preview} /> : null}
+      {error ? <NodeNotice>{error}</NodeNotice> : null}
+      <div className="grid grid-cols-2 gap-2">
+        <ShellButton
+          className="justify-center"
+          disabled={isPreviewing || isRunning}
+          onClick={() => void loadPreview()}
+        >
+          {preview
+            ? "Refresh cost"
+            : isPreviewing
+              ? "Previewing..."
+              : "Preview cost"}
+        </ShellButton>
+        <ShellButton
+          className="justify-center"
+          disabled={!preview || isPreviewing || isRunning}
+          onClick={() => void confirmRun()}
+        >
+          {isRunning ? "Starting..." : children}
+        </ShellButton>
+      </div>
+    </div>
+  );
+}
+
+function RunCostPreviewPanel({
+  preview,
+}: {
+  preview: WorkflowRuntimeRunCostPreview;
+}) {
+  const balanceClassName = preview.balance.enoughForImmediateQueue
+    ? "text-emerald-300"
+    : "text-destructive";
+
+  return (
+    <Card className="border-primary/20 bg-primary/5 py-0">
+      <CardContent className="space-y-3 py-3 text-xs">
+        <div className="flex items-center justify-between gap-3">
+          <div className="font-medium">Run Cost Preview</div>
+          <div className={balanceClassName}>
+            {`${formatCredits(preview.immediateDebitTotal)} due now`}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-muted-foreground">
+          <CostPreviewMetric
+            label="Waiting Upstream later"
+            value={preview.waitingUpstream.totalCreditCost}
+          />
+          <CostPreviewMetric
+            label="Excluded existing"
+            value={preview.excludedExisting.totalCreditCost}
+          />
+        </div>
+        {!preview.balance.enoughForImmediateQueue ? (
+          <div className="text-destructive">
+            {`Current balance is ${formatCredits(preview.balance.available)}. Only immediately queued Task Runs are checked before this run starts.`}
+          </div>
+        ) : null}
+        <div className="space-y-1">
+          {preview.items.slice(0, 6).map((item) => (
+            <div
+              className="flex items-center justify-between gap-2 text-muted-foreground"
+              key={`${item.source}:${item.taskRunId}`}
+            >
+              <span className="truncate">
+                {`${item.role} ${item.nodeId}[${item.itemIndex}]`}
+              </span>
+              <span className="shrink-0">
+                {`${formatCredits(item.creditCost)} - ${formatDebitTiming(item.debitTiming)}`}
+              </span>
+            </div>
+          ))}
+          {preview.items.length > 6 ? (
+            <div className="text-muted-foreground">
+              {`+${preview.items.length - 6} more Task Run slots`}
+            </div>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CostPreviewMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border border-border/60 bg-background/60 p-2">
+      <div className="uppercase tracking-[0.16em]">{label}</div>
+      <div className="font-medium text-foreground">{formatCredits(value)}</div>
+    </div>
+  );
+}
+
+function formatDebitTiming(
+  timing: WorkflowRuntimeRunCostPreview["items"][number]["debitTiming"],
+) {
+  switch (timing) {
+    case "queued-immediately":
+      return "queued now";
+    case "waiting-upstream":
+      return "waiting upstream";
+    case "excluded-existing":
+      return "already active/approved";
+    case "failed-before-queue":
+      return "blocked";
+  }
 }
 
 function GeneratedTextPreview({ text }: { text: string | null }) {
@@ -1028,8 +1182,7 @@ const ImageGeneratorNode = memo(function ImageGeneratorNode({
   selected,
 }: WorkflowNodeProps<ImageGeneratorNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
-  const { getGeneratorInputs, getGeneratorIterationInfo, runNode } =
-    useStudioContext();
+  const { getGeneratorInputs, getGeneratorIterationInfo } = useStudioContext();
   const inputs = getGeneratorInputs(id);
   const inputHandleSignature = inputs.map((handle) => handle.id).join("|");
   const iterationInfo = getGeneratorIterationInfo(id);
@@ -1095,12 +1248,7 @@ const ImageGeneratorNode = memo(function ImageGeneratorNode({
         valueType="image"
       />
 
-      <ShellButton
-        className="w-full justify-center"
-        onClick={() => void runNode(id)}
-      >
-        Run image generation
-      </ShellButton>
+      <GeneratorRunButton nodeId={id}>Run image generation</GeneratorRunButton>
     </NodeShell>
   );
 }, isSameNodeRender);
@@ -1111,8 +1259,7 @@ const VideoGeneratorNode = memo(function VideoGeneratorNode({
   selected,
 }: WorkflowNodeProps<VideoGeneratorNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
-  const { getGeneratorInputs, getGeneratorIterationInfo, runNode } =
-    useStudioContext();
+  const { getGeneratorInputs, getGeneratorIterationInfo } = useStudioContext();
   const inputs = getGeneratorInputs(id);
   const inputHandleSignature = inputs.map((handle) => handle.id).join("|");
   const iterationInfo = getGeneratorIterationInfo(id);
@@ -1173,12 +1320,7 @@ const VideoGeneratorNode = memo(function VideoGeneratorNode({
         valueType="video"
       />
 
-      <ShellButton
-        className="w-full justify-center"
-        onClick={() => void runNode(id)}
-      >
-        Run video generation
-      </ShellButton>
+      <GeneratorRunButton nodeId={id}>Run video generation</GeneratorRunButton>
     </NodeShell>
   );
 }, isSameNodeRender);
@@ -1189,7 +1331,7 @@ const LlmGeneratorNode = memo(function LlmGeneratorNode({
   selected,
 }: WorkflowNodeProps<LlmGeneratorNodeData>) {
   const updateNodeInternals = useUpdateNodeInternals();
-  const { getGeneratorInputs, runNode } = useStudioContext();
+  const { getGeneratorInputs } = useStudioContext();
   const inputs = getGeneratorInputs(id);
   const inputHandleSignature = inputs.map((handle) => handle.id).join("|");
 
@@ -1218,12 +1360,7 @@ const LlmGeneratorNode = memo(function LlmGeneratorNode({
         valueType="text"
       />
 
-      <ShellButton
-        className="w-full justify-center"
-        onClick={() => void runNode(id)}
-      >
-        Run LLM
-      </ShellButton>
+      <GeneratorRunButton nodeId={id}>Run LLM</GeneratorRunButton>
     </NodeShell>
   );
 }, isSameNodeRender);

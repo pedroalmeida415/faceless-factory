@@ -90,6 +90,14 @@ export function useWorkflowStudioController() {
     );
   }, []);
 
+  const previewRunNode = useCallback(
+    (nodeId: string) =>
+      ClientRuntime.runPromise(
+        WorkflowExecutionService.preview({ type: "node", nodeId }),
+      ),
+    [],
+  );
+
   const contextValue = useMemo<StudioContextValue>(
     () => ({
       setListItems,
@@ -111,6 +119,7 @@ export function useWorkflowStudioController() {
       setLlmGeneratorConfigValue,
       setVideoGeneratorConfigValue,
       setGeneratorReviewEnabled,
+      previewRunNode,
       runNode,
     }),
     [
@@ -122,6 +131,7 @@ export function useWorkflowStudioController() {
       setOutputReorderOrder,
       setOutputReorderShift,
       runNode,
+      previewRunNode,
       setGeneratorReviewEnabled,
       setImageGeneratorConfigValue,
       setImageGeneratorMode,

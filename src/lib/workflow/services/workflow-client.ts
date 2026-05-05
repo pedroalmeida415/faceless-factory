@@ -13,6 +13,8 @@ import { getTrpcClient, type RouterOutputs } from "~/trpc/react";
 
 export type WorkflowRuntimeTaskProjection =
   RouterOutputs["workflowRuntime"]["taskProjection"];
+export type WorkflowRuntimeRunCostPreview =
+  RouterOutputs["workflowRuntime"]["runCostPreview"];
 
 const trpcClient = getTrpcClient();
 
@@ -41,6 +43,21 @@ export const WorkflowClientService = {
           cause,
         }),
     });
+  },
+
+  previewRunNode(input: { nodeId: string; projectId: string }) {
+    return Effect.tryPromise({
+      try: () =>
+        trpcClient.workflowRuntime.runCostPreview.query({
+          projectId: input.projectId,
+          target: { nodeId: input.nodeId, type: "node" },
+        }),
+      catch: (cause) =>
+        new WorkflowRequestError({
+          message: getErrorMessage(cause),
+          cause,
+        }),
+    }) as Effect.Effect<WorkflowRuntimeRunCostPreview, WorkflowRequestError>;
   },
 
   runTaskSlot(input: {

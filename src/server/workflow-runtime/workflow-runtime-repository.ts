@@ -18,6 +18,10 @@ import {
 } from "~/lib/workflow-runtime/runtime/task-status-events";
 import { promoteStagedGeneratedArtifact } from "~/server/workflow/storage";
 import {
+  debitTaskRunCredits,
+  refundTaskRunCredits,
+} from "~/server/workflow-runtime/task-run-credit-ledger";
+import {
   type WakeUpTaskRunChildrenRepositoryCommand,
   type WakeUpTaskRunChildrenRepositoryResult,
   wakeUpTaskRunChildrenInRepository,
@@ -273,22 +277,23 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           const creditCost = taskRun.creditCost;
           const renderingFailureReason =
             renderingFailureReasonFromFreeze(freeze);
-          const hasReservedCredits =
+          const debit =
             taskRun.status === "QUEUED" && !renderingFailureReason
-              ? await reserveInitialQueuedTaskRunCredits(tx, {
+              ? await debitTaskRunCredits(tx, {
                   amount: creditCost,
                   ownerUserId: nodeExecution.ownerUserId,
                   taskRunId: taskRun.id,
                   workflowId: nodeExecution.workflowId,
                 })
-              : false;
+              : { debited: false as const, reason: "INSUFFICIENT_CREDITS" };
+          const hasDebitedCredits = debit.debited;
           const committedTaskRun: CommittedPlanTaskRun = renderingFailureReason
             ? {
                 ...taskRun,
                 failureReason: renderingFailureReason,
                 status: "FAILED",
               }
-            : taskRun.status !== "QUEUED" || hasReservedCredits
+            : taskRun.status !== "QUEUED" || hasDebitedCredits
               ? taskRun
               : {
                   ...taskRun,
@@ -297,7 +302,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
                 };
           committedTaskRuns.push(committedTaskRun);
           const inputSnapshot =
-            committedTaskRun.status === "QUEUED" && hasReservedCredits
+            committedTaskRun.status === "QUEUED" && hasDebitedCredits
               ? (freeze?.inputSnapshot ?? null)
               : committedTaskRun.status === "WAITING_UPSTREAM"
                 ? (taskRun.inputSnapshot ??
@@ -353,10 +358,10 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               ${committedTaskRun.status},
               'node_run',
               ${creditCost},
-              ${hasReservedCredits ? creditCost : null},
+              ${hasDebitedCredits ? creditCost : null},
               ${committedTaskRun.failureReason ?? null},
               ${inputSnapshotJson(inputSnapshot)}::jsonb,
-              ${hasReservedCredits ? sql`now()` : sql`null`},
+              ${hasDebitedCredits ? sql`now()` : sql`null`},
               ${committedTaskRun.status === "FAILED" ? sql`now()` : sql`null`},
               now(),
               now()
@@ -561,8 +566,8 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           taskRunId: requireString(row.taskRunId),
           workflowId: requireString(row.workflowId),
         });
-        await refundTaskRunReservedCredits(tx, {
-          amount: refundableReservedCredits(
+        await refundTaskRunCredits(tx, {
+          amount: refundableTaskRunCredits(
             optionalNumber(row.reservedCredits),
             command.finalCostCredits,
           ),
@@ -635,8 +640,8 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           return { settled: false };
         }
 
-        await refundTaskRunReservedCredits(tx, {
-          amount: refundableReservedCredits(
+        await refundTaskRunCredits(tx, {
+          amount: refundableTaskRunCredits(
             optionalNumber(row.reservedCredits),
             finalCostCredits,
           ),
@@ -766,20 +771,21 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           : null;
         const renderingFailure =
           inputSnapshot?.providerInput.kind === "non-executable-node";
-        const hasReservedCredits =
+        const debit =
           queueable && !renderingFailure
-            ? await reserveInitialQueuedTaskRunCredits(tx, {
+            ? await debitTaskRunCredits(tx, {
                 amount: rejectedTaskRun.creditCost,
                 ownerUserId: rejectedTaskRun.ownerUserId,
                 taskRunId: command.newTaskRunId,
                 workflowId: rejectedTaskRun.workflowId,
               })
-            : false;
+            : { debited: false as const, reason: "INSUFFICIENT_CREDITS" };
+        const hasDebitedCredits = debit.debited;
         const newStatus = !queueable
           ? "WAITING_UPSTREAM"
           : renderingFailure
             ? "FAILED"
-            : hasReservedCredits
+            : hasDebitedCredits
               ? "QUEUED"
               : "FAILED";
         const failureReason = renderingFailure
@@ -828,7 +834,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             ${newStatus},
             ${rejectedTaskRun.targetReason},
             ${rejectedTaskRun.creditCost},
-            ${hasReservedCredits ? rejectedTaskRun.creditCost : null},
+            ${hasDebitedCredits ? rejectedTaskRun.creditCost : null},
             ${failureReason},
             ${inputSnapshotJson(newStatus === "QUEUED" ? inputSnapshot : null)}::jsonb,
             ${newStatus === "QUEUED" ? sql`now()` : sql`null`},
@@ -954,8 +960,8 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
         }
 
         const taskRunId = requireString(row.taskRunId);
-        await refundTaskRunReservedCredits(tx, {
-          amount: refundableReservedCredits(
+        await refundTaskRunCredits(tx, {
+          amount: refundableTaskRunCredits(
             optionalNumber(row.reservedCredits),
             requireNumber(row.costCredits),
           ),
@@ -1632,165 +1638,11 @@ function workflowAssetFromRow(row: QueryRow): WorkflowAsset {
   };
 }
 
-async function reserveInitialQueuedTaskRunCredits(
-  db: DbExecutor,
-  input: {
-    readonly amount: number;
-    readonly ownerUserId: string;
-    readonly taskRunId: string;
-    readonly workflowId: string;
-  },
-): Promise<boolean> {
-  if (input.amount <= 0) {
-    return true;
-  }
-
-  const lockedUser = rowsFromResult(
-    await db.execute(sql`
-      select credit_balance as "creditBalance"
-      from "user"
-      where id = ${input.ownerUserId}
-      for update
-    `),
-  );
-  const user = lockedUser[0];
-  if (!user) {
-    throw new TypeError(`Missing owner user ${input.ownerUserId}`);
-  }
-  if (requireNumber(user.creditBalance) < input.amount) {
-    return false;
-  }
-
-  const sourceKey = buildCreditReservationSourceKey(input.taskRunId);
-  const rows = rowsFromResult(
-    await db.execute(sql`
-      update "user"
-      set credit_balance = credit_balance - ${input.amount}
-      where id = ${input.ownerUserId}
-      returning credit_balance as "creditBalance"
-    `),
-  );
-  const row = rows[0];
-  if (!row) {
-    throw new TypeError(`Missing owner user ${input.ownerUserId}`);
-  }
-
-  await db.execute(sql`
-    insert into credit_ledger_entries (
-      id,
-      user_id,
-      execution_id,
-      kind,
-      amount,
-      balance_after,
-      reason,
-      source_key,
-      created_at
-    ) values (
-      ${sourceKey},
-      ${input.ownerUserId},
-      ${input.workflowId},
-      'debit',
-      ${input.amount},
-      ${requireNumber(row.creditBalance)},
-      'task_run_credit_reservation',
-      ${sourceKey},
-      now()
-    )
-  `);
-
-  return true;
-}
-
-async function refundTaskRunReservedCredits(
-  db: DbExecutor,
-  input: {
-    readonly amount: number;
-    readonly ownerUserId: string;
-    readonly taskRunId: string;
-    readonly workflowId: string;
-  },
-): Promise<void> {
-  if (input.amount <= 0) {
-    return;
-  }
-
-  const sourceKey = buildCreditRefundSourceKey(input.taskRunId);
-  const lockedUser = rowsFromResult(
-    await db.execute(sql`
-      select id
-      from "user"
-      where id = ${input.ownerUserId}
-      for update
-    `),
-  );
-  if (!lockedUser[0]) {
-    throw new TypeError(`Missing owner user ${input.ownerUserId}`);
-  }
-
-  const existing = rowsFromResult(
-    await db.execute(sql`
-      select id
-      from credit_ledger_entries
-      where source_key = ${sourceKey}
-      limit 1
-    `),
-  );
-  if (existing.length > 0) {
-    return;
-  }
-
-  const rows = rowsFromResult(
-    await db.execute(sql`
-      update "user"
-      set credit_balance = credit_balance + ${input.amount}
-      where id = ${input.ownerUserId}
-      returning credit_balance as "creditBalance"
-    `),
-  );
-  const row = rows[0];
-  if (!row) {
-    throw new TypeError(`Missing owner user ${input.ownerUserId}`);
-  }
-
-  await db.execute(sql`
-    insert into credit_ledger_entries (
-      id,
-      user_id,
-      execution_id,
-      kind,
-      amount,
-      balance_after,
-      reason,
-      source_key,
-      created_at
-    ) values (
-      ${sourceKey},
-      ${input.ownerUserId},
-      ${input.workflowId},
-      'refund',
-      ${input.amount},
-      ${requireNumber(row.creditBalance)},
-      'task_run_credit_refund',
-      ${sourceKey},
-      now()
-    ) on conflict (source_key) do nothing
-  `);
-}
-
-function refundableReservedCredits(
-  reservedCredits: number | null,
+function refundableTaskRunCredits(
+  creditCost: number | null,
   finalCostCredits: number,
 ): number {
-  return Math.max((reservedCredits ?? 0) - finalCostCredits, 0);
-}
-
-function buildCreditRefundSourceKey(taskRunId: string): string {
-  return `task_run:${taskRunId}:credit_refund`;
-}
-
-function buildCreditReservationSourceKey(taskRunId: string): string {
-  return `task_run:${taskRunId}:credit_reservation`;
+  return Math.max((creditCost ?? 0) - finalCostCredits, 0);
 }
 
 function rowsFromResult(result: unknown): readonly QueryRow[] {

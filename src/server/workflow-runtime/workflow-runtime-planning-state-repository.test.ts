@@ -89,16 +89,20 @@ describe("getPlanningStateForWorkflow", () => {
       latestTaskRuns: [
         {
           attempt: 0,
+          creditCost: 0,
           id: "child-task",
           itemIndex: 1,
           nodeExecutionId: "child-latest-execution",
+          nodeId: "child",
           status: "FAILED",
         },
         {
           attempt: 1,
+          creditCost: 0,
           id: "source-active-attempt",
           itemIndex: 0,
           nodeExecutionId: "source-latest-execution",
+          nodeId: "source",
           status: "PENDING_REVIEW",
         },
       ],
@@ -116,9 +120,11 @@ describe("getPlanningStateForWorkflow", () => {
             : [
                 {
                   attempt: "4",
+                  creditCost: "11",
                   id: "task-run",
                   itemIndex: "2",
                   nodeExecutionId: "node-execution",
+                  nodeId: "node",
                   status: "APPROVED",
                 },
               ];
@@ -132,9 +138,11 @@ describe("getPlanningStateForWorkflow", () => {
       latestTaskRuns: [
         {
           attempt: 4,
+          creditCost: 11,
           id: "task-run",
           itemIndex: 2,
           nodeExecutionId: "node-execution",
+          nodeId: "node",
           status: "APPROVED",
         },
       ],
@@ -171,8 +179,10 @@ async function setupPlanningStateTables(db: PgliteDatabase) {
       node_execution_id text not null,
       workflow_id text not null,
       owner_user_id text not null,
+      node_id text not null,
       item_index bigint,
       attempt bigint,
+      estimated_credit_cost bigint,
       runtime_status task_run_runtime_status
     )
   `);
@@ -218,8 +228,10 @@ async function insertTaskRun(
     readonly id: string;
     readonly itemIndex?: number;
     readonly nodeExecutionId: string;
+    readonly nodeId?: string;
     readonly ownerUserId?: string;
     readonly runtimeStatus: "APPROVED" | "FAILED" | "PENDING_REVIEW" | null;
+    readonly creditCost?: number;
     readonly workflowId?: string;
   },
 ) {
@@ -229,16 +241,20 @@ async function insertTaskRun(
       node_execution_id,
       workflow_id,
       owner_user_id,
+      node_id,
       item_index,
       attempt,
+      estimated_credit_cost,
       runtime_status
     ) values (
       ${input.id},
       ${input.nodeExecutionId},
       ${input.workflowId ?? "workflow-id"},
       ${input.ownerUserId ?? "owner-user"},
+      ${input.nodeId ?? input.nodeExecutionId.replace(/-(old|latest)-execution$/, "")},
       ${input.itemIndex ?? 0},
       ${input.attempt ?? 0},
+      ${input.creditCost ?? 0},
       ${input.runtimeStatus}
     )
   `);

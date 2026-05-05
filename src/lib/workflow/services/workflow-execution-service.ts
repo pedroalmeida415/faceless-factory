@@ -7,6 +7,34 @@ import { WorkflowStudioStoreService } from "~/lib/workflow/services/workflow-stu
 import { hasActiveTaskRunProjection } from "~/lib/workflow-runtime/task-run-studio-projection";
 
 export const WorkflowExecutionService = {
+  preview(target: { type: "node"; nodeId: string }) {
+    return Effect.gen(function* () {
+      const workflowStudioStore = yield* WorkflowStudioStoreService;
+      yield* Effect.tryPromise({
+        try: () => WorkflowPersistenceService.flushSave(),
+        catch: (cause) =>
+          new WorkflowRequestError({
+            message: getErrorMessage(cause),
+            cause,
+          }),
+      });
+
+      const snapshot = yield* workflowStudioStore.getWorkflowSnapshot();
+      if (!snapshot.projectId || snapshot.documentRevision === null) {
+        return yield* Effect.fail(
+          new WorkflowRequestError({
+            message: "Workflow project is not ready yet.",
+          }),
+        );
+      }
+
+      return yield* WorkflowClientService.previewRunNode({
+        nodeId: target.nodeId,
+        projectId: snapshot.projectId,
+      });
+    });
+  },
+
   start(target: { type: "node"; nodeId: string }) {
     return Effect.gen(function* () {
       const workflowStudioStore = yield* WorkflowStudioStoreService;

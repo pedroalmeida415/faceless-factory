@@ -5,6 +5,7 @@ import {
   deserializeStoredWorkflowGraphDocument,
   type WorkflowGraphDocument,
 } from "~/lib/workflow/document";
+import { planWorkflowRun } from "~/lib/workflow-runtime/planning/workflow-run-planner";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { db } from "~/server/db";
 import { createRedisSubscriber } from "~/server/redis";
@@ -64,6 +65,52 @@ export const workflowRuntimeRouter = createTRPCRouter({
   executionCostProjection: protectedProcedure
     .input(z.object({ document: workflowGraphDocumentSchema }))
     .query(({ input }) => buildExecutionCostProjection(input.document)),
+
+  runCostPreview: protectedProcedure
+    .input(runInputSchema)
+    .query(async ({ ctx, input }) => {
+      const ownerUserId = ctx.session.user.id;
+      const project = await getWorkflowProject({
+        ownerUserId,
+        projectId: input.projectId,
+      }).catch(throwTRPCError);
+      const planningState = await getPlanningStateForWorkflow(db, {
+        ownerUserId,
+        workflowId: project.id,
+      }).catch(throwTRPCError);
+      const planning = planWorkflowRun({
+        ...planningState,
+        command:
+          input.target.type === "node"
+            ? { nodeId: input.target.nodeId, type: "run-node" }
+            : {
+                itemIndex: input.target.itemIndex,
+                nodeExecutionId: input.target.nodeExecutionId,
+                type: "run-task-slot",
+              },
+        document: project.document,
+        ownerId: ownerUserId,
+        workflowId: project.id,
+      });
+      if (!planning.ok) {
+        throw orchestratorErrorToTRPCError({
+          ...planning.error,
+          committed: false,
+        });
+      }
+
+      const currentCreditBalance = await getCurrentCreditBalance(ownerUserId);
+
+      return {
+        ...planning.value.runCostPreview,
+        balance: {
+          available: currentCreditBalance,
+          enoughForImmediateQueue:
+            currentCreditBalance >=
+            planning.value.runCostPreview.immediateDebitTotal,
+        },
+      };
+    }),
 
   run: protectedProcedure
     .input(runInputSchema)
@@ -272,6 +319,26 @@ function orchestratorErrorToTRPCError(error: WorkflowRuntimeOrchestratorError) {
     cause: error.cause,
     message: error.message,
   });
+}
+
+async function getCurrentCreditBalance(ownerUserId: string) {
+  const rows = rowsFromResult(
+    await db.execute(sql`
+      select credit_balance as "creditBalance"
+      from "user"
+      where id = ${ownerUserId}
+      limit 1
+    `),
+  );
+  const balance = rows[0]?.creditBalance;
+  if (typeof balance === "number") {
+    return balance;
+  }
+  if (typeof balance === "string" && /^-?\d+$/.test(balance)) {
+    return Number(balance);
+  }
+
+  throw new TRPCError({ code: "NOT_FOUND", message: "User was not found." });
 }
 
 function throwTRPCError(error: unknown): never {

@@ -260,17 +260,21 @@ function latestNodeExecution(id: string, nodeId: string) {
 }
 
 function latestTaskRun(input: {
+  creditCost?: number;
   id: string;
   nodeExecutionId: string;
+  nodeId?: string;
   itemIndex?: number;
   attempt?: number;
   status: TaskRunStatus;
 }) {
   return {
     attempt: input.attempt ?? 0,
+    creditCost: input.creditCost ?? 0,
     id: input.id,
     itemIndex: input.itemIndex ?? 0,
     nodeExecutionId: input.nodeExecutionId,
+    nodeId: input.nodeId ?? "script",
     status: input.status,
   };
 }
@@ -416,6 +420,141 @@ describe("WorkflowRunPlanner", () => {
         },
       ],
     );
+  });
+
+  test("Run Cost Preview is derived from the same planned Task Runs as creation", () => {
+    const plan = unwrap(
+      planWorkflowRun({
+        command: { type: "run-node", nodeId: "downstream-image" },
+        createNodeExecutionId: (() => {
+          let index = 0;
+          return () => `node-execution-${++index}`;
+        })(),
+        createTaskRunId: (() => {
+          let index = 0;
+          return () => `task-run-${++index}`;
+        })(),
+        document: makeReviewEnabledUpstreamImageDocument(),
+        latestNodeExecutions: [],
+        latestTaskRuns: [],
+        ownerId: "owner-1",
+        plannedItemCountByNodeId: {
+          "downstream-image": 2,
+          "upstream-image": 2,
+        },
+        workflowId: "workflow-1",
+      }),
+    );
+
+    assert.deepEqual(
+      plan.runCostPreview.items.map((item) => ({
+        creditCost: item.creditCost,
+        debitTiming: item.debitTiming,
+        itemIndex: item.itemIndex,
+        nodeId: item.nodeId,
+        role: item.role,
+        source: item.source,
+        status: item.status,
+        taskRunId: item.taskRunId,
+      })),
+      plan.taskRunsToCreate.map((taskRun) => ({
+        creditCost: taskRun.creditCost,
+        debitTiming:
+          taskRun.status === "QUEUED"
+            ? "queued-immediately"
+            : "waiting-upstream",
+        itemIndex: taskRun.itemIndex,
+        nodeId: taskRun.nodeId,
+        role: taskRun.nodeId === "downstream-image" ? "target" : "upstream",
+        source: "planned",
+        status: taskRun.status,
+        taskRunId: taskRun.id,
+      })),
+    );
+    assert.deepEqual(
+      plan.runCostPreview.queuedImmediate.items.map((item) => item.taskRunId),
+      ["task-run-1", "task-run-2"],
+    );
+    assert.deepEqual(
+      plan.runCostPreview.waitingUpstream.items.map((item) => item.taskRunId),
+      ["task-run-3", "task-run-4"],
+    );
+    assert.equal(
+      plan.runCostPreview.newCostTotal,
+      plan.taskRunsToCreate.reduce(
+        (total, taskRun) => total + taskRun.creditCost,
+        0,
+      ),
+    );
+    assert.equal(
+      plan.runCostPreview.immediateDebitTotal,
+      plan.taskRunsToCreate
+        .filter((taskRun) => taskRun.status === "QUEUED")
+        .reduce((total, taskRun) => total + taskRun.creditCost, 0),
+    );
+  });
+
+  test("Run Cost Preview itemizes active upstream Task Runs but excludes them from new-cost totals", () => {
+    const plan = unwrap(
+      planWorkflowRun({
+        command: { type: "run-node", nodeId: "downstream-image" },
+        createNodeExecutionId: () => "downstream-execution-new",
+        createTaskRunId: () => "downstream-task-new",
+        document: makeReviewEnabledUpstreamImageDocument(),
+        latestNodeExecutions: [
+          latestNodeExecution("upstream-execution", "upstream-image"),
+        ],
+        latestTaskRuns: [
+          latestTaskRun({
+            creditCost: 7,
+            id: "upstream-task-active",
+            nodeExecutionId: "upstream-execution",
+            nodeId: "upstream-image",
+            status: "PENDING_REVIEW",
+          }),
+        ],
+        ownerId: "owner-1",
+        workflowId: "workflow-1",
+      }),
+    );
+
+    assert.deepEqual(
+      plan.runCostPreview.items.map((item) => ({
+        creditCost: item.creditCost,
+        debitTiming: item.debitTiming,
+        nodeId: item.nodeId,
+        role: item.role,
+        source: item.source,
+        status: item.status,
+        taskRunId: item.taskRunId,
+      })),
+      [
+        {
+          creditCost: 7,
+          debitTiming: "excluded-existing",
+          nodeId: "upstream-image",
+          role: "upstream",
+          source: "stored",
+          status: "PENDING_REVIEW",
+          taskRunId: "upstream-task-active",
+        },
+        {
+          creditCost: plan.taskRunsToCreate[0]?.creditCost,
+          debitTiming: "waiting-upstream",
+          nodeId: "downstream-image",
+          role: "target",
+          source: "planned",
+          status: "WAITING_UPSTREAM",
+          taskRunId: "downstream-task-new",
+        },
+      ],
+    );
+    assert.equal(plan.runCostPreview.excludedExisting.totalCreditCost, 7);
+    assert.equal(
+      plan.runCostPreview.newCostTotal,
+      plan.taskRunsToCreate[0]?.creditCost,
+    );
+    assert.equal(plan.runCostPreview.immediateDebitTotal, 0);
   });
 
   test("assigns immutable credit costs from the Pricing Catalog onto planned Task Runs", () => {

@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { GeneratorHandleDefinition } from "~/lib/workflow/generator-models";
+import type { WorkflowRuntimeRunCostPreview } from "~/lib/workflow/services/workflow-client";
 import type {
   GeneratorConfigValue,
   ImageGeneratorModelId,
@@ -50,6 +51,7 @@ export type StudioContextValue = {
     value: GeneratorConfigValue,
   ) => void;
   setGeneratorReviewEnabled: (nodeId: string, enabled: boolean) => void;
+  previewRunNode: (nodeId: string) => Promise<WorkflowRuntimeRunCostPreview>;
   runNode: (nodeId: string) => Promise<void>;
 };
 
