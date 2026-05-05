@@ -146,9 +146,8 @@ describe("TaskRunGatekeeper", () => {
         nodeId: "node-child-waiting-frozen",
         resolvedParentTaskRuns: [],
         targetNodeConfig: {
-          ...createWorkflowNode("llmGenerator", 0),
+          ...llmGeneratorNode("node-child-waiting-frozen"),
           config: { maxOutputTokens: 512, temperature: 0.4 },
-          id: "node-child-waiting-frozen",
           reviewEnabled: true,
         },
         taskRunId: "child-waiting-frozen",
@@ -231,6 +230,119 @@ describe("TaskRunGatekeeper", () => {
     assert.equal(result.state.dependencies[0]?.resolvedParentTaskRunId, null);
     assert.deepEqual(result.executionJobs, []);
     assert.deepEqual(result.taskStatusEvents, []);
+  });
+
+  test("stale Wake-Up Calls resolve waiting children from the latest approved Attempt", () => {
+    const staleParent = taskRun({
+      attempt: 0,
+      id: "parent-attempt-0-stale",
+      nodeExecutionId: "parent-node-stale-wake",
+      status: "APPROVED",
+    });
+    const latestParent = taskRun({
+      attempt: 1,
+      id: "parent-attempt-1-latest",
+      nodeExecutionId: "parent-node-stale-wake",
+      output: {
+        assetId: "latest-parent-output",
+        kind: "inline-text-asset",
+        text: "latest approved output",
+      },
+      status: "APPROVED",
+    });
+    const child = taskRun({
+      id: "child-stale-wake-resolves-latest",
+      nodeExecutionId: "child-node-stale-wake",
+      status: "WAITING_UPSTREAM",
+    });
+
+    const result = wakeUpTaskRunChildren(
+      gatekeeperState({
+        dependencies: [dependency(child, staleParent)],
+        taskRuns: [staleParent, latestParent, child],
+      }),
+      { settledParentTaskRunId: staleParent.id },
+    );
+    const queuedChild = requireTaskRun(result.state, child.id);
+
+    assert.equal(queuedChild.status, "QUEUED");
+    assert.equal(
+      result.state.dependencies[0]?.resolvedParentTaskRunId,
+      latestParent.id,
+    );
+    assert.deepEqual(queuedChild.inputSnapshot?.resolvedParentTaskRuns, [
+      {
+        address: {
+          parentItemIndex: 0,
+          parentNodeId: staleParent.nodeId,
+          sourceHandle: null,
+          targetHandle: null,
+          targetNodeId: child.nodeId,
+        },
+        attempt: 1,
+        itemIndex: 0,
+        nodeExecutionId: latestParent.nodeExecutionId,
+        output: latestParent.output,
+        taskRunId: latestParent.id,
+      },
+    ]);
+    assert.deepEqual(result.executionJobs, [
+      {
+        attempt: 0,
+        id: "task-run~child-stale-wake-resolves-latest~attempt~0~execute",
+        inputSnapshot: queuedChild.inputSnapshot,
+        taskRunId: child.id,
+      },
+    ]);
+  });
+
+  test("stale Wake-Up Calls cascade waiting children from the latest failed Attempt", () => {
+    const staleParent = taskRun({
+      attempt: 0,
+      id: "parent-attempt-0-before-failure",
+      nodeExecutionId: "parent-node-stale-failure",
+      status: "APPROVED",
+    });
+    const latestParent = taskRun({
+      attempt: 1,
+      failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
+      id: "parent-attempt-1-failed",
+      nodeExecutionId: "parent-node-stale-failure",
+      status: "FAILED",
+    });
+    const child = taskRun({
+      id: "child-stale-wake-cascades-latest-failure",
+      nodeExecutionId: "child-node-stale-failure",
+      status: "WAITING_UPSTREAM",
+    });
+
+    const result = wakeUpTaskRunChildren(
+      gatekeeperState({
+        dependencies: [dependency(child, staleParent)],
+        taskRuns: [staleParent, latestParent, child],
+      }),
+      { settledParentTaskRunId: staleParent.id },
+    );
+
+    assert.equal(
+      requireTaskRun(result.state, child.id).status,
+      "UPSTREAM_FAILED",
+    );
+    assert.deepEqual(requireTaskRun(result.state, child.id).failureReason, {
+      failedParentTaskRunId: latestParent.id,
+      type: "UPSTREAM_FAILED",
+    });
+    assert.deepEqual(result.executionJobs, []);
+    assert.deepEqual(result.taskStatusEvents, [
+      {
+        attempt: 0,
+        failureReason: "UPSTREAM_FAILED",
+        itemIndex: 0,
+        nodeExecutionId: child.nodeExecutionId,
+        status: "UPSTREAM_FAILED",
+        taskRunId: child.id,
+      },
+    ]);
   });
 
   test("keeps non-waiting children immutable and makes duplicate wake-ups idempotent", () => {
@@ -504,10 +616,7 @@ function taskRun(
   overrides: Partial<TaskRunGatekeeperTaskRun> &
     Pick<TaskRunGatekeeperTaskRun, "id" | "nodeExecutionId" | "status">,
 ): TaskRunGatekeeperTaskRun {
-  const targetNodeConfig = {
-    ...createWorkflowNode("llmGenerator", 0),
-    id: `node-${overrides.id}`,
-  };
+  const targetNodeConfig = llmGeneratorNode(`node-${overrides.id}`);
   return {
     attempt: 0,
     estimatedCreditCost: 1,
@@ -525,6 +634,15 @@ function taskRun(
     targetNodeConfig,
     ...overrides,
   };
+}
+
+function llmGeneratorNode(id: string) {
+  const node = createWorkflowNode("llmGenerator", 0);
+  if (node.kind !== "llmGenerator") {
+    throw new Error("Expected an LLM generator node.");
+  }
+
+  return { ...node, id };
 }
 
 function dependency(

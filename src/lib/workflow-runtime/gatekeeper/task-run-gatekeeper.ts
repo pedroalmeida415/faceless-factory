@@ -130,14 +130,18 @@ function runGatekeeper(
     }
 
     for (const child of findWaitingChildren(nextState, settledParent)) {
-      if (!isLatestRequiredAttempt(nextState.taskRuns, settledParent)) {
+      const latestRequiredParent = findLatestTaskRunForSlot(
+        nextState.taskRuns,
+        settledParent,
+      );
+      if (!latestRequiredParent) {
         continue;
       }
 
-      if (isDependencyFailureStatus(settledParent.status)) {
+      if (isDependencyFailureStatus(latestRequiredParent.status)) {
         const upstreamFailedChild = failTaskRunFromUpstream(
           child,
-          settledParent.id,
+          latestRequiredParent.id,
         );
         nextState = replaceTaskRun(nextState, upstreamFailedChild);
         taskStatusEvents.push(buildStatusEvent(upstreamFailedChild));
@@ -389,13 +393,6 @@ function findLatestTaskRunForSlot(
         taskRun.itemIndex === slot.itemIndex,
     )
     .sort((left, right) => right.attempt - left.attempt)[0];
-}
-
-function isLatestRequiredAttempt(
-  taskRuns: readonly TaskRunGatekeeperTaskRun[],
-  taskRun: TaskRunGatekeeperTaskRun,
-): boolean {
-  return findLatestTaskRunForSlot(taskRuns, taskRun)?.id === taskRun.id;
 }
 
 function isDependencyFailureStatus(status: TaskRunStatus): boolean {

@@ -1481,6 +1481,186 @@ describe("WorkflowRuntimeRepository", () => {
     ]);
   });
 
+  test("stale Wake-Up Calls queue waiting children against the latest Approved Attempt", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    await insertUser(db, { creditBalance: 100 });
+    await insertTaskRun(db, {
+      id: "parent-stale-approved-before-latest",
+      nodeExecutionId: "node-execution-parent-stale-latest",
+      runtimeStatus: "APPROVED",
+    });
+    await insertTaskRun(db, {
+      attempt: 1,
+      id: "parent-latest-approved-after-stale",
+      nodeExecutionId: "node-execution-parent-stale-latest",
+      runtimeStatus: "APPROVED",
+    });
+    await insertGeneratedTextAsset(db, {
+      assetId: "asset-parent-latest-approved-after-stale",
+      taskRunId: "parent-latest-approved-after-stale",
+      text: "latest approved text",
+    });
+    await insertTaskRun(db, {
+      estimatedCreditCost: 7,
+      id: "child-stale-approved-wake",
+      nodeExecutionId: "node-execution-child-stale-approved-wake",
+      runtimeStatus: "WAITING_UPSTREAM",
+    });
+    await insertTaskDependency(db, {
+      childTaskRunId: "child-stale-approved-wake",
+      parentNodeExecutionId: "node-execution-parent-stale-latest",
+      parentNodeId: "parent-node",
+      targetNodeId: "child-node",
+    });
+
+    const result = await repository.wakeUpTaskRunChildren({
+      ownerUserId: "owner-user",
+      settledParentTaskRunId: "parent-stale-approved-before-latest",
+    });
+
+    assert.deepEqual(result.executionJobs, [
+      {
+        attempt: 0,
+        itemIndex: 0,
+        jobId: "task-run~child-stale-approved-wake~attempt~0~execute",
+        nodeExecutionId: "node-execution-child-stale-approved-wake",
+        ownerUserId: "owner-user",
+        taskRunId: "child-stale-approved-wake",
+        workflowId: "workflow-id",
+      },
+    ]);
+    assert.deepEqual(result.taskStatusEvents, [
+      {
+        attempt: 0,
+        itemIndex: 0,
+        nodeExecutionId: "node-execution-child-stale-approved-wake",
+        status: "QUEUED",
+        taskRunId: "child-stale-approved-wake",
+      },
+    ]);
+    assert.deepEqual(
+      await repository.getTaskDependenciesForChild({
+        childTaskRunId: "child-stale-approved-wake",
+      }),
+      [
+        {
+          childTaskRunId: "child-stale-approved-wake",
+          requiredParentItemIndex: 0,
+          requiredParentNodeId: "parent-node",
+          requiredParentNodeExecutionId: "node-execution-parent-stale-latest",
+          resolvedParentTaskRunId: "parent-latest-approved-after-stale",
+          sourceHandle: null,
+          targetHandle: null,
+          targetNodeId: "child-node",
+        },
+      ],
+    );
+    assert.deepEqual(
+      await getWakeUpTaskRunState(db, "child-stale-approved-wake"),
+      {
+        error: null,
+        inputSnapshot: {
+          ...inputSnapshot("child-stale-approved-wake", 0, {
+            nodeExecutionId: "node-execution-child-stale-approved-wake",
+          }),
+          providerInput: {
+            kind: "llm-generation-request",
+            request: {
+              idempotencyKey: "task_run:child-stale-approved-wake:attempt:0",
+              maxOutputTokens: 2048,
+              mode: null,
+              model: "gemini-3-flash-preview",
+              prompt: "latest approved text",
+              referenceImages: [],
+              systemPrompt: null,
+              temperature: 1,
+              thinkingLevel: "LOW",
+            },
+          },
+          resolvedParentTaskRuns: [
+            {
+              address: {
+                parentItemIndex: 0,
+                parentNodeId: "parent-node",
+                sourceHandle: null,
+                targetHandle: null,
+                targetNodeId: "child-node",
+              },
+              attempt: 1,
+              itemIndex: 0,
+              nodeExecutionId: "node-execution-parent-stale-latest",
+              output: {
+                assetId: "asset-parent-latest-approved-after-stale",
+                kind: "inline-text-asset",
+                text: "latest approved text",
+              },
+              taskRunId: "parent-latest-approved-after-stale",
+            },
+          ],
+        },
+        reservedCredits: 7,
+        runtimeStatus: "QUEUED",
+      },
+    );
+    assert.equal(await getUserCreditBalance(db, "owner-user"), 93);
+    assert.equal((await getCreditLedgerEntries(db)).length, 1);
+  });
+
+  test("stale Wake-Up Calls cascade waiting children from the latest Failed Attempt", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    await insertUser(db, { creditBalance: 100 });
+    await insertTaskRun(db, {
+      id: "parent-approved-before-failed-latest",
+      nodeExecutionId: "node-execution-parent-stale-failed",
+      runtimeStatus: "APPROVED",
+    });
+    await insertTaskRun(db, {
+      attempt: 1,
+      id: "parent-failed-after-approved-stale",
+      nodeExecutionId: "node-execution-parent-stale-failed",
+      runtimeStatus: "FAILED",
+    });
+    await insertTaskRun(db, {
+      id: "child-stale-failed-wake",
+      nodeExecutionId: "node-execution-child-stale-failed-wake",
+      runtimeStatus: "WAITING_UPSTREAM",
+    });
+    await insertTaskDependency(db, {
+      childTaskRunId: "child-stale-failed-wake",
+      parentNodeExecutionId: "node-execution-parent-stale-failed",
+    });
+
+    const result = await repository.wakeUpTaskRunChildren({
+      ownerUserId: "owner-user",
+      settledParentTaskRunId: "parent-approved-before-failed-latest",
+    });
+
+    assert.deepEqual(result.executionJobs, []);
+    assert.deepEqual(result.taskStatusEvents, [
+      {
+        attempt: 0,
+        failureReason: "UPSTREAM_FAILED",
+        itemIndex: 0,
+        nodeExecutionId: "node-execution-child-stale-failed-wake",
+        status: "UPSTREAM_FAILED",
+        taskRunId: "child-stale-failed-wake",
+      },
+    ]);
+    assert.deepEqual(
+      await getWakeUpTaskRunState(db, "child-stale-failed-wake"),
+      {
+        error: "parent-failed-after-approved-stale",
+        inputSnapshot: inputSnapshot("child-stale-failed-wake", 0, {
+          nodeExecutionId: "node-execution-child-stale-failed-wake",
+        }),
+        reservedCredits: null,
+        runtimeStatus: "UPSTREAM_FAILED",
+      },
+    );
+    assert.equal(await getUserCreditBalance(db, "owner-user"), 100);
+    assert.deepEqual(await getCreditLedgerEntries(db), []);
+  });
+
   test("Wake-Up Calls persist resolved parent Task Run identities", async () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 100 });
@@ -2222,10 +2402,12 @@ describe("WorkflowRuntimeRepository", () => {
 
   test("persists the planned immutable input snapshot for Waiting Upstream Task Runs", async () => {
     const repository = createWorkflowRuntimeRepository(db);
+    const frozenTargetNodeConfig = defaultTargetNodeConfig("waiting-node");
     const frozenSnapshot = {
       ...inputSnapshot("task-run-waiting-frozen", 0, {
         nodeExecutionId: "node-execution-waiting-frozen",
         nodeId: "waiting-node",
+        targetNodeConfig: frozenTargetNodeConfig,
       }),
       documentRevision: 91,
       providerInput: {
@@ -2265,7 +2447,7 @@ describe("WorkflowRuntimeRepository", () => {
             nodeId: "waiting-node",
             status: "WAITING_UPSTREAM",
             targetNodeConfig: {
-              ...frozenSnapshot.targetNodeConfig,
+              ...frozenTargetNodeConfig,
               config: { temperature: 1.8 },
             },
           },
@@ -3126,9 +3308,13 @@ function inputSnapshot(
   };
 }
 
-function defaultTargetNodeConfig(nodeId: string) {
-  return {
-    ...createWorkflowNode("llmGenerator", 0),
-    id: nodeId,
-  };
+function defaultTargetNodeConfig(
+  nodeId: string,
+): Extract<TaskRunInputSnapshot["targetNodeConfig"], { kind: "llmGenerator" }> {
+  const node = createWorkflowNode("llmGenerator", 0);
+  if (node.kind !== "llmGenerator") {
+    throw new Error("Expected an LLM generator node.");
+  }
+
+  return { ...node, id: nodeId };
 }
