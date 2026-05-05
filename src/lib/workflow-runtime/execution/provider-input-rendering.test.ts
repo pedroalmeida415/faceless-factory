@@ -12,8 +12,44 @@ import { PROMPT_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
 import type { WorkflowAsset } from "~/lib/workflow/types";
 import { renderTaskRunProviderInput } from "~/lib/workflow-runtime/execution/provider-input-rendering";
 import type { ResolvedParentTaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
+import type { MaterializedProviderInputFacts } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
 
 describe("renderTaskRunProviderInput", () => {
+  test("renders provider requests from materialized prompt, system prompt, and image facts", () => {
+    const node = { ...createWorkflowNode("llmGenerator", 0), id: "llm-node" };
+    const image = workflowImageAsset("materialized-reference");
+    const materializedInputFacts = {
+      dependencyAddresses: [],
+      imageInputsByHandle: { "image-input-0": [image] },
+      prompt: "write from frozen facts",
+      systemPrompt: "use a factual tone",
+    } satisfies MaterializedProviderInputFacts;
+
+    const result = renderTaskRunProviderInput({
+      idempotencyKey: "task_run:llm-task:attempt:0",
+      itemIndex: 0,
+      materializedInputFacts,
+      resolvedParentTaskRuns: [],
+      targetNodeConfig: node,
+    });
+
+    assert.equal(result.kind, "executable");
+    assert.deepEqual(result.providerInput, {
+      kind: "llm-generation-request",
+      request: {
+        idempotencyKey: "task_run:llm-task:attempt:0",
+        maxOutputTokens: 2048,
+        mode: null,
+        model: "gemini-3-flash-preview",
+        prompt: "write from frozen facts",
+        referenceImages: [image],
+        systemPrompt: "use a factual tone",
+        temperature: 1,
+        thinkingLevel: "LOW",
+      },
+    });
+  });
+
   test("renders an image generation request from target config and direct prompt parent output", () => {
     const node = {
       ...createWorkflowNode("imageGenerator", 0),

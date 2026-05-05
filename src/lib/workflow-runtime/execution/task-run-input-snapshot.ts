@@ -14,6 +14,7 @@ import {
   renderTaskRunProviderInput,
   type TaskRunProviderInput,
 } from "~/lib/workflow-runtime/execution/provider-input-rendering";
+import type { MaterializedProviderInputFacts } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
 import type { RenderableTaskOutput } from "~/lib/workflow-runtime/runtime/task-status-events";
 
 export type { RenderedTaskRunProviderInput, TaskRunProviderInput };
@@ -58,6 +59,7 @@ export function buildTaskRunInputSnapshot(input: {
   readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
   readonly workflowDefinition?: WorkflowDefinitionGraphDocument;
   readonly resolvedParentTaskRuns: readonly ResolvedParentTaskRunInputSnapshot[];
+  readonly materializedInputFacts?: MaterializedProviderInputFacts;
 }): TaskRunInputSnapshot {
   const idempotencyKey = buildTaskRunIdempotencyKey({
     attempt: input.attempt,
@@ -81,6 +83,7 @@ export function buildTaskRunInputSnapshot(input: {
     providerInput: renderTaskRunProviderInput({
       idempotencyKey,
       itemIndex: input.itemIndex,
+      materializedInputFacts: input.materializedInputFacts,
       resolvedParentTaskRuns,
       targetNodeConfig,
       workflowDefinition,

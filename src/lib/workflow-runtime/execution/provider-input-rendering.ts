@@ -38,6 +38,7 @@ import type {
 } from "~/lib/workflow/types";
 import { providerDependencyMatches } from "~/lib/workflow-runtime/domain/provider-dependency-address";
 import type { ResolvedParentTaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
+import type { MaterializedProviderInputFacts } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
 
 export type RenderedTaskRunProviderInput =
   | {
@@ -77,6 +78,7 @@ export type RenderTaskRunProviderInputCommand = {
   readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
   readonly itemIndex: number;
   readonly idempotencyKey: string;
+  readonly materializedInputFacts?: MaterializedProviderInputFacts;
   readonly resolvedParentTaskRuns: readonly ResolvedParentTaskRunInputSnapshot[];
   readonly workflowDefinition?: WorkflowDefinitionGraphDocument;
 };
@@ -84,15 +86,30 @@ export type RenderTaskRunProviderInputCommand = {
 export function renderTaskRunProviderInput(
   command: RenderTaskRunProviderInputCommand,
 ): TaskRunProviderInputRenderingResult {
-  const prompt = command.workflowDefinition
-    ? renderTextInput(command, PROMPT_INPUT_HANDLE_ID)
-    : renderPrompt(command.resolvedParentTaskRuns);
-  const systemPrompt = command.workflowDefinition
-    ? renderTextInput(command, SYSTEM_PROMPT_INPUT_HANDLE_ID) || null
-    : renderSystemPrompt(command.resolvedParentTaskRuns);
-  const imageInputsByHandle = command.workflowDefinition
-    ? renderWorkflowImageInputsByHandle(command)
-    : renderImageInputsByHandle(command.resolvedParentTaskRuns);
+  const prompt = command.materializedInputFacts
+    ? joinTextValues([
+        command.materializedInputFacts.prompt,
+        renderPrompt(command.resolvedParentTaskRuns),
+      ])
+    : command.workflowDefinition
+      ? renderTextInput(command, PROMPT_INPUT_HANDLE_ID)
+      : renderPrompt(command.resolvedParentTaskRuns);
+  const systemPrompt = command.materializedInputFacts
+    ? joinTextValues([
+        command.materializedInputFacts.systemPrompt ?? "",
+        renderSystemPrompt(command.resolvedParentTaskRuns) ?? "",
+      ]) || null
+    : command.workflowDefinition
+      ? renderTextInput(command, SYSTEM_PROMPT_INPUT_HANDLE_ID) || null
+      : renderSystemPrompt(command.resolvedParentTaskRuns);
+  const imageInputsByHandle = command.materializedInputFacts
+    ? mergeImageInputsByHandle(
+        command.materializedInputFacts.imageInputsByHandle,
+        renderImageInputsByHandle(command.resolvedParentTaskRuns),
+      )
+    : command.workflowDefinition
+      ? renderWorkflowImageInputsByHandle(command)
+      : renderImageInputsByHandle(command.resolvedParentTaskRuns);
 
   switch (command.targetNodeConfig.kind) {
     case "imageGenerator":
@@ -148,6 +165,29 @@ export function renderTaskRunProviderInput(
         },
       };
   }
+}
+
+function joinTextValues(values: readonly string[]) {
+  return values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function mergeImageInputsByHandle(
+  left: Readonly<Record<string, readonly WorkflowAsset[]>>,
+  right: Readonly<Record<string, readonly WorkflowAsset[]>>,
+) {
+  const result: Record<string, WorkflowAsset[]> = {};
+  for (const [handleId, assets] of [
+    ...Object.entries(left),
+    ...Object.entries(right),
+  ]) {
+    if (assets.length) {
+      result[handleId] = [...(result[handleId] ?? []), ...assets];
+    }
+  }
+  return result;
 }
 
 export function isRenderedTaskRunProviderInput(

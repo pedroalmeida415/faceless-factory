@@ -4,21 +4,10 @@ import {
   type WorkflowDefinitionGraphDocument,
   type WorkflowDocument,
 } from "~/lib/workflow/document";
-import { WorkflowExecutionPlanner } from "~/lib/workflow/execution/planning";
-import {
-  buildIncomingByTarget,
-  getIncomingEdgesForHandle,
-  getPromptNodeReferencedVariableKeys,
-} from "~/lib/workflow/graph";
-import { OUTPUT_REORDER_INPUT_HANDLE_ID } from "~/lib/workflow/node-definitions";
 import type { WorkflowRuntimeEstimatedCreditCostByNodeId } from "~/lib/workflow/pricing";
 import { parseWorkflowBlueprint } from "~/lib/workflow/runtime/planning/blueprint/parser";
-import { resolveOutputPermutation } from "~/lib/workflow/runtime-values";
 import { isGeneratorNodeKind } from "~/lib/workflow/types";
-import {
-  type ProviderDependencyAddress,
-  providerDependencyAddressKey,
-} from "~/lib/workflow-runtime/domain/provider-dependency-address";
+import type { ProviderDependencyAddress } from "~/lib/workflow-runtime/domain/provider-dependency-address";
 import {
   isActiveTaskRunStatus,
   isRecoverableByDownstreamPlanningStatus,
@@ -26,7 +15,10 @@ import {
   type TaskRunStatus,
 } from "~/lib/workflow-runtime/domain/task-run-state";
 import type { TaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
-import { materializeTaskRunInput } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
+import {
+  materializeTaskRunInput,
+  materializeWorkflowRunTaskFacts,
+} from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
 
 export type WorkflowRunPlannerCommand =
   | { readonly type: "run-target"; readonly targetNodeIds: readonly string[] }
@@ -195,21 +187,23 @@ export function planWorkflowRun(
         : regenerationNodeExecution
           ? [regenerationNodeExecution.nodeId]
           : [];
-  const taskSchedulingPlan = (() => {
-    try {
-      return WorkflowExecutionPlanner.forTaskScheduling({
-        document: input.document,
-        targetNodeIds: schedulingTargetNodeIds,
-      });
-    } catch (cause) {
-      return cause instanceof Error
-        ? cause.message
-        : "Workflow planning failed.";
-    }
-  })();
-  if (typeof taskSchedulingPlan === "string") {
-    return plannerError(taskSchedulingPlan);
+  const materializationFacts = materializeWorkflowRunTaskFacts({
+    document: input.document,
+    plannedItemCountByNodeId: input.plannedItemCountByNodeId,
+    targetNodeIds: schedulingTargetNodeIds,
+  });
+  if (!materializationFacts.ok) {
+    return plannerError(materializationFacts.error.message);
   }
+  const materializedTaskFactsBySlot = new Map(
+    materializationFacts.value.taskFacts.map((fact) => [
+      taskRunSlotKey({
+        itemIndex: fact.itemIndex,
+        nodeExecutionId: fact.nodeId,
+      }),
+      fact,
+    ]),
+  );
   const latestTaskRunBySlot = new Map<string, ExistingTaskRun>();
 
   for (const taskRun of input.latestTaskRuns) {
@@ -238,17 +232,9 @@ export function planWorkflowRun(
     latestTaskRunBySlot.get(taskRunSlotKey({ itemIndex, nodeExecutionId }));
 
   const plannedItemIndexesForNode = (nodeId: string) => {
-    const count =
-      input.plannedItemCountByNodeId?.[nodeId] ??
-      taskSchedulingPlan.getOutputCount(nodeId);
+    const count = materializationFacts.value.itemCountByNodeId[nodeId] ?? 1;
     return Array.from({ length: Math.max(1, count) }, (_, index) => index);
   };
-  const getPlannedOutputCount = (
-    nodeId: string,
-    sourceHandleId?: string | null,
-  ) =>
-    input.plannedItemCountByNodeId?.[nodeId] ??
-    taskSchedulingPlan.getOutputCount(nodeId, sourceHandleId);
 
   const latestNodeExecutionHasActiveTaskRuns = (nodeId: string) => {
     const execution = latestNodeExecutionByNodeId.get(nodeId);
@@ -312,12 +298,13 @@ export function planWorkflowRun(
   };
 
   const parentDependencyAddresses = (nodeId: string, itemIndex: number) =>
-    collectProviderDependencyAddresses({
-      document: input.document,
-      getOutputCount: getPlannedOutputCount,
-      itemIndex,
-      targetNodeId: nodeId,
-    });
+    materializedTaskFactsBySlot.get(
+      taskRunSlotKey({ itemIndex, nodeExecutionId: nodeId }),
+    )?.dependencyAddresses ?? [];
+  const materializationTaskFact = (nodeId: string, itemIndex: number) =>
+    materializedTaskFactsBySlot.get(
+      taskRunSlotKey({ itemIndex, nodeExecutionId: nodeId }),
+    );
 
   const parentsSatisfied = (
     dependencies: readonly ProviderDependencyAddress[],
@@ -397,29 +384,14 @@ export function planWorkflowRun(
       return false;
     }
     const taskRunId = createTaskRunId();
-    const dependencyAddressesResult = (() => {
-      try {
-        return parentDependencyAddresses(
-          inputTaskRun.nodeId,
-          inputTaskRun.itemIndex,
-        );
-      } catch {
-        return null;
-      }
-    })();
-    if (!dependencyAddressesResult) {
-      taskRunsToCreate.push({
-        ...inputTaskRun,
-        estimatedCreditCost: estimatedCreditCost(inputTaskRun.nodeId, input),
-        failureReason: "EXECUTION_FAILED",
-        id: taskRunId,
-        status: "FAILED",
-        targetNodeConfig,
-      });
-      return true;
-    }
-
-    const dependencyAddresses = dependencyAddressesResult;
+    const dependencyAddresses = parentDependencyAddresses(
+      inputTaskRun.nodeId,
+      inputTaskRun.itemIndex,
+    );
+    const taskFact = materializationTaskFact(
+      inputTaskRun.nodeId,
+      inputTaskRun.itemIndex,
+    );
     const status = parentsSatisfied(dependencyAddresses)
       ? "QUEUED"
       : "WAITING_UPSTREAM";
@@ -428,6 +400,7 @@ export function planWorkflowRun(
       document: input.document,
       documentRevision: input.documentRevision ?? null,
       itemIndex: inputTaskRun.itemIndex,
+      materializedInputFacts: taskFact?.providerInputFacts,
       nodeExecutionId: inputTaskRun.nodeExecutionId,
       nodeId: inputTaskRun.nodeId,
       taskRunId,
@@ -435,13 +408,18 @@ export function planWorkflowRun(
     const taskRun: PlannedTaskRun = {
       ...inputTaskRun,
       estimatedCreditCost: estimatedCreditCost(inputTaskRun.nodeId, input),
-      ...(materialization?.ok
-        ? { inputSnapshot: materialization.value }
-        : materialization
-          ? { failureReason: "EXECUTION_FAILED" as const }
-          : {}),
+      ...(taskFact?.error
+        ? { failureReason: "EXECUTION_FAILED" as const }
+        : materialization?.ok
+          ? { inputSnapshot: materialization.value }
+          : materialization
+            ? { failureReason: "EXECUTION_FAILED" as const }
+            : {}),
       id: taskRunId,
-      status: materialization && !materialization.ok ? "FAILED" : status,
+      status:
+        taskFact?.error || (materialization && !materialization.ok)
+          ? "FAILED"
+          : status,
       targetNodeConfig,
     };
     taskRunsToCreate.push(taskRun);
@@ -606,124 +584,4 @@ export function planWorkflowRun(
       taskRunsToCreate,
     },
   };
-}
-
-function collectProviderDependencyAddresses(input: {
-  readonly document: WorkflowDocument;
-  readonly getOutputCount: (
-    nodeId: string,
-    sourceHandleId?: string | null,
-  ) => number;
-  readonly itemIndex: number;
-  readonly targetNodeId: string;
-}): readonly ProviderDependencyAddress[] {
-  const incomingByTarget = buildIncomingByTarget(input.document.edges);
-  const nodeById = new Map(input.document.nodes.map((node) => [node.id, node]));
-  const dependencies: ProviderDependencyAddress[] = [];
-
-  const collect = (params: {
-    readonly nodeId: string;
-    readonly itemIndex: number;
-    readonly sourceHandle?: string | null;
-    readonly targetHandle?: string | null;
-    readonly targetNodeId: string;
-    readonly path: ReadonlySet<string>;
-  }) => {
-    if (params.path.has(params.nodeId)) {
-      return;
-    }
-    const node = nodeById.get(params.nodeId);
-    if (!node) {
-      return;
-    }
-    const nextPath = new Set(params.path);
-    nextPath.add(params.nodeId);
-
-    switch (node.kind) {
-      case "imageGenerator":
-      case "videoGenerator":
-      case "llmGenerator": {
-        const outputCount = input.getOutputCount(node.id, params.sourceHandle);
-        dependencies.push({
-          parentItemIndex: outputCount === 1 ? 0 : params.itemIndex,
-          parentNodeId: node.id,
-          sourceHandle: params.sourceHandle ?? null,
-          targetHandle: params.targetHandle ?? null,
-          targetNodeId: params.targetNodeId,
-        });
-        return;
-      }
-      case "prompt":
-        for (const key of getPromptNodeReferencedVariableKeys(node)) {
-          for (const edge of getIncomingEdgesForHandle(
-            incomingByTarget,
-            node.id,
-            key,
-          )) {
-            collect({
-              ...params,
-              nodeId: edge.source,
-              path: nextPath,
-              sourceHandle: edge.sourceHandle,
-            });
-          }
-        }
-        return;
-      case "outputReorder": {
-        const edge = getIncomingEdgesForHandle(
-          incomingByTarget,
-          node.id,
-          OUTPUT_REORDER_INPUT_HANDLE_ID,
-        )[0];
-        if (!edge) {
-          return;
-        }
-        const outputCount = input.getOutputCount(
-          edge.source,
-          edge.sourceHandle,
-        );
-        const permutation = resolveOutputPermutation({
-          mode: node.mode,
-          order: node.order,
-          outputCount,
-          shift: node.shift,
-        });
-        collect({
-          ...params,
-          itemIndex:
-            outputCount === 1
-              ? 0
-              : (permutation[params.itemIndex] ?? params.itemIndex),
-          nodeId: edge.source,
-          path: nextPath,
-          sourceHandle: edge.sourceHandle,
-        });
-        return;
-      }
-      case "asset":
-      case "list":
-        return;
-    }
-  };
-
-  for (const edge of incomingByTarget.get(input.targetNodeId) ?? []) {
-    collect({
-      itemIndex: input.itemIndex,
-      nodeId: edge.source,
-      path: new Set(),
-      sourceHandle: edge.sourceHandle,
-      targetHandle: edge.targetHandle,
-      targetNodeId: edge.target,
-    });
-  }
-
-  const seen = new Set<string>();
-  return dependencies.filter((dependency) => {
-    const key = providerDependencyAddressKey(dependency);
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
 }

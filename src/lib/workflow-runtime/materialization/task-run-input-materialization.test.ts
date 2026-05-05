@@ -7,9 +7,73 @@ import {
   WORKFLOW_DOCUMENT_VERSION,
   type WorkflowDocument,
 } from "~/lib/workflow/document";
-import { materializeTaskRunInput } from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
+import {
+  materializeTaskRunInput,
+  materializeWorkflowRunTaskFacts,
+} from "~/lib/workflow-runtime/materialization/task-run-input-materialization";
 
 describe("Task Run Input Materialization", () => {
+  test("plans output reorder and broadcast generated-parent addresses through the materialization interface", () => {
+    const facts = materializeWorkflowRunTaskFacts({
+      document: reorderedGeneratedTextWorkflowDocument(),
+      plannedItemCountByNodeId: { source: 1, script: 3 },
+      targetNodeIds: ["script"],
+    });
+
+    assert.equal(facts.ok, true);
+    assert.ok(facts.ok);
+    assert.deepEqual(facts.value.itemCountByNodeId, {
+      script: 3,
+      source: 1,
+    });
+    assert.deepEqual(
+      facts.value.taskFacts
+        .filter((fact) => fact.nodeId === "script")
+        .map((fact) => ({
+          dependencyAddresses: fact.dependencyAddresses,
+          itemIndex: fact.itemIndex,
+        })),
+      [
+        {
+          dependencyAddresses: [
+            {
+              parentItemIndex: 0,
+              parentNodeId: "source",
+              sourceHandle: "text",
+              targetHandle: "prompt",
+              targetNodeId: "script",
+            },
+          ],
+          itemIndex: 0,
+        },
+        {
+          dependencyAddresses: [
+            {
+              parentItemIndex: 0,
+              parentNodeId: "source",
+              sourceHandle: "text",
+              targetHandle: "prompt",
+              targetNodeId: "script",
+            },
+          ],
+          itemIndex: 1,
+        },
+        {
+          dependencyAddresses: [
+            {
+              parentItemIndex: 0,
+              parentNodeId: "source",
+              sourceHandle: "text",
+              targetHandle: "prompt",
+              targetNodeId: "script",
+            },
+          ],
+          itemIndex: 2,
+        },
+      ],
+    );
+  });
+
   test("materializes a direct runnable Task Run into an executable immutable input snapshot", () => {
     const result = materializeTaskRunInput({
       attempt: 2,
@@ -68,6 +132,50 @@ describe("Task Run Input Materialization", () => {
     );
   });
 });
+
+function reorderedGeneratedTextWorkflowDocument(): WorkflowDocument {
+  const source = createWorkflowNode("llmGenerator", 0);
+  const reorder = createWorkflowNode("outputReorder", 0);
+  const script = createWorkflowNode("llmGenerator", 0);
+  if (
+    source.kind !== "llmGenerator" ||
+    reorder.kind !== "outputReorder" ||
+    script.kind !== "llmGenerator"
+  ) {
+    throw new Error("Unexpected workflow node kind");
+  }
+
+  return {
+    edges: [
+      {
+        id: "source-to-reorder",
+        source: "source",
+        sourceHandle: "text",
+        target: "reorder",
+        targetHandle: "input",
+      },
+      {
+        id: "reorder-to-script",
+        source: "reorder",
+        sourceHandle: "output",
+        target: "script",
+        targetHandle: "prompt",
+      },
+    ],
+    nodes: [
+      { ...source, id: "source" },
+      {
+        ...reorder,
+        id: "reorder",
+        mode: "manual",
+        order: [0],
+        valueType: "text",
+      },
+      { ...script, id: "script" },
+    ],
+    version: WORKFLOW_DOCUMENT_VERSION,
+  };
+}
 
 function directLlmWorkflowDocument(): WorkflowDocument {
   const topic = createWorkflowNode("list", 0);
