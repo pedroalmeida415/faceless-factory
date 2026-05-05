@@ -314,6 +314,13 @@ function orchestratorErrorToTRPCError(error: WorkflowRuntimeOrchestratorError) {
     return new TRPCError({ code: "BAD_REQUEST", message: error.message });
   }
 
+  if (error._tag === "TaskRunCancellationBlockedError") {
+    return new TRPCError({
+      code: "BAD_REQUEST",
+      message: error.message,
+    });
+  }
+
   return new TRPCError({
     code: "INTERNAL_SERVER_ERROR",
     cause: error.cause,

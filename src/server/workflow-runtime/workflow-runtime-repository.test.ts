@@ -788,17 +788,19 @@ describe("WorkflowRuntimeRepository", () => {
     );
   });
 
-  test("cancels an active Task Run and returns a downstream Wake-Up Call draft", async () => {
+  test("cancels a Waiting Upstream Task Run without creating a credit entry", async () => {
     const repository = createWorkflowRuntimeRepository(db);
+    await insertUser(db, { creditBalance: 70 });
     await insertTaskRun(db, {
-      id: "task-run-review-cancelled",
-      runtimeStatus: "PENDING_REVIEW",
+      estimatedCreditCost: 30,
+      id: "task-run-waiting-cancelled",
+      runtimeStatus: "WAITING_UPSTREAM",
     });
 
     const result = await repository.cancelTaskRun({
       attempt: 0,
       ownerUserId: "owner-user",
-      taskRunId: "task-run-review-cancelled",
+      taskRunId: "task-run-waiting-cancelled",
     });
 
     assert.deepEqual(result, {
@@ -806,42 +808,47 @@ describe("WorkflowRuntimeRepository", () => {
       event: {
         attempt: 0,
         itemIndex: 0,
-        nodeExecutionId: "node-execution-task-run-review-cancelled",
+        nodeExecutionId: "node-execution-task-run-waiting-cancelled",
         status: "CANCELLED",
-        taskRunId: "task-run-review-cancelled",
+        taskRunId: "task-run-waiting-cancelled",
       },
       wakeUpJob: {
-        jobId: "wake-up~task-run-review-cancelled",
+        jobId: "wake-up~task-run-waiting-cancelled",
         ownerUserId: "owner-user",
-        parentTaskRunId: "task-run-review-cancelled",
+        parentTaskRunId: "task-run-waiting-cancelled",
         workflowId: "workflow-id",
       },
     });
     assert.equal(
-      (await getTaskRunSettlement(db, "task-run-review-cancelled"))
+      (await getTaskRunSettlement(db, "task-run-waiting-cancelled"))
         .runtimeStatus,
       "CANCELLED",
     );
+    assert.deepEqual(
+      await repository.getCreditLedgerForUser({ ownerUserId: "owner-user" }),
+      { creditBalance: 70, ledgerEntries: [] },
+    );
   });
 
-  test("refunds unspent Task Run Debit once when cancelling an active Task Run", async () => {
+  test("refunds one full Task Run Debit idempotently when cancelling a Queued Task Run", async () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 70 });
     await insertTaskRun(db, {
-      id: "task-run-reserved-cancelled",
+      estimatedCreditCost: 30,
+      id: "task-run-queued-cancelled",
       reservedCredits: 30,
-      runtimeStatus: "RUNNING",
+      runtimeStatus: "QUEUED",
     });
 
     await repository.cancelTaskRun({
       attempt: 0,
       ownerUserId: "owner-user",
-      taskRunId: "task-run-reserved-cancelled",
+      taskRunId: "task-run-queued-cancelled",
     });
     const duplicate = await repository.cancelTaskRun({
       attempt: 0,
       ownerUserId: "owner-user",
-      taskRunId: "task-run-reserved-cancelled",
+      taskRunId: "task-run-queued-cancelled",
     });
 
     assert.deepEqual(duplicate, { decided: false });
@@ -854,42 +861,75 @@ describe("WorkflowRuntimeRepository", () => {
             amount: 30,
             balanceAfter: 100,
             kind: "refund",
-            sourceKey: "task_run:task-run-reserved-cancelled:refund",
+            sourceKey: "task_run:task-run-queued-cancelled:refund",
           },
         ],
       },
     );
   });
 
-  test("cancelling Pending Review refunds only unspent Task Run Debit", async () => {
+  test("blocks Running Task Run cancellation with a predictable runtime error", async () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 80 });
     await insertTaskRun(db, {
-      costCredits: 7,
-      id: "task-run-review-partial-cancel",
+      id: "task-run-running-cancel-blocked",
+      reservedCredits: 20,
+      runtimeStatus: "RUNNING",
+    });
+
+    const result = await repository.cancelTaskRun({
+      attempt: 0,
+      ownerUserId: "owner-user",
+      taskRunId: "task-run-running-cancel-blocked",
+    });
+
+    assert.deepEqual(result, {
+      blocked: true,
+      decided: false,
+      message: "Running Task Runs cannot be cancelled.",
+      reason: "RUNNING_TASK_RUN_CANCELLATION_BLOCKED",
+    });
+    assert.equal(
+      (await getTaskRunSettlement(db, "task-run-running-cancel-blocked"))
+        .runtimeStatus,
+      "RUNNING",
+    );
+    assert.deepEqual(
+      await repository.getCreditLedgerForUser({ ownerUserId: "owner-user" }),
+      { creditBalance: 80, ledgerEntries: [] },
+    );
+  });
+
+  test("blocks Pending Review cancellation so review decisions remain authoritative", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    await insertUser(db, { creditBalance: 80 });
+    await insertTaskRun(db, {
+      id: "task-run-review-cancel-blocked",
       reservedCredits: 20,
       runtimeStatus: "PENDING_REVIEW",
     });
 
-    await repository.cancelTaskRun({
+    const result = await repository.cancelTaskRun({
       attempt: 0,
       ownerUserId: "owner-user",
-      taskRunId: "task-run-review-partial-cancel",
+      taskRunId: "task-run-review-cancel-blocked",
     });
 
+    assert.deepEqual(result, {
+      blocked: true,
+      decided: false,
+      message:
+        "Pending Review Task Runs must be approved or rejected instead of cancelled.",
+      reason: "PENDING_REVIEW_REQUIRES_REVIEW_DECISION",
+    });
+    assert.equal(
+      (await getTaskRunSettlement(db, "task-run-review-cancel-blocked"))
+        .runtimeStatus,
+      "PENDING_REVIEW",
+    );
     assert.deepEqual(
       await repository.getCreditLedgerForUser({ ownerUserId: "owner-user" }),
-      {
-        creditBalance: 93,
-        ledgerEntries: [
-          {
-            amount: 13,
-            balanceAfter: 93,
-            kind: "refund",
-            sourceKey: "task_run:task-run-review-partial-cancel:refund",
-          },
-        ],
-      },
+      { creditBalance: 80, ledgerEntries: [] },
     );
   });
 

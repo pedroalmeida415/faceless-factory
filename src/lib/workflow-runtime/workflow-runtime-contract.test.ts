@@ -48,6 +48,7 @@ import {
   unwrapPlan,
   workflowRunPlan,
 } from "~/lib/workflow-runtime/workflow-runtime-contract-harness";
+import { createWorkflowRuntimeOrchestrator } from "~/server/workflow-runtime/workflow-runtime-orchestrator";
 import { createWorkflowRuntimeProviderExecutor } from "~/server/workflow-runtime/workflow-runtime-provider-executor";
 import {
   buildWorkflowRuntimeCompletionSettlementJobPayload,
@@ -637,7 +638,7 @@ describe("Workflow runtime state-machine contract", () => {
     await insertTaskRun(db, {
       id: "cancelled-parent",
       nodeExecutionId: "node-execution-cancel-parent",
-      runtimeStatus: "RUNNING",
+      runtimeStatus: "QUEUED",
     });
     await insertTaskRun(db, {
       id: "waiting-child-of-cancelled",
@@ -1032,6 +1033,179 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
       status: "APPROVED",
       taskRunId: "parent-review-disabled",
     });
+    await assertRuntimeInvariants(db);
+  });
+
+  test("cancel command covers every cancellable and non-cancellable Task Run state", async () => {
+    const repository = createWorkflowRuntimeRepository(db);
+    const wakeUpJobs: ReturnType<
+      typeof buildWorkflowRuntimeWakeUpJobPayload
+    >[] = [];
+    const publishedEvents: ReturnType<typeof eventContract>[] = [];
+    const orchestrator = createWorkflowRuntimeOrchestrator({
+      eventPublisher: {
+        publishTaskStatusEvents: async (_workflowId, events) => {
+          publishedEvents.push(...events.map(eventContract));
+        },
+      },
+      queue: {
+        enqueueExecutionJobs: async () => undefined,
+        enqueueWakeUpJobs: async (jobs) => {
+          wakeUpJobs.push(...jobs);
+        },
+      },
+      repository,
+    });
+    await insertUser(db, { creditBalance: 100 });
+    await insertTaskRun(db, {
+      estimatedCreditCost: 12,
+      id: "cancel-command-waiting",
+      runtimeStatus: "WAITING_UPSTREAM",
+    });
+    await insertTaskRun(db, {
+      estimatedCreditCost: 12,
+      id: "cancel-command-queued",
+      reservedCredits: 12,
+      runtimeStatus: "QUEUED",
+    });
+    await insertTaskRun(db, {
+      id: "cancel-command-running",
+      reservedCredits: 12,
+      runtimeStatus: "RUNNING",
+    });
+    await insertTaskRun(db, {
+      id: "cancel-command-review",
+      reservedCredits: 12,
+      runtimeStatus: "PENDING_REVIEW",
+    });
+    for (const status of [
+      "APPROVED",
+      "REJECTED",
+      "CANCELLED",
+      "FAILED",
+      "UPSTREAM_FAILED",
+    ] as const) {
+      await insertTaskRun(db, {
+        id: `cancel-command-${status.toLowerCase()}`,
+        runtimeStatus: status,
+      });
+    }
+
+    const waiting = await orchestrator.cancelTaskRun({
+      attempt: 0,
+      ownerUserId: "owner-user",
+      taskRunId: "cancel-command-waiting",
+      workflowId: "workflow-id",
+    });
+    const queued = await orchestrator.cancelTaskRun({
+      attempt: 0,
+      ownerUserId: "owner-user",
+      taskRunId: "cancel-command-queued",
+      workflowId: "workflow-id",
+    });
+    const running = await orchestrator.cancelTaskRun({
+      attempt: 0,
+      ownerUserId: "owner-user",
+      taskRunId: "cancel-command-running",
+      workflowId: "workflow-id",
+    });
+    const pendingReview = await orchestrator.cancelTaskRun({
+      attempt: 0,
+      ownerUserId: "owner-user",
+      taskRunId: "cancel-command-review",
+      workflowId: "workflow-id",
+    });
+    const terminalResults = [];
+    for (const status of [
+      "approved",
+      "rejected",
+      "cancelled",
+      "failed",
+      "upstream_failed",
+    ] as const) {
+      terminalResults.push(
+        await orchestrator.cancelTaskRun({
+          attempt: 0,
+          ownerUserId: "owner-user",
+          taskRunId: `cancel-command-${status}`,
+          workflowId: "workflow-id",
+        }),
+      );
+    }
+
+    assert.equal(waiting.ok, true);
+    assert.equal(waiting.ok ? waiting.value.decided : false, true);
+    assert.equal(queued.ok, true);
+    assert.equal(queued.ok ? queued.value.decided : false, true);
+    assert.equal(running.ok, false);
+    assert.deepEqual(running.ok ? null : running.error, {
+      _tag: "TaskRunCancellationBlockedError",
+      committed: false,
+      message: "Running Task Runs cannot be cancelled.",
+      reason: "RUNNING_TASK_RUN_CANCELLATION_BLOCKED",
+    });
+    assert.equal(pendingReview.ok, false);
+    assert.deepEqual(pendingReview.ok ? null : pendingReview.error, {
+      _tag: "TaskRunCancellationBlockedError",
+      committed: false,
+      message:
+        "Pending Review Task Runs must be approved or rejected instead of cancelled.",
+      reason: "PENDING_REVIEW_REQUIRES_REVIEW_DECISION",
+    });
+    assert.deepEqual(
+      terminalResults.map((result) => (result.ok ? result.value : null)),
+      [
+        { decided: false },
+        { decided: false },
+        { decided: false },
+        { decided: false },
+        { decided: false },
+      ],
+    );
+    assert.deepEqual(publishedEvents, [
+      {
+        attempt: 0,
+        itemIndex: 0,
+        nodeExecutionId: "node-execution-cancel-command-waiting",
+        status: "CANCELLED",
+        taskRunId: "cancel-command-waiting",
+      },
+      {
+        attempt: 0,
+        itemIndex: 0,
+        nodeExecutionId: "node-execution-cancel-command-queued",
+        status: "CANCELLED",
+        taskRunId: "cancel-command-queued",
+      },
+    ]);
+    assert.deepEqual(
+      wakeUpJobs.map((job) => job.parentTaskRunId),
+      ["cancel-command-waiting", "cancel-command-queued"],
+    );
+    assert.deepEqual(
+      await getTaskRunCreditState(db, "cancel-command-waiting"),
+      {
+        estimatedCreditCost: 12,
+        failureReason: null,
+        reservedCredits: null,
+        runtimeStatus: "CANCELLED",
+      },
+    );
+    assert.deepEqual(await getTaskRunCreditState(db, "cancel-command-queued"), {
+      estimatedCreditCost: 12,
+      failureReason: null,
+      reservedCredits: 12,
+      runtimeStatus: "CANCELLED",
+    });
+    assert.equal(
+      (await getTaskRunCreditState(db, "cancel-command-running")).runtimeStatus,
+      "RUNNING",
+    );
+    assert.equal(
+      (await getTaskRunCreditState(db, "cancel-command-review")).runtimeStatus,
+      "PENDING_REVIEW",
+    );
+    assert.equal(await getUserCreditBalance(db, "owner-user"), 112);
     await assertRuntimeInvariants(db);
   });
 

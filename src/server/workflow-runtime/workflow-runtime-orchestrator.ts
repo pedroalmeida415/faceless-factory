@@ -91,6 +91,19 @@ export type WorkflowRuntimeReviewDecisionResult =
     }
   | { readonly decided: false };
 
+export type TaskRunCancellationBlockedReason =
+  | "PENDING_REVIEW_REQUIRES_REVIEW_DECISION"
+  | "RUNNING_TASK_RUN_CANCELLATION_BLOCKED";
+
+export type WorkflowRuntimeCancelTaskRunResult =
+  | WorkflowRuntimeReviewDecisionResult
+  | {
+      readonly blocked: true;
+      readonly decided: false;
+      readonly message: string;
+      readonly reason: TaskRunCancellationBlockedReason;
+    };
+
 export type WorkflowRuntimeRejectTaskRunResult =
   | {
       readonly rejected: true;
@@ -114,7 +127,7 @@ export type WorkflowRuntimeRepositoryForOrchestrator = {
   ) => Promise<WorkflowRuntimeReviewDecisionResult>;
   readonly cancelTaskRun: (
     command: ReviewTaskRunDecisionCommand,
-  ) => Promise<WorkflowRuntimeReviewDecisionResult>;
+  ) => Promise<WorkflowRuntimeCancelTaskRunResult>;
   readonly rejectTaskRunAndCreateRegeneration: (
     command: RejectTaskRunRepositoryCommand,
   ) => Promise<WorkflowRuntimeRejectTaskRunResult>;
@@ -141,6 +154,12 @@ export type WorkflowRuntimeEventPublisherForOrchestrator = {
 
 export type WorkflowRuntimeOrchestratorError =
   | (WorkflowRunPlannerError & { readonly committed: false })
+  | {
+      readonly _tag: "TaskRunCancellationBlockedError";
+      readonly committed: false;
+      readonly message: string;
+      readonly reason: TaskRunCancellationBlockedReason;
+    }
   | {
       readonly _tag: "WorkflowRuntimeCommitError";
       readonly cause: unknown;
@@ -175,6 +194,10 @@ export type HandleWakeUpCallResult =
   | { readonly ok: false; readonly error: WorkflowRuntimeOrchestratorError };
 
 export type ReviewTaskRunDecisionResult =
+  | { readonly ok: true; readonly value: WorkflowRuntimeReviewDecisionResult }
+  | { readonly ok: false; readonly error: WorkflowRuntimeOrchestratorError };
+
+export type CancelTaskRunResult =
   | { readonly ok: true; readonly value: WorkflowRuntimeReviewDecisionResult }
   | { readonly ok: false; readonly error: WorkflowRuntimeOrchestratorError };
 
@@ -332,9 +355,22 @@ export function createWorkflowRuntimeOrchestrator(input: {
 
     async cancelTaskRun(
       command: ReviewTaskRunDecisionCommand,
-    ): Promise<ReviewTaskRunDecisionResult> {
-      return handleReviewDecision(
-        () => input.repository.cancelTaskRun(command),
+    ): Promise<CancelTaskRunResult> {
+      const decided = await input.repository.cancelTaskRun(command);
+      if ("blocked" in decided) {
+        return {
+          error: {
+            _tag: "TaskRunCancellationBlockedError",
+            committed: false,
+            message: decided.message,
+            reason: decided.reason,
+          },
+          ok: false,
+        };
+      }
+
+      return handleCommittedReviewDecision(
+        decided,
         input.queue,
         input.eventPublisher,
         command.workflowId,
@@ -440,6 +476,20 @@ async function handleReviewDecision(
   workflowId: string,
 ): Promise<ReviewTaskRunDecisionResult> {
   const decided = await decide();
+  return handleCommittedReviewDecision(
+    decided,
+    queue,
+    eventPublisher,
+    workflowId,
+  );
+}
+
+async function handleCommittedReviewDecision(
+  decided: WorkflowRuntimeReviewDecisionResult,
+  queue: WorkflowRuntimeQueueForOrchestrator,
+  eventPublisher: WorkflowRuntimeEventPublisherForOrchestrator,
+  workflowId: string,
+): Promise<ReviewTaskRunDecisionResult> {
   if (!decided.decided) {
     return { ok: true, value: decided };
   }

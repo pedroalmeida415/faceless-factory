@@ -112,6 +112,24 @@ type DecideTaskRunReviewResult =
     }
   | { readonly decided: false };
 
+type CancelTaskRunBlockedReason =
+  | "PENDING_REVIEW_REQUIRES_REVIEW_DECISION"
+  | "RUNNING_TASK_RUN_CANCELLATION_BLOCKED";
+
+type CancelTaskRunResult =
+  | {
+      readonly decided: true;
+      readonly event: TaskStatusEvent;
+      readonly wakeUpJob: WorkflowRuntimeWakeUpJobPayload;
+    }
+  | { readonly decided: false }
+  | {
+      readonly blocked: true;
+      readonly decided: false;
+      readonly message: string;
+      readonly reason: CancelTaskRunBlockedReason;
+    };
+
 type RejectTaskRunAndCreateRegenerationResult =
   | {
       readonly rejected: true;
@@ -927,48 +945,59 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
 
     async cancelTaskRun(
       command: DecideTaskRunReviewCommand,
-    ): Promise<DecideTaskRunReviewResult> {
+    ): Promise<CancelTaskRunResult> {
       return db.transaction(async (tx) => {
         const rows = rowsFromResult(
           await tx.execute(sql`
+            with cancellable as (
+              select
+                id,
+                runtime_status as "previousRuntimeStatus"
+              from task_runs
+              where id = ${command.taskRunId}
+                and owner_user_id = ${command.ownerUserId}
+                and attempt = ${command.attempt}
+                and runtime_status in (
+                  'WAITING_UPSTREAM',
+                  'QUEUED'
+                )
+              for update
+            )
             update task_runs
-            set runtime_status = 'CANCELLED', finished_at = now(), updated_at = now()
-            where id = ${command.taskRunId}
-              and owner_user_id = ${command.ownerUserId}
-              and attempt = ${command.attempt}
-              and runtime_status in (
-                'WAITING_UPSTREAM',
-                'QUEUED',
-                'RUNNING',
-                'PENDING_REVIEW'
-              )
+            set
+              runtime_status = 'CANCELLED',
+              finished_at = now(),
+              updated_at = now()
+            from cancellable
+            where task_runs.id = cancellable.id
             returning
-              id as "taskRunId",
-              node_execution_id as "nodeExecutionId",
-              workflow_id as "workflowId",
-              owner_user_id as "ownerUserId",
-              item_index as "itemIndex",
-              reserved_credits as "reservedCredits",
-              cost_credits as "costCredits",
-              attempt
+              task_runs.id as "taskRunId",
+              task_runs.node_execution_id as "nodeExecutionId",
+              task_runs.workflow_id as "workflowId",
+              task_runs.owner_user_id as "ownerUserId",
+              task_runs.item_index as "itemIndex",
+              task_runs.reserved_credits as "reservedCredits",
+              cancellable."previousRuntimeStatus",
+              task_runs.attempt
           `),
         );
         const row = rows[0];
 
         if (!row) {
-          return { decided: false };
+          return blockedCancelResult(
+            await loadTaskRunRuntimeStatus(tx, command),
+          );
         }
 
         const taskRunId = requireString(row.taskRunId);
-        await refundTaskRunCredits(tx, {
-          amount: refundableTaskRunCredits(
-            optionalNumber(row.reservedCredits),
-            requireNumber(row.costCredits),
-          ),
-          ownerUserId: requireString(row.ownerUserId),
-          taskRunId,
-          workflowId: requireString(row.workflowId),
-        });
+        if (requireString(row.previousRuntimeStatus) === "QUEUED") {
+          await refundTaskRunCredits(tx, {
+            amount: optionalNumber(row.reservedCredits) ?? 0,
+            ownerUserId: requireString(row.ownerUserId),
+            taskRunId,
+            workflowId: requireString(row.workflowId),
+          });
+        }
 
         return {
           decided: true,
@@ -1643,6 +1672,48 @@ function refundableTaskRunCredits(
   finalCostCredits: number,
 ): number {
   return Math.max((creditCost ?? 0) - finalCostCredits, 0);
+}
+
+async function loadTaskRunRuntimeStatus(
+  db: DbExecutor,
+  command: DecideTaskRunReviewCommand,
+): Promise<string | null> {
+  const rows = rowsFromResult(
+    await db.execute(sql`
+      select runtime_status as "runtimeStatus"
+      from task_runs
+      where id = ${command.taskRunId}
+        and owner_user_id = ${command.ownerUserId}
+        and attempt = ${command.attempt}
+      limit 1
+      for update
+    `),
+  );
+
+  return optionalString(rows[0]?.runtimeStatus);
+}
+
+function blockedCancelResult(status: string | null): CancelTaskRunResult {
+  if (status === "RUNNING") {
+    return {
+      blocked: true,
+      decided: false,
+      message: "Running Task Runs cannot be cancelled.",
+      reason: "RUNNING_TASK_RUN_CANCELLATION_BLOCKED",
+    };
+  }
+
+  if (status === "PENDING_REVIEW") {
+    return {
+      blocked: true,
+      decided: false,
+      message:
+        "Pending Review Task Runs must be approved or rejected instead of cancelled.",
+      reason: "PENDING_REVIEW_REQUIRES_REVIEW_DECISION",
+    };
+  }
+
+  return { decided: false };
 }
 
 function rowsFromResult(result: unknown): readonly QueryRow[] {

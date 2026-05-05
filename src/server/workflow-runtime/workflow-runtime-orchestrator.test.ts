@@ -18,6 +18,7 @@ import {
   type ReviewTaskRunDecisionCommand,
   type SettleWorkerCompletionCommand,
   type SettleWorkerFailureCommand,
+  type TaskRunCancellationBlockedReason,
 } from "~/server/workflow-runtime/workflow-runtime-orchestrator";
 import type {
   WorkflowRuntimeExecutionJobPayload,
@@ -446,6 +447,35 @@ describe("WorkflowRuntimeOrchestrator", () => {
       "enqueue-wake-up~wake-up~task-run-1",
       "publish:workflow-1:task-run-1",
     ]);
+  });
+
+  test("returns blocked cancellation as a predictable runtime command error", async () => {
+    const sideEffects: string[] = [];
+    const repository = new FakeRepository(sideEffects);
+    repository.cancelResult = {
+      blocked: true,
+      decided: false,
+      message: "Running Task Runs cannot be cancelled.",
+      reason: "RUNNING_TASK_RUN_CANCELLATION_BLOCKED",
+    };
+    const orchestrator = createWorkflowRuntimeOrchestrator({
+      eventPublisher: new FakeEventPublisher(sideEffects),
+      queue: new FakeQueue(sideEffects),
+      repository,
+    });
+
+    const result = await orchestrator.cancelTaskRun(
+      makeReviewDecisionCommand(),
+    );
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.ok ? null : result.error, {
+      _tag: "TaskRunCancellationBlockedError",
+      committed: false,
+      message: "Running Task Runs cannot be cancelled.",
+      reason: "RUNNING_TASK_RUN_CANCELLATION_BLOCKED",
+    });
+    assert.deepEqual(sideEffects, ["cancel:task-run-1"]);
   });
 
   test("rejects a Task Run before enqueueing the regeneration execution job and publishing both Task Status Events", async () => {
@@ -888,7 +918,13 @@ class FakeRepository {
         readonly event: TaskStatusEvent;
         readonly wakeUpJob: WorkflowRuntimeWakeUpJobPayload;
       }
-    | { readonly decided: false } = { decided: false };
+    | { readonly decided: false }
+    | {
+        readonly blocked: true;
+        readonly decided: false;
+        readonly message: string;
+        readonly reason: TaskRunCancellationBlockedReason;
+      } = { decided: false };
   readonly cancelCommands: ReviewTaskRunDecisionCommand[] = [];
   rejectResult:
     | {
