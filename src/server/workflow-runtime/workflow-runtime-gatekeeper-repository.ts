@@ -51,7 +51,7 @@ export type WakeUpTaskRunChildrenRepositoryResult = {
 
 type GatekeeperTaskRunRow = {
   readonly attempt: number;
-  readonly estimatedCreditCost: number;
+  readonly creditCost: number;
   readonly failureReason: TaskRunFailureReason | undefined;
   readonly inputSnapshot: TaskRunInputSnapshot | undefined;
   readonly itemIndex: number;
@@ -60,7 +60,6 @@ type GatekeeperTaskRunRow = {
   readonly ownerUserId: string;
   readonly asset: WorkflowAsset | undefined;
   readonly output: TaskRunGatekeeperTaskRun["output"];
-  readonly reservedCredits: number | undefined;
   readonly status: TaskRunStatus;
   readonly taskRunId: string;
   readonly workflowId: string;
@@ -175,8 +174,7 @@ async function loadGatekeeperTaskRuns(
         item_index as "itemIndex",
         attempt,
         runtime_status as status,
-        coalesce(estimated_credit_cost, reserved_credits, 0) as "estimatedCreditCost",
-        reserved_credits as "reservedCredits",
+        credit_cost as "creditCost",
         failure_reason as "failureReason",
         error,
         input_snapshot as "inputSnapshot"
@@ -195,7 +193,7 @@ async function loadGatekeeperTaskRuns(
 
   return rows.map((row) => ({
     attempt: requireNumber(row.attempt),
-    estimatedCreditCost: requireNumber(row.estimatedCreditCost),
+    creditCost: requireNumber(row.creditCost),
     failureReason: optionalTaskRunFailureReason(row.failureReason, row.error),
     inputSnapshot:
       row.status === "WAITING_UPSTREAM"
@@ -207,7 +205,6 @@ async function loadGatekeeperTaskRuns(
     ownerUserId: requireString(row.ownerUserId),
     asset: outputs.get(requireString(row.taskRunId))?.asset,
     output: outputs.get(requireString(row.taskRunId))?.output,
-    reservedCredits: optionalNumber(row.reservedCredits) ?? undefined,
     status: requireTaskRunStatus(row.status),
     taskRunId: requireString(row.taskRunId),
     workflowId: requireString(row.workflowId),
@@ -367,7 +364,7 @@ async function persistGatekeeperResult(
 
     const row = requireTaskRunRow(taskRunRowsById, taskRun.id);
     const debit = await debitTaskRunCredits(db, {
-      amount: taskRun.reservedCredits ?? 0,
+      amount: taskRun.creditCost,
       ownerUserId: input.ownerUserId,
       taskRunId: taskRun.id,
       workflowId: row.workflowId,
@@ -381,7 +378,6 @@ async function persistGatekeeperResult(
       failureReason: { type: "INSUFFICIENT_CREDITS" },
       taskRunId: taskRun.id,
     }).state;
-    finalResultState = clearTaskRunDebitMarker(finalResultState, taskRun.id);
   }
 
   const persistedTaskRunIds = new Set<string>();
@@ -462,7 +458,6 @@ async function updateGatekeeperTaskRun(
     update task_runs
     set
       runtime_status = ${taskRun.status},
-      reserved_credits = ${taskRun.reservedCredits ?? null},
       input_snapshot = ${inputSnapshotJson(taskRun.inputSnapshot ?? null)}::jsonb,
       failure_reason = ${taskRun.failureReason?.type ?? null},
       error = ${taskRun.failureReason ? failureReasonError(taskRun.failureReason) : null},
@@ -489,7 +484,7 @@ function projectGatekeeperTaskRun(
 ): TaskRunGatekeeperTaskRun {
   return {
     attempt: row.attempt,
-    estimatedCreditCost: row.estimatedCreditCost,
+    creditCost: row.creditCost,
     failureReason: row.failureReason,
     id: row.taskRunId,
     inputSnapshot: row.inputSnapshot,
@@ -498,7 +493,6 @@ function projectGatekeeperTaskRun(
     nodeExecutionId: row.nodeExecutionId,
     asset: row.asset,
     output: row.output,
-    reservedCredits: row.reservedCredits,
     status: row.status,
     targetNodeConfig: row.inputSnapshot?.targetNodeConfig,
   };
@@ -526,7 +520,6 @@ function isUnchangedTaskRun(
 ): boolean {
   return (
     left.status === right.status &&
-    left.reservedCredits === right.reservedCredits &&
     left.failureReason?.type === right.failureReason?.type &&
     JSON.stringify(left.inputSnapshot ?? null) ===
       JSON.stringify(right.inputSnapshot ?? null)
@@ -559,20 +552,6 @@ function buildPersistedTaskStatusEvents(
       taskRunId: taskRun.id,
     });
   });
-}
-
-function clearTaskRunDebitMarker(
-  state: TaskRunGatekeeperState,
-  taskRunId: string,
-): TaskRunGatekeeperState {
-  return {
-    ...state,
-    taskRuns: state.taskRuns.map((taskRun) =>
-      taskRun.id === taskRunId
-        ? { ...taskRun, reservedCredits: undefined }
-        : taskRun,
-    ),
-  };
 }
 
 function taskDependencyKey(dependency: TaskRunGatekeeperDependency): string {
@@ -649,10 +628,6 @@ function requireNumber(value: unknown): number {
   }
 
   throw new TypeError("Expected integer database number value");
-}
-
-function optionalNumber(value: unknown): number | null {
-  return value === null ? null : requireNumber(value);
 }
 
 function requireDate(value: unknown): Date {

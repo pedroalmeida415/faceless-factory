@@ -69,7 +69,7 @@ export function createWorkflowRuntimeProviderExecutor(input: {
             return generatedMediaResult({
               assets: response.assets,
               expectedKind: "image",
-              finalCostCredits: priceImageGeneration(
+              providerCostCredits: priceImageGeneration(
                 inputSnapshot.providerInput.request,
               ),
               reviewRequired: getReviewRequired(inputSnapshot),
@@ -86,7 +86,7 @@ export function createWorkflowRuntimeProviderExecutor(input: {
             return generatedMediaResult({
               assets: response.assets,
               expectedKind: "video",
-              finalCostCredits: priceVideoGeneration(
+              providerCostCredits: priceVideoGeneration(
                 inputSnapshot.providerInput.request,
               ),
               reviewRequired: getReviewRequired(inputSnapshot),
@@ -103,7 +103,7 @@ export function createWorkflowRuntimeProviderExecutor(input: {
             return {
               ok: true,
               value: {
-                finalCostCredits: priceLlmGeneration(response),
+                providerCostCredits: priceLlmGeneration(response),
                 generatedAsset: {
                   assetId: createAssetId(),
                   contentType: "text/plain; charset=utf-8",
@@ -138,7 +138,7 @@ export function createWorkflowRuntimeProviderExecutor(input: {
 function generatedMediaResult(input: {
   readonly assets: readonly StagedGeneratedMediaArtifact[];
   readonly expectedKind: "image" | "video";
-  readonly finalCostCredits: number;
+  readonly providerCostCredits: number;
   readonly reviewRequired: boolean;
 }): ProviderExecutionResult {
   if (input.assets.length !== 1) {
@@ -171,7 +171,7 @@ function generatedMediaResult(input: {
   return {
     ok: true,
     value: {
-      finalCostCredits: input.finalCostCredits,
+      providerCostCredits: input.providerCostCredits,
       generatedAsset: toGeneratedMediaAssetPayload(asset, input.expectedKind),
       reviewRequired: input.reviewRequired,
     },

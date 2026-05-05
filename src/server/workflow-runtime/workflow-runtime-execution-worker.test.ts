@@ -93,7 +93,7 @@ describe("WorkflowRuntimeExecutionWorker", () => {
     assert.deepEqual(settlementQueue.completions, [
       {
         attempt: 0,
-        finalCostCredits: 2,
+        providerCostCredits: 2,
         generatedAsset: providerCompletion().generatedAsset,
         jobId: "task-run~task-run-1~attempt~0~orchestrator~completion",
         ownerUserId: "owner-1",
@@ -123,7 +123,7 @@ describe("WorkflowRuntimeExecutionWorker", () => {
             taskRunDebitRefundable: true,
             type: "PROVIDER",
           },
-          finalCostCredits: 1,
+          providerCostCredits: 1,
         },
         ok: false,
       }),
@@ -141,7 +141,7 @@ describe("WorkflowRuntimeExecutionWorker", () => {
           taskRunDebitRefundable: true,
           type: "PROVIDER",
         },
-        finalCostCredits: 1,
+        providerCostCredits: 1,
         jobId: "task-run~task-run-1~attempt~0~orchestrator~failure",
         ownerUserId: "owner-1",
         taskRunId: "task-run-1",
@@ -310,7 +310,7 @@ function executionJob(): WorkflowRuntimeExecutionJobPayload {
 
 function providerCompletion() {
   return {
-    finalCostCredits: 2,
+    providerCostCredits: 2,
     generatedAsset: {
       assetId: "asset-1",
       contentType: "text/plain",

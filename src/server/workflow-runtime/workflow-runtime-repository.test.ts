@@ -94,7 +94,7 @@ describe("WorkflowRuntimeRepository", () => {
           status: "APPROVED",
         }),
         gatekeeperTaskRunRow({
-          estimatedCreditCost: 30,
+          creditCost: 30,
           id: "child-debit-denied",
           inputSnapshot: inputSnapshot("child-debit-denied", 0, {
             nodeExecutionId: "node-execution-child-debit-denied",
@@ -279,7 +279,7 @@ describe("WorkflowRuntimeRepository", () => {
 
     const result = await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 17,
+      providerCostCredits: 17,
       generatedAsset: textGeneratedAsset("asset-review", "review text"),
       ownerUserId: "owner-user",
       reviewRequired: true,
@@ -306,7 +306,6 @@ describe("WorkflowRuntimeRepository", () => {
       await getTaskRunSettlement(db, "task-run-review-complete"),
       {
         assetIds: ["asset-review"],
-        costCredits: 17,
         failedAt: null,
         failureReason: null,
         finishedAtIsSet: true,
@@ -328,7 +327,7 @@ describe("WorkflowRuntimeRepository", () => {
 
     const result = await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 23,
+      providerCostCredits: 23,
       generatedAsset: mediaGeneratedAsset("asset-approved"),
       ownerUserId: "owner-user",
       reviewRequired: false,
@@ -384,7 +383,7 @@ describe("WorkflowRuntimeRepository", () => {
 
     const result = await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 0,
+      providerCostCredits: 0,
       generatedAsset: {
         ...mediaGeneratedAsset("asset-staged"),
         stagedStorageKey,
@@ -464,7 +463,7 @@ describe("WorkflowRuntimeRepository", () => {
     await insertUser(db, { creditBalance: 25 });
     await insertTaskRun(db, {
       attempt: 2,
-      estimatedCreditCost: 9,
+      creditCost: 9,
       id: "task-run-review-rejected",
       nodeExecutionId: "node-execution-rejected",
       runtimeStatus: "PENDING_REVIEW",
@@ -518,7 +517,6 @@ describe("WorkflowRuntimeRepository", () => {
           itemIndex: 0,
           nodeExecutionId: "node-execution-rejected",
           ownerUserId: "owner-user",
-          reservedCredits: null,
           runtimeStatus: "REJECTED",
           taskRunId: "task-run-review-rejected",
           workflowId: "workflow-id",
@@ -531,7 +529,6 @@ describe("WorkflowRuntimeRepository", () => {
           itemIndex: 0,
           nodeExecutionId: "node-execution-rejected",
           ownerUserId: "owner-user",
-          reservedCredits: 9,
           runtimeStatus: "QUEUED",
           taskRunId: "task-run-review-regenerated",
           workflowId: "workflow-id",
@@ -556,7 +553,7 @@ describe("WorkflowRuntimeRepository", () => {
       runtimeStatus: "PENDING_REVIEW",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 9,
+      creditCost: 9,
       id: "child-reject-waits",
       nodeExecutionId: "node-execution-child-reject-waits",
       runtimeStatus: "PENDING_REVIEW",
@@ -622,7 +619,7 @@ describe("WorkflowRuntimeRepository", () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 4 });
     await insertTaskRun(db, {
-      estimatedCreditCost: 9,
+      creditCost: 9,
       id: "child-reject-unfunded",
       nodeExecutionId: "node-execution-child-reject-unfunded",
       runtimeStatus: "PENDING_REVIEW",
@@ -659,9 +656,8 @@ describe("WorkflowRuntimeRepository", () => {
     assert.deepEqual(
       await getTaskRunCreditState(db, "child-reject-unfunded-next"),
       {
-        estimatedCreditCost: 9,
+        creditCost: 9,
         failureReason: "INSUFFICIENT_CREDITS",
-        reservedCredits: null,
         runtimeStatus: "FAILED",
       },
     );
@@ -694,7 +690,6 @@ describe("WorkflowRuntimeRepository", () => {
           itemIndex: 0,
           nodeExecutionId: "node-execution-task-run-reject-noop",
           ownerUserId: "owner-user",
-          reservedCredits: null,
           runtimeStatus: "APPROVED",
           taskRunId: "task-run-reject-noop",
           workflowId: "workflow-id",
@@ -718,7 +713,7 @@ describe("WorkflowRuntimeRepository", () => {
       runtimeStatus: "APPROVED",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 5,
+      creditCost: 5,
       id: "child-reject-ready",
       nodeExecutionId: "node-execution-child-reject-ready",
       runtimeStatus: "PENDING_REVIEW",
@@ -782,7 +777,6 @@ describe("WorkflowRuntimeRepository", () => {
             },
           ],
         },
-        reservedCredits: 5,
         runtimeStatus: "QUEUED",
       },
     );
@@ -792,7 +786,7 @@ describe("WorkflowRuntimeRepository", () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 70 });
     await insertTaskRun(db, {
-      estimatedCreditCost: 30,
+      creditCost: 30,
       id: "task-run-waiting-cancelled",
       runtimeStatus: "WAITING_UPSTREAM",
     });
@@ -834,9 +828,8 @@ describe("WorkflowRuntimeRepository", () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 70 });
     await insertTaskRun(db, {
-      estimatedCreditCost: 30,
+      creditCost: 30,
       id: "task-run-queued-cancelled",
-      reservedCredits: 30,
       runtimeStatus: "QUEUED",
     });
 
@@ -873,7 +866,6 @@ describe("WorkflowRuntimeRepository", () => {
     await insertUser(db, { creditBalance: 80 });
     await insertTaskRun(db, {
       id: "task-run-running-cancel-blocked",
-      reservedCredits: 20,
       runtimeStatus: "RUNNING",
     });
 
@@ -905,7 +897,6 @@ describe("WorkflowRuntimeRepository", () => {
     await insertUser(db, { creditBalance: 80 });
     await insertTaskRun(db, {
       id: "task-run-review-cancel-blocked",
-      reservedCredits: 20,
       runtimeStatus: "PENDING_REVIEW",
     });
 
@@ -965,7 +956,7 @@ describe("WorkflowRuntimeRepository", () => {
       attempt: 0,
       failureReason: { message: "provider timed out", type: "PROVIDER_FAILED" },
       failureSource: nonRefundableProviderFailureSource(),
-      finalCostCredits: 5,
+      providerCostCredits: 5,
       ownerUserId: "owner-user",
       taskRunId: "task-run-failed",
     });
@@ -989,7 +980,6 @@ describe("WorkflowRuntimeRepository", () => {
     });
     assert.deepEqual(await getTaskRunSettlement(db, "task-run-failed"), {
       assetIds: [],
-      costCredits: 5,
       failedAt: "set",
       failureReason: "PROVIDER_FAILED",
       finishedAtIsSet: false,
@@ -1001,9 +991,8 @@ describe("WorkflowRuntimeRepository", () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 50 });
     await insertTaskRun(db, {
-      estimatedCreditCost: 40,
+      creditCost: 40,
       id: "task-run-failed-billable",
-      reservedCredits: 40,
       runtimeStatus: "RUNNING",
     });
 
@@ -1018,10 +1007,6 @@ describe("WorkflowRuntimeRepository", () => {
       taskRunId: "task-run-failed-billable",
     });
 
-    assert.equal(
-      (await getTaskRunSettlement(db, "task-run-failed-billable")).costCredits,
-      0,
-    );
     assert.deepEqual(
       await repository.getCreditLedgerForUser({ ownerUserId: "owner-user" }),
       {
@@ -1035,9 +1020,8 @@ describe("WorkflowRuntimeRepository", () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 60 });
     await insertTaskRun(db, {
-      estimatedCreditCost: 30,
+      creditCost: 30,
       id: "task-run-refundable-failure",
-      reservedCredits: 30,
       runtimeStatus: "RUNNING",
     });
 
@@ -1079,9 +1063,8 @@ describe("WorkflowRuntimeRepository", () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 10 });
     await insertTaskRun(db, {
-      estimatedCreditCost: 20,
+      creditCost: 20,
       id: "task-run-post-provider-failed",
-      reservedCredits: 20,
       runtimeStatus: "RUNNING",
     });
 
@@ -1106,15 +1089,14 @@ describe("WorkflowRuntimeRepository", () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 60 });
     await insertTaskRun(db, {
-      estimatedCreditCost: 30,
+      creditCost: 30,
       id: "task-run-no-overage",
-      reservedCredits: 30,
       runtimeStatus: "RUNNING",
     });
 
     await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 30,
+      providerCostCredits: 30,
       generatedAsset: textGeneratedAsset("asset-no-overage", "no overage"),
       ownerUserId: "owner-user",
       reviewRequired: false,
@@ -1131,21 +1113,19 @@ describe("WorkflowRuntimeRepository", () => {
     const repository = createWorkflowRuntimeRepository(db);
     await insertUser(db, { creditBalance: 5 });
     await insertTaskRun(db, {
-      estimatedCreditCost: 20,
+      creditCost: 20,
       id: "task-run-overage-rounded",
-      reservedCredits: 20,
       runtimeStatus: "RUNNING",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 10,
+      creditCost: 10,
       id: "task-run-overage-capped",
-      reservedCredits: 10,
       runtimeStatus: "RUNNING",
     });
 
     await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 22,
+      providerCostCredits: 22,
       generatedAsset: textGeneratedAsset("asset-overage-rounded", "overage"),
       ownerUserId: "owner-user",
       reviewRequired: false,
@@ -1153,7 +1133,7 @@ describe("WorkflowRuntimeRepository", () => {
     });
     await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 20,
+      providerCostCredits: 20,
       generatedAsset: textGeneratedAsset("asset-overage-capped", "capped"),
       ownerUserId: "owner-user",
       reviewRequired: false,
@@ -1161,7 +1141,7 @@ describe("WorkflowRuntimeRepository", () => {
     });
     await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 20,
+      providerCostCredits: 20,
       generatedAsset: textGeneratedAsset(
         "asset-overage-capped-duplicate",
         "duplicate",
@@ -1204,7 +1184,7 @@ describe("WorkflowRuntimeRepository", () => {
     assert.deepEqual(
       await repository.settleTaskRunCompletion({
         attempt: 0,
-        finalCostCredits: 3,
+        providerCostCredits: 3,
         generatedAsset: textGeneratedAsset("asset-wrong-attempt", "ignored"),
         ownerUserId: "owner-user",
         reviewRequired: false,
@@ -1242,7 +1222,7 @@ describe("WorkflowRuntimeRepository", () => {
 
     await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 11,
+      providerCostCredits: 11,
       generatedAsset: textGeneratedAsset("asset-duplicate", "first"),
       ownerUserId: "owner-user",
       reviewRequired: false,
@@ -1250,7 +1230,7 @@ describe("WorkflowRuntimeRepository", () => {
     });
     const duplicate = await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 11,
+      providerCostCredits: 11,
       generatedAsset: textGeneratedAsset("asset-duplicate-second", "second"),
       ownerUserId: "owner-user",
       reviewRequired: false,
@@ -1321,7 +1301,7 @@ describe("WorkflowRuntimeRepository", () => {
       runtimeStatus: "APPROVED",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 30,
+      creditCost: 30,
       id: "child-ready",
       nodeExecutionId: "node-execution-child-ready",
       runtimeStatus: "WAITING_UPSTREAM",
@@ -1395,7 +1375,6 @@ describe("WorkflowRuntimeRepository", () => {
           },
         ],
       },
-      reservedCredits: 30,
       runtimeStatus: "QUEUED",
     });
     assert.equal(await getUserCreditBalance(db, "owner-user"), 70);
@@ -1425,7 +1404,7 @@ describe("WorkflowRuntimeRepository", () => {
       taskRunId: "parent-approved-asset",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 10,
+      creditCost: 10,
       id: "child-ready-asset",
       inputSnapshot: inputSnapshot("child-ready-asset", 0, {
         nodeExecutionId: "node-execution-child-ready-asset",
@@ -1526,7 +1505,7 @@ describe("WorkflowRuntimeRepository", () => {
       taskRunId: "parent-approved-parallel-slot",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 10,
+      creditCost: 10,
       id: "child-waiting-parallel-slot",
       inputSnapshot: inputSnapshot("child-waiting-parallel-slot", 0, {
         nodeExecutionId: "node-execution-parallel-child",
@@ -1577,7 +1556,7 @@ describe("WorkflowRuntimeRepository", () => {
       runtimeStatus: "PENDING_REVIEW",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 10,
+      creditCost: 10,
       id: "child-review-blocked",
       nodeExecutionId: "node-execution-child-review-blocked",
       runtimeStatus: "WAITING_UPSTREAM",
@@ -1609,13 +1588,13 @@ describe("WorkflowRuntimeRepository", () => {
       runtimeStatus: "APPROVED",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 20,
+      creditCost: 20,
       id: "child-unfunded",
       nodeExecutionId: "node-execution-child-unfunded",
       runtimeStatus: "WAITING_UPSTREAM",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 1,
+      creditCost: 1,
       id: "grandchild-cascaded",
       nodeExecutionId: "node-execution-grandchild-cascaded",
       runtimeStatus: "WAITING_UPSTREAM",
@@ -1663,10 +1642,6 @@ describe("WorkflowRuntimeRepository", () => {
       ),
     );
     assert.equal(
-      (await getWakeUpTaskRunState(db, "child-unfunded")).reservedCredits,
-      null,
-    );
-    assert.equal(
       (await getWakeUpTaskRunState(db, "grandchild-cascaded")).runtimeStatus,
       "UPSTREAM_FAILED",
     );
@@ -1683,7 +1658,7 @@ describe("WorkflowRuntimeRepository", () => {
       runtimeStatus: "APPROVED",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 12,
+      creditCost: 12,
       id: "child-duplicate-wake",
       nodeExecutionId: "node-execution-child-duplicate-wake",
       runtimeStatus: "WAITING_UPSTREAM",
@@ -1716,10 +1691,9 @@ describe("WorkflowRuntimeRepository", () => {
       runtimeStatus: "APPROVED",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 12,
+      creditCost: 12,
       id: "child-stale-wake",
       nodeExecutionId: "node-execution-child-stale-wake",
-      reservedCredits: 12,
       runtimeStatus: "QUEUED",
     });
     await insertTaskDependency(db, {
@@ -1770,7 +1744,7 @@ describe("WorkflowRuntimeRepository", () => {
       text: "latest approved text",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 7,
+      creditCost: 7,
       id: "child-stale-approved-wake",
       nodeExecutionId: "node-execution-child-stale-approved-wake",
       runtimeStatus: "WAITING_UPSTREAM",
@@ -1867,7 +1841,6 @@ describe("WorkflowRuntimeRepository", () => {
             },
           ],
         },
-        reservedCredits: 7,
         runtimeStatus: "QUEUED",
       },
     );
@@ -1922,7 +1895,6 @@ describe("WorkflowRuntimeRepository", () => {
         inputSnapshot: inputSnapshot("child-stale-failed-wake", 0, {
           nodeExecutionId: "node-execution-child-stale-failed-wake",
         }),
-        reservedCredits: null,
         runtimeStatus: "UPSTREAM_FAILED",
       },
     );
@@ -1945,7 +1917,7 @@ describe("WorkflowRuntimeRepository", () => {
       runtimeStatus: "APPROVED",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 1,
+      creditCost: 1,
       id: "child-resolution",
       nodeExecutionId: "node-execution-child-resolution",
       runtimeStatus: "WAITING_UPSTREAM",
@@ -2043,7 +2015,7 @@ describe("WorkflowRuntimeRepository", () => {
       }),
     );
     await insertTaskRun(db, {
-      estimatedCreditCost: 1,
+      creditCost: 1,
       id: "child-waiting-for-regeneration",
       inputSnapshot: inputSnapshot("child-waiting-for-regeneration", 0, {
         nodeExecutionId: "node-execution-child-waiting-regeneration",
@@ -2172,7 +2144,6 @@ describe("WorkflowRuntimeRepository", () => {
             },
           ],
         },
-        reservedCredits: 1,
         runtimeStatus: "QUEUED",
       },
     );
@@ -2267,7 +2238,6 @@ describe("WorkflowRuntimeRepository", () => {
           itemIndex: 0,
           nodeExecutionId: "node-execution-source",
           ownerUserId: "owner-user",
-          reservedCredits: 0,
           runtimeStatus: "QUEUED",
           taskRunId: "task-run-source-0",
           workflowId: "workflow-id",
@@ -2282,7 +2252,6 @@ describe("WorkflowRuntimeRepository", () => {
           itemIndex: 1,
           nodeExecutionId: "node-execution-source",
           ownerUserId: "owner-user",
-          reservedCredits: 0,
           runtimeStatus: "QUEUED",
           taskRunId: "task-run-source-1",
           workflowId: "workflow-id",
@@ -2398,7 +2367,6 @@ describe("WorkflowRuntimeRepository", () => {
           itemIndex: 0,
           nodeExecutionId: "node-execution-regenerate-existing",
           ownerUserId: "owner-user",
-          reservedCredits: null,
           runtimeStatus: "APPROVED",
           taskRunId: "task-run-historical",
           workflowId: "workflow-id",
@@ -2409,7 +2377,6 @@ describe("WorkflowRuntimeRepository", () => {
           itemIndex: 0,
           nodeExecutionId: "node-execution-regenerate-existing",
           ownerUserId: "owner-user",
-          reservedCredits: 0,
           runtimeStatus: "QUEUED",
           taskRunId: "task-run-regenerated",
           workflowId: "workflow-id",
@@ -2535,9 +2502,8 @@ describe("WorkflowRuntimeRepository", () => {
       },
     ]);
     assert.deepEqual(await getTaskRunCreditState(db, "task-run-list"), {
-      estimatedCreditCost: 0,
+      creditCost: 0,
       failureReason: "EXECUTION_FAILED",
-      reservedCredits: null,
       runtimeStatus: "FAILED",
     });
   });
@@ -2584,9 +2550,8 @@ describe("WorkflowRuntimeRepository", () => {
     assert.deepEqual(
       await getTaskRunCreditState(db, "task-run-funded-source"),
       {
-        estimatedCreditCost: 12,
+        creditCost: 12,
         failureReason: null,
-        reservedCredits: 12,
         runtimeStatus: "QUEUED",
       },
     );
@@ -2654,9 +2619,8 @@ describe("WorkflowRuntimeRepository", () => {
     assert.deepEqual(
       await getTaskRunCreditState(db, "task-run-unfunded-source"),
       {
-        estimatedCreditCost: 9,
+        creditCost: 9,
         failureReason: "INSUFFICIENT_CREDITS",
-        reservedCredits: null,
         runtimeStatus: "FAILED",
       },
     );
@@ -2793,7 +2757,6 @@ describe("WorkflowRuntimeRepository", () => {
           itemIndex: 0,
           nodeExecutionId: "node-execution-child-commit-ready",
           ownerUserId: "owner-user",
-          reservedCredits: 0,
           runtimeStatus: "QUEUED",
           taskRunId: "task-run-child-commit-ready",
           workflowId: "workflow-id",
@@ -2959,7 +2922,6 @@ describe("WorkflowRuntimeRepository", () => {
           itemIndex: 0,
           nodeExecutionId: "node-execution-child",
           ownerUserId: "owner-user",
-          reservedCredits: null,
           runtimeStatus: "WAITING_UPSTREAM",
           taskRunId: "task-run-child-0",
           workflowId: "workflow-id",
@@ -2967,9 +2929,8 @@ describe("WorkflowRuntimeRepository", () => {
       ],
     );
     assert.deepEqual(await getTaskRunCreditState(db, "task-run-child-0"), {
-      estimatedCreditCost: 7,
+      creditCost: 7,
       failureReason: null,
-      reservedCredits: null,
       runtimeStatus: "WAITING_UPSTREAM",
     });
   });
@@ -3040,7 +3001,6 @@ describe("WorkflowRuntimeRepository", () => {
           itemIndex: 0,
           nodeExecutionId: "node-execution-waiting-frozen",
           ownerUserId: "owner-user",
-          reservedCredits: null,
           runtimeStatus: "WAITING_UPSTREAM",
           taskRunId: "task-run-waiting-frozen",
           workflowId: "workflow-id",
@@ -3261,11 +3221,9 @@ async function setupRuntimeTables(db: PgliteDatabase): Promise<void> {
       target_reason text not null,
       asset_ids jsonb not null default '[]'::jsonb,
       input_snapshot jsonb,
-      estimated_credit_cost bigint,
-      reserved_credits bigint,
+      credit_cost bigint not null,
       failure_reason task_run_failure_reason,
       error text,
-      cost_credits bigint not null default 0,
       created_at timestamp not null default now(),
       updated_at timestamp not null default now(),
       queued_at timestamp,
@@ -3332,21 +3290,19 @@ async function resetRuntimeTables(db: PgliteDatabase): Promise<void> {
 }
 
 type InsertTaskRunInput = {
-  readonly costCredits?: number;
   readonly id: string;
   readonly attempt?: number;
-  readonly estimatedCreditCost?: number;
+  readonly creditCost?: number;
   readonly inputSnapshot?: TaskRunInputSnapshot;
   readonly nodeId?: string;
   readonly nodeExecutionId?: string;
   readonly ownerUserId?: string;
-  readonly reservedCredits?: number;
   readonly runtimeStatus: TaskRunStatus;
   readonly updatedAt?: string;
 };
 
 function gatekeeperTaskRunRow(input: {
-  readonly estimatedCreditCost?: number;
+  readonly creditCost?: number;
   readonly id: string;
   readonly inputSnapshot?: TaskRunInputSnapshot;
   readonly nodeExecutionId: string;
@@ -3355,14 +3311,13 @@ function gatekeeperTaskRunRow(input: {
   return {
     attempt: 0,
     error: null,
-    estimatedCreditCost: input.estimatedCreditCost ?? 0,
+    creditCost: input.creditCost ?? 0,
     failureReason: null,
     inputSnapshot: input.inputSnapshot ?? null,
     itemIndex: 0,
     nodeExecutionId: input.nodeExecutionId,
     nodeId: "node-id",
     ownerUserId: "owner-user",
-    reservedCredits: null,
     status: input.status,
     taskRunId: input.id,
     workflowId: "workflow-id",
@@ -3404,9 +3359,7 @@ async function insertTaskRun(
       runtime_status,
       target_reason,
       input_snapshot,
-      estimated_credit_cost,
-      reserved_credits,
-      cost_credits,
+      credit_cost,
       queued_at,
       updated_at
     ) values (
@@ -3425,9 +3378,7 @@ async function insertTaskRun(
       ${input.runtimeStatus},
       'node_run',
       ${snapshot},
-      ${input.estimatedCreditCost ?? 0},
-      ${input.reservedCredits ?? null},
-      ${input.costCredits ?? 0},
+      ${input.creditCost ?? 0},
       now(),
       ${updatedAt}
     )
@@ -3688,7 +3639,6 @@ async function getTaskRunSettlement(db: PgliteDatabase, taskRunId: string) {
   const result = await db.execute(sql`
     select
       asset_ids as "assetIds",
-      cost_credits as "costCredits",
       failed_at as "failedAt",
       failure_reason as "failureReason",
       finished_at as "finishedAt",
@@ -3701,7 +3651,6 @@ async function getTaskRunSettlement(db: PgliteDatabase, taskRunId: string) {
 
   return {
     assetIds: row.assetIds,
-    costCredits: Number(row.costCredits),
     failedAt: row.failedAt === null ? null : "set",
     failureReason: row.failureReason,
     finishedAtIsSet: row.finishedAt !== null,
@@ -3715,14 +3664,12 @@ async function getWakeUpTaskRunState(
 ): Promise<{
   readonly error: unknown;
   readonly inputSnapshot: unknown;
-  readonly reservedCredits: number | null;
   readonly runtimeStatus: unknown;
 }> {
   const result = await db.execute(sql`
     select
       error,
       input_snapshot as "inputSnapshot",
-      reserved_credits as "reservedCredits",
       runtime_status as "runtimeStatus"
     from task_runs
     where id = ${taskRunId}
@@ -3733,8 +3680,6 @@ async function getWakeUpTaskRunState(
   return {
     error: row.error,
     inputSnapshot: row.inputSnapshot,
-    reservedCredits:
-      row.reservedCredits === null ? null : Number(row.reservedCredits),
     runtimeStatus: row.runtimeStatus,
   };
 }
@@ -3768,16 +3713,14 @@ async function getTaskRunCreditState(
   db: PgliteDatabase,
   taskRunId: string,
 ): Promise<{
-  readonly estimatedCreditCost: number | null;
+  readonly creditCost: number | null;
   readonly failureReason: unknown;
-  readonly reservedCredits: number | null;
   readonly runtimeStatus: unknown;
 }> {
   const result = await db.execute(sql`
     select
-      estimated_credit_cost as "estimatedCreditCost",
+      credit_cost as "creditCost",
       failure_reason as "failureReason",
-      reserved_credits as "reservedCredits",
       runtime_status as "runtimeStatus"
     from task_runs
     where id = ${taskRunId}
@@ -3786,11 +3729,8 @@ async function getTaskRunCreditState(
   assert.ok(row);
 
   return {
-    estimatedCreditCost:
-      row.estimatedCreditCost === null ? null : Number(row.estimatedCreditCost),
+    creditCost: row.creditCost === null ? null : Number(row.creditCost),
     failureReason: row.failureReason,
-    reservedCredits:
-      row.reservedCredits === null ? null : Number(row.reservedCredits),
     runtimeStatus: row.runtimeStatus,
   };
 }

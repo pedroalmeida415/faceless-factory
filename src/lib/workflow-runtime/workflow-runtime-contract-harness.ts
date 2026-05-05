@@ -405,7 +405,7 @@ export async function setupRuntimeContractTables(db: PgliteDatabase) {
     sql`create table node_executions (id text primary key, workflow_id text not null, owner_user_id text not null, node_id text not null, execution_id text not null, document_revision bigint, status text not null, output_count bigint not null, target_reason text not null, created_at timestamp not null default now(), dispatched_at timestamp, updated_at timestamp not null default now())`,
   );
   await db.execute(
-    sql`create table task_runs (id text primary key, node_execution_id text not null, workflow_id text not null, owner_user_id text not null, node_id text not null, output_index bigint not null, version bigint not null, item_index bigint, attempt bigint, execution_id text not null, job_id text not null, status text not null, runtime_status task_run_runtime_status, target_reason text not null, asset_ids jsonb not null default '[]'::jsonb, input_snapshot jsonb, estimated_credit_cost bigint, reserved_credits bigint, failure_reason task_run_failure_reason, error text, cost_credits bigint not null default 0, created_at timestamp not null default now(), updated_at timestamp not null default now(), queued_at timestamp, started_at timestamp, finished_at timestamp, failed_at timestamp)`,
+    sql`create table task_runs (id text primary key, node_execution_id text not null, workflow_id text not null, owner_user_id text not null, node_id text not null, output_index bigint not null, version bigint not null, item_index bigint, attempt bigint, execution_id text not null, job_id text not null, status text not null, runtime_status task_run_runtime_status, target_reason text not null, asset_ids jsonb not null default '[]'::jsonb, input_snapshot jsonb, credit_cost bigint not null, failure_reason task_run_failure_reason, error text, created_at timestamp not null default now(), updated_at timestamp not null default now(), queued_at timestamp, started_at timestamp, finished_at timestamp, failed_at timestamp)`,
   );
   await db.execute(
     sql`create unique index task_runs_runtime_active_slot_unique on task_runs (node_execution_id, item_index) where runtime_status in ('WAITING_UPSTREAM','QUEUED','RUNNING','PENDING_REVIEW')`,
@@ -469,7 +469,7 @@ export async function insertTaskRun(
   db: PgliteDatabase,
   input: {
     readonly attempt?: number;
-    readonly estimatedCreditCost?: number;
+    readonly creditCost?: number;
     readonly failureReason?: "INSUFFICIENT_CREDITS" | "PROVIDER_FAILED";
     readonly id: string;
     readonly inputSnapshot?: TaskRunInputSnapshot;
@@ -477,7 +477,6 @@ export async function insertTaskRun(
     readonly nodeExecutionId?: string;
     readonly nodeId?: string;
     readonly ownerUserId?: string;
-    readonly reservedCredits?: number;
     readonly runtimeStatus: TaskRunStatus;
   },
 ) {
@@ -491,8 +490,8 @@ export async function insertTaskRun(
     ownerUserId: input.ownerUserId,
   });
   await db.execute(sql`
-    insert into task_runs (id, node_execution_id, workflow_id, owner_user_id, node_id, output_index, version, item_index, attempt, execution_id, job_id, status, runtime_status, target_reason, input_snapshot, estimated_credit_cost, reserved_credits, failure_reason, queued_at)
-    values (${input.id}, ${nodeExecutionId}, 'workflow-id', ${input.ownerUserId ?? "owner-user"}, ${nodeId}, 0, ${attempt}, ${input.itemIndex ?? 0}, ${attempt}, 'legacy-execution-id', ${`legacy-job-${input.id}`}, 'queued', ${input.runtimeStatus}, 'node_run', ${input.inputSnapshot ?? executableSnapshot({ prompt: "", taskRunId: input.id })}, ${input.estimatedCreditCost ?? 0}, ${input.reservedCredits ?? null}, ${input.failureReason ?? null}, now())
+    insert into task_runs (id, node_execution_id, workflow_id, owner_user_id, node_id, output_index, version, item_index, attempt, execution_id, job_id, status, runtime_status, target_reason, input_snapshot, credit_cost, failure_reason, queued_at)
+    values (${input.id}, ${nodeExecutionId}, 'workflow-id', ${input.ownerUserId ?? "owner-user"}, ${nodeId}, 0, ${attempt}, ${input.itemIndex ?? 0}, ${attempt}, 'legacy-execution-id', ${`legacy-job-${input.id}`}, 'queued', ${input.runtimeStatus}, 'node_run', ${input.inputSnapshot ?? executableSnapshot({ prompt: "", taskRunId: input.id })}, ${input.creditCost ?? 0}, ${input.failureReason ?? null}, now())
   `);
 }
 
@@ -621,16 +620,13 @@ export async function getTaskRunCreditState(
   taskRunId: string,
 ) {
   const result = await db.execute(
-    sql`select estimated_credit_cost as "estimatedCreditCost", failure_reason as "failureReason", reserved_credits as "reservedCredits", runtime_status as "runtimeStatus" from task_runs where id = ${taskRunId}`,
+    sql`select credit_cost as "creditCost", failure_reason as "failureReason", runtime_status as "runtimeStatus" from task_runs where id = ${taskRunId}`,
   );
   const row = result.rows[0];
   assert.ok(row);
   return {
-    estimatedCreditCost:
-      row.estimatedCreditCost === null ? null : Number(row.estimatedCreditCost),
+    creditCost: row.creditCost === null ? null : Number(row.creditCost),
     failureReason: row.failureReason,
-    reservedCredits:
-      row.reservedCredits === null ? null : Number(row.reservedCredits),
     runtimeStatus: row.runtimeStatus,
   };
 }

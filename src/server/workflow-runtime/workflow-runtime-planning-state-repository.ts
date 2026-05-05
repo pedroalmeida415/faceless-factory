@@ -54,7 +54,7 @@ export async function getPlanningStateForWorkflow(
       )
       select distinct on (task_runs.node_execution_id, task_runs.item_index)
         task_runs.id,
-        coalesce(task_runs.estimated_credit_cost, 0) as "creditCost",
+        task_runs.credit_cost as "creditCost",
         task_runs.node_execution_id as "nodeExecutionId",
         task_runs.node_id as "nodeId",
         task_runs.item_index as "itemIndex",

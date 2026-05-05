@@ -272,15 +272,11 @@ export const taskRuns = pgTable(
     inputSnapshot: jsonb("input_snapshot"),
     reviewStatus: text("review_status").$type<WorkflowOutputReviewStatus>(),
     error: text("error"),
-    estimatedCreditCost: bigint("estimated_credit_cost", { mode: "number" }),
-    reservedCredits: bigint("reserved_credits", { mode: "number" }),
+    creditCost: bigint("credit_cost", { mode: "number" }).notNull(),
     failureReason:
       taskRunFailureReasonEnum(
         "failure_reason",
       ).$type<TaskRunFailureReasonType>(),
-    costCredits: bigint("cost_credits", { mode: "number" })
-      .default(0)
-      .notNull(),
     documentRevision: bigint("document_revision", { mode: "number" }),
     queuedAt: timestamp("queued_at"),
     startedAt: timestamp("started_at"),

@@ -56,7 +56,7 @@ export type WorkflowRuntimeGeneratedPrimaryAssetPayload =
 
 export type WorkflowRuntimeCompletionSettlementJobPayload = {
   readonly attempt: number;
-  readonly finalCostCredits: number;
+  readonly providerCostCredits: number;
   readonly generatedAsset: WorkflowRuntimeGeneratedPrimaryAssetPayload;
   readonly jobId: string;
   readonly ownerUserId: string;
@@ -72,7 +72,7 @@ export type WorkflowRuntimeFailureSettlementJobPayload = {
     { readonly type: "UPSTREAM_FAILED" }
   >;
   readonly failureSource: TaskRunSettlementFailureSource;
-  readonly finalCostCredits?: number;
+  readonly providerCostCredits?: number;
   readonly jobId: string;
   readonly ownerUserId: string;
   readonly taskRunId: string;
@@ -125,7 +125,7 @@ export function buildWorkflowRuntimeFailureSettlementJobPayload(
       kind: "failure",
       taskRunId: input.taskRunId,
     }),
-    ...(input.finalCostCredits === undefined
+    ...(input.providerCostCredits === undefined
       ? {
           attempt: input.attempt,
           failureReason: input.failureReason,

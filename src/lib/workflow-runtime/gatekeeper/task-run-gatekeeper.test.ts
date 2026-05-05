@@ -26,7 +26,7 @@ describe("TaskRunGatekeeper", () => {
       status: "APPROVED",
     });
     const child = taskRun({
-      estimatedCreditCost: 30,
+      creditCost: 30,
       id: "child-task-run",
       nodeExecutionId: "child-node",
       status: "WAITING_UPSTREAM",
@@ -43,7 +43,7 @@ describe("TaskRunGatekeeper", () => {
     const queuedChild = requireTaskRun(result.state, child.id);
 
     assert.equal(queuedChild.status, "QUEUED");
-    assert.equal(queuedChild.reservedCredits, 30);
+    assert.equal(queuedChild.creditCost, 30);
     assert.equal(result.state.creditBalance, 100);
     assert.deepEqual(
       result.state.dependencies.map(
@@ -552,7 +552,7 @@ describe("TaskRunGatekeeper", () => {
       status: "APPROVED",
     });
     const child = taskRun({
-      estimatedCreditCost: 50,
+      creditCost: 50,
       id: "expensive-child",
       nodeExecutionId: "child-node",
       status: "WAITING_UPSTREAM",
@@ -573,7 +573,7 @@ describe("TaskRunGatekeeper", () => {
     });
 
     assert.equal(requireTaskRun(result.state, child.id).status, "QUEUED");
-    assert.equal(requireTaskRun(result.state, child.id).reservedCredits, 50);
+    assert.equal(requireTaskRun(result.state, child.id).creditCost, 50);
     assert.equal(result.state.creditBalance, 10);
     assert.equal(
       requireTaskRun(result.state, grandchild.id).status,
@@ -611,7 +611,7 @@ function taskRun(
   const targetNodeConfig = llmGeneratorNode(`node-${overrides.id}`);
   return {
     attempt: 0,
-    estimatedCreditCost: 1,
+    creditCost: 1,
     inputSnapshot: buildTaskRunInputSnapshot({
       attempt: 0,
       itemIndex: 0,

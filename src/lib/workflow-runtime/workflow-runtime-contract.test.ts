@@ -465,9 +465,8 @@ describe("Workflow runtime state-machine contract", () => {
     ]);
     assert.equal(await getUserCreditBalance(db, "owner-user"), 90);
     assert.deepEqual(await getTaskRunCreditState(db, "runtime-task-run-2"), {
-      estimatedCreditCost: 40,
+      creditCost: 40,
       failureReason: null,
-      reservedCredits: null,
       runtimeStatus: "WAITING_UPSTREAM",
     });
     await assertRuntimeInvariants(db);
@@ -487,7 +486,7 @@ describe("Workflow runtime state-machine contract", () => {
 
     const pendingReview = await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 6,
+      providerCostCredits: 6,
       generatedAsset: generatedImageAsset("image-asset-pending"),
       ownerUserId: "owner-user",
       reviewRequired: true,
@@ -550,9 +549,8 @@ describe("Workflow runtime state-machine contract", () => {
     assertNoColonJobIds(wake.executionJobs);
     assert.equal(await getUserCreditBalance(db, "owner-user"), 50);
     assert.deepEqual(await getTaskRunCreditState(db, "runtime-task-run-2"), {
-      estimatedCreditCost: 40,
+      creditCost: 40,
       failureReason: null,
-      reservedCredits: 40,
       runtimeStatus: "QUEUED",
     });
     const duplicateWake = await repository.wakeUpTaskRunChildren({
@@ -594,7 +592,7 @@ describe("Workflow runtime state-machine contract", () => {
     await insertUser(db, { creditBalance: 60 });
     await insertTaskRun(db, {
       attempt: 0,
-      estimatedCreditCost: 5,
+      creditCost: 5,
       id: "review-attempt-0",
       nodeExecutionId: "node-execution-review",
       runtimeStatus: "PENDING_REVIEW",
@@ -670,7 +668,7 @@ describe("Workflow runtime state-machine contract", () => {
 
     await insertUser(db, { creditBalance: 3, id: "low-credit-user" });
     await insertTaskRun(db, {
-      estimatedCreditCost: 10,
+      creditCost: 10,
       id: "unfunded-parent",
       nodeExecutionId: "node-execution-unfunded-parent",
       ownerUserId: "low-credit-user",
@@ -809,7 +807,7 @@ describe("Workflow runtime state-machine contract", () => {
       }),
       buildWorkflowRuntimeCompletionSettlementJobPayload({
         attempt: 2,
-        finalCostCredits: 1,
+        providerCostCredits: 1,
         generatedAsset: generatedTextAsset("asset-queue", "done"),
         ownerUserId: "owner-user",
         reviewRequired: false,
@@ -993,7 +991,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
 
     const result = await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 4,
+      providerCostCredits: 4,
       generatedAsset: generatedTextAsset(
         "asset-review-disabled",
         "approved text",
@@ -1060,24 +1058,21 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
     });
     await insertUser(db, { creditBalance: 100 });
     await insertTaskRun(db, {
-      estimatedCreditCost: 12,
+      creditCost: 12,
       id: "cancel-command-waiting",
       runtimeStatus: "WAITING_UPSTREAM",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 12,
+      creditCost: 12,
       id: "cancel-command-queued",
-      reservedCredits: 12,
       runtimeStatus: "QUEUED",
     });
     await insertTaskRun(db, {
       id: "cancel-command-running",
-      reservedCredits: 12,
       runtimeStatus: "RUNNING",
     });
     await insertTaskRun(db, {
       id: "cancel-command-review",
-      reservedCredits: 12,
       runtimeStatus: "PENDING_REVIEW",
     });
     for (const status of [
@@ -1187,16 +1182,14 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
     assert.deepEqual(
       await getTaskRunCreditState(db, "cancel-command-waiting"),
       {
-        estimatedCreditCost: 12,
+        creditCost: 12,
         failureReason: null,
-        reservedCredits: null,
         runtimeStatus: "CANCELLED",
       },
     );
     assert.deepEqual(await getTaskRunCreditState(db, "cancel-command-queued"), {
-      estimatedCreditCost: 12,
+      creditCost: 12,
       failureReason: null,
-      reservedCredits: 12,
       runtimeStatus: "CANCELLED",
     });
     assert.equal(
@@ -1220,13 +1213,13 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
       runtimeStatus: "APPROVED",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 20,
+      creditCost: 20,
       id: "unfunded-child",
       nodeExecutionId: "node-execution-unfunded-child",
       runtimeStatus: "WAITING_UPSTREAM",
     });
     await insertTaskRun(db, {
-      estimatedCreditCost: 1,
+      creditCost: 1,
       id: "unfunded-grandchild",
       nodeExecutionId: "node-execution-unfunded-grandchild",
       runtimeStatus: "WAITING_UPSTREAM",
@@ -1241,8 +1234,8 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
     });
 
     assert.equal(
-      (await getTaskRunCreditState(db, "unfunded-child")).reservedCredits,
-      null,
+      (await getTaskRunCreditState(db, "unfunded-child")).creditCost,
+      20,
     );
     const result = await repository.wakeUpTaskRunChildren({
       ownerUserId: "owner-user",
@@ -1267,9 +1260,8 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
       },
     ]);
     assert.deepEqual(await getTaskRunCreditState(db, "unfunded-child"), {
-      estimatedCreditCost: 20,
+      creditCost: 20,
       failureReason: "INSUFFICIENT_CREDITS",
-      reservedCredits: null,
       runtimeStatus: "FAILED",
     });
     assert.equal(
@@ -1609,7 +1601,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
 
     const text = await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 0,
+      providerCostCredits: 0,
       generatedAsset: generatedTextAsset("asset-generated-text", "render me"),
       ownerUserId: "owner-user",
       reviewRequired: false,
@@ -1617,7 +1609,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
     });
     const image = await repository.settleTaskRunCompletion({
       attempt: 0,
-      finalCostCredits: 0,
+      providerCostCredits: 0,
       generatedAsset: generatedImageAsset("asset-generated-image"),
       ownerUserId: "owner-user",
       reviewRequired: false,

@@ -25,11 +25,10 @@ export type TaskRunGatekeeperTaskRun = {
   readonly itemIndex: number;
   readonly attempt: number;
   readonly status: TaskRunStatus;
-  readonly estimatedCreditCost: number;
+  readonly creditCost: number;
   readonly targetNodeConfig?: WorkflowDefinitionDocumentNode;
   readonly asset?: WorkflowAsset;
   readonly output?: RenderableTaskOutput;
-  readonly reservedCredits?: number;
   readonly failureReason?: TaskRunFailureReason;
   readonly inputSnapshot?: TaskRunInputSnapshot;
 };
@@ -181,7 +180,6 @@ function runGatekeeper(
       const queuedChild = {
         ...child,
         inputSnapshot: executableInputSnapshot,
-        reservedCredits: child.estimatedCreditCost,
         status: "QUEUED",
       } satisfies TaskRunGatekeeperTaskRun;
 

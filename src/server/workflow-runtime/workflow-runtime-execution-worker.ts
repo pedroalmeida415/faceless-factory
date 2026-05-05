@@ -28,7 +28,7 @@ export type ClaimQueuedTaskRunForExecutionResult =
   | { readonly claimed: false };
 
 export type ProviderExecutionCompletion = {
-  readonly finalCostCredits: number;
+  readonly providerCostCredits: number;
   readonly generatedAsset: WorkflowRuntimeGeneratedPrimaryAssetPayload;
   readonly reviewRequired: boolean;
 };
@@ -39,7 +39,7 @@ export type ProviderExecutionFailure = {
     { readonly type: "UPSTREAM_FAILED" }
   >;
   readonly failureSource: TaskRunSettlementFailureSource;
-  readonly finalCostCredits?: number;
+  readonly providerCostCredits?: number;
 };
 
 export type ProviderExecutionResult =
@@ -137,7 +137,7 @@ export function createWorkflowRuntimeExecutionWorker(input: {
           attempt: job.attempt,
           failureReason: providerResult.error.failureReason,
           failureSource: providerResult.error.failureSource,
-          finalCostCredits: providerResult.error.finalCostCredits,
+          providerCostCredits: providerResult.error.providerCostCredits,
           ownerUserId: job.ownerUserId,
           taskRunId: job.taskRunId,
           workflowId: job.workflowId,
@@ -149,7 +149,7 @@ export function createWorkflowRuntimeExecutionWorker(input: {
 
       const settlement = buildWorkflowRuntimeCompletionSettlementJobPayload({
         attempt: job.attempt,
-        finalCostCredits: providerResult.value.finalCostCredits,
+        providerCostCredits: providerResult.value.providerCostCredits,
         generatedAsset: providerResult.value.generatedAsset,
         ownerUserId: job.ownerUserId,
         reviewRequired: providerResult.value.reviewRequired,

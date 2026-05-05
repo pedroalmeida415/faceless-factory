@@ -64,7 +64,7 @@ type ClaimQueuedTaskRunResult =
 
 type SettleTaskRunCompletionCommand = {
   readonly attempt: number;
-  readonly finalCostCredits: number;
+  readonly providerCostCredits: number;
   readonly generatedAsset: WorkflowRuntimeGeneratedPrimaryAssetPayload;
   readonly ownerUserId: string;
   readonly reviewRequired: boolean;
@@ -78,7 +78,7 @@ type SettleTaskRunFailureCommand = {
     { readonly type: "UPSTREAM_FAILED" }
   >;
   readonly failureSource: TaskRunSettlementFailureSource;
-  readonly finalCostCredits?: number;
+  readonly providerCostCredits?: number;
   readonly ownerUserId: string;
   readonly taskRunId: string;
 };
@@ -174,7 +174,6 @@ type RuntimeTaskRunRow = {
   readonly itemIndex: number;
   readonly nodeExecutionId: string;
   readonly ownerUserId: string;
-  readonly reservedCredits: number | null;
   readonly runtimeStatus: string;
   readonly taskRunId: string;
   readonly workflowId: string;
@@ -357,8 +356,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               status,
               runtime_status,
               target_reason,
-              estimated_credit_cost,
-              reserved_credits,
+              credit_cost,
               failure_reason,
               input_snapshot,
               queued_at,
@@ -381,7 +379,6 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               ${committedTaskRun.status},
               'node_run',
               ${creditCost},
-              ${hasDebitedCredits ? creditCost : null},
               ${committedTaskRun.failureReason ?? null},
               ${inputSnapshotJson(inputSnapshot)}::jsonb,
               ${hasDebitedCredits ? sql`now()` : sql`null`},
@@ -551,7 +548,6 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             set
               runtime_status = ${finalStatus},
               asset_ids = ${assetIdsJson}::jsonb,
-              cost_credits = ${command.finalCostCredits},
               finished_at = now(),
               updated_at = now()
             where id = ${command.taskRunId}
@@ -564,8 +560,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               workflow_id as "workflowId",
               owner_user_id as "ownerUserId",
               item_index as "itemIndex",
-              estimated_credit_cost as "estimatedCreditCost",
-              reserved_credits as "reservedCredits",
+              credit_cost as "creditCost",
               attempt
           `),
         );
@@ -592,8 +587,8 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
         });
         await adjustTaskRunCostCredits(tx, {
           amount: taskRunCostAdjustmentCredits(
-            optionalNumber(row.estimatedCreditCost),
-            command.finalCostCredits,
+            requireNumber(row.creditCost),
+            command.providerCostCredits,
           ),
           ownerUserId: requireString(row.ownerUserId),
           taskRunId: requireString(row.taskRunId),
@@ -633,7 +628,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
           : null;
 
       return db.transaction(async (tx) => {
-        const finalCostCredits = command.finalCostCredits ?? 0;
+        const providerCostCredits = command.providerCostCredits ?? 0;
         const rows = rowsFromResult(
           await tx.execute(sql`
             update task_runs
@@ -641,7 +636,6 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               runtime_status = 'FAILED',
               failure_reason = ${command.failureReason.type},
               error = ${failureMessage},
-              cost_credits = ${finalCostCredits},
               failed_at = now(),
               updated_at = now()
             where id = ${command.taskRunId}
@@ -654,8 +648,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               workflow_id as "workflowId",
               owner_user_id as "ownerUserId",
               item_index as "itemIndex",
-              estimated_credit_cost as "estimatedCreditCost",
-              reserved_credits as "reservedCredits",
+              credit_cost as "creditCost",
               attempt
           `),
         );
@@ -667,7 +660,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
 
         if (command.failureSource.taskRunDebitRefundable) {
           await refundTaskRunCredits(tx, {
-            amount: optionalNumber(row.reservedCredits) ?? 0,
+            amount: requireNumber(row.creditCost),
             ownerUserId: requireString(row.ownerUserId),
             taskRunId: requireString(row.taskRunId),
             workflowId: requireString(row.workflowId),
@@ -675,8 +668,8 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
         } else {
           await adjustTaskRunCostCredits(tx, {
             amount: taskRunCostAdjustmentCredits(
-              optionalNumber(row.estimatedCreditCost),
-              finalCostCredits,
+              requireNumber(row.creditCost),
+              providerCostCredits,
             ),
             ownerUserId: requireString(row.ownerUserId),
             taskRunId: requireString(row.taskRunId),
@@ -770,7 +763,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               attempt,
               execution_id as "executionId",
               target_reason as "targetReason",
-              estimated_credit_cost as "creditCost",
+              credit_cost as "creditCost",
               input_snapshot as "inputSnapshot"
           `),
         );
@@ -844,8 +837,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             status,
             runtime_status,
             target_reason,
-            estimated_credit_cost,
-            reserved_credits,
+            credit_cost,
             failure_reason,
             input_snapshot,
             queued_at,
@@ -868,7 +860,6 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             ${newStatus},
             ${rejectedTaskRun.targetReason},
             ${rejectedTaskRun.creditCost},
-            ${hasDebitedCredits ? rejectedTaskRun.creditCost : null},
             ${failureReason},
             ${inputSnapshotJson(newStatus === "QUEUED" ? inputSnapshot : null)}::jsonb,
             ${newStatus === "QUEUED" ? sql`now()` : sql`null`},
@@ -992,7 +983,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
               task_runs.workflow_id as "workflowId",
               task_runs.owner_user_id as "ownerUserId",
               task_runs.item_index as "itemIndex",
-              task_runs.reserved_credits as "reservedCredits",
+              task_runs.credit_cost as "creditCost",
               cancellable."previousRuntimeStatus",
               task_runs.attempt
           `),
@@ -1008,7 +999,7 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
         const taskRunId = requireString(row.taskRunId);
         if (requireString(row.previousRuntimeStatus) === "QUEUED") {
           await refundTaskRunCredits(tx, {
-            amount: optionalNumber(row.reservedCredits) ?? 0,
+            amount: requireNumber(row.creditCost),
             ownerUserId: requireString(row.ownerUserId),
             taskRunId,
             workflowId: requireString(row.workflowId),
@@ -1089,7 +1080,6 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
             item_index as "itemIndex",
             attempt,
             runtime_status as "runtimeStatus",
-            reserved_credits as "reservedCredits",
             input_snapshot as "inputSnapshot"
           from task_runs
           where node_execution_id = ${command.nodeExecutionId}
@@ -1103,7 +1093,6 @@ export function createWorkflowRuntimeRepository(db: DbLike) {
         itemIndex: requireNumber(row.itemIndex),
         nodeExecutionId: requireString(row.nodeExecutionId),
         ownerUserId: requireString(row.ownerUserId),
-        reservedCredits: optionalNumber(row.reservedCredits),
         runtimeStatus: requireString(row.runtimeStatus),
         taskRunId: requireString(row.taskRunId),
         workflowId: requireString(row.workflowId),
@@ -1204,7 +1193,7 @@ function rejectedTaskRunFromRow(row: QueryRow): RejectedTaskRunRow {
   const inputSnapshot = requireTaskRunInputSnapshot(row.inputSnapshot);
   return {
     attempt: requireNumber(row.attempt),
-    creditCost: optionalNumber(row.creditCost) ?? 0,
+    creditCost: requireNumber(row.creditCost),
     executionId: requireString(row.executionId),
     itemIndex: requireNumber(row.itemIndex),
     nodeExecutionId: requireString(row.nodeExecutionId),
@@ -1684,10 +1673,10 @@ function workflowAssetFromRow(row: QueryRow): WorkflowAsset {
 }
 
 function taskRunCostAdjustmentCredits(
-  creditCost: number | null,
-  finalCostCredits: number,
+  creditCost: number,
+  providerCostCredits: number,
 ): number {
-  return Math.ceil(Math.max(finalCostCredits - (creditCost ?? 0), 0));
+  return Math.ceil(Math.max(providerCostCredits - creditCost, 0));
 }
 
 async function loadTaskRunRuntimeStatus(
@@ -1773,10 +1762,6 @@ function requireNumber(value: unknown): number {
   }
 
   throw new TypeError("Expected integer database number value");
-}
-
-function optionalNumber(value: unknown): number | null {
-  return value === null ? null : requireNumber(value);
 }
 
 function requireDate(value: unknown): Date {

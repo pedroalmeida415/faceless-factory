@@ -182,7 +182,7 @@ async function setupPlanningStateTables(db: PgliteDatabase) {
       node_id text not null,
       item_index bigint,
       attempt bigint,
-      estimated_credit_cost bigint,
+      credit_cost bigint not null,
       runtime_status task_run_runtime_status
     )
   `);
@@ -244,7 +244,7 @@ async function insertTaskRun(
       node_id,
       item_index,
       attempt,
-      estimated_credit_cost,
+      credit_cost,
       runtime_status
     ) values (
       ${input.id},

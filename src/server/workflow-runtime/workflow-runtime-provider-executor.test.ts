@@ -34,7 +34,7 @@ describe("WorkflowRuntimeProviderExecutor", () => {
     assert.deepEqual(result, {
       ok: true,
       value: {
-        finalCostCredits: 10,
+        providerCostCredits: 10,
         generatedAsset: {
           assetId: "image-asset-1",
           cdnUrl: "/api/assets/image-asset-1",
@@ -76,7 +76,7 @@ describe("WorkflowRuntimeProviderExecutor", () => {
       },
     ]);
     assert.equal(result.ok, true);
-    assert.equal(result.ok ? result.value.finalCostCredits : null, 40);
+    assert.equal(result.ok ? result.value.providerCostCredits : null, 40);
     assert.deepEqual(result.ok ? result.value.generatedAsset : null, {
       assetId: "video-asset-1",
       cdnUrl: "/api/assets/video-asset-1",
@@ -126,7 +126,7 @@ describe("WorkflowRuntimeProviderExecutor", () => {
     assert.deepEqual(result, {
       ok: true,
       value: {
-        finalCostCredits: 550,
+        providerCostCredits: 550,
         generatedAsset: {
           assetId: "text-asset-1",
           contentType: "text/plain; charset=utf-8",

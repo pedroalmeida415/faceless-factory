@@ -86,7 +86,7 @@ function executionJob(taskRunId = "task-run-1", attempt = 0) {
 function completionJob() {
   return {
     attempt: 0,
-    finalCostCredits: 2,
+    providerCostCredits: 2,
     generatedAsset: {
       assetId: "asset-1",
       contentType: "text/plain",

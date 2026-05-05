@@ -36,7 +36,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
     assert.deepEqual(
       buildWorkflowRuntimeCompletionSettlementJobPayload({
         attempt: 2,
-        finalCostCredits: 3,
+        providerCostCredits: 3,
         generatedAsset: {
           assetId: "asset-1",
           contentType: "text/plain",
@@ -53,7 +53,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
       }),
       {
         attempt: 2,
-        finalCostCredits: 3,
+        providerCostCredits: 3,
         generatedAsset: {
           assetId: "asset-1",
           contentType: "text/plain",
@@ -160,7 +160,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
     const adapter = createWorkflowRuntimeQueueAdapter(queue);
     const job = buildWorkflowRuntimeCompletionSettlementJobPayload({
       attempt: 1,
-      finalCostCredits: 2,
+      providerCostCredits: 2,
       generatedAsset: {
         assetId: "asset-1",
         contentType: "text/plain",

@@ -33,7 +33,7 @@ export type WorkflowRuntimeCommitPlanResult = {
 
 export type SettleWorkerCompletionCommand = {
   readonly attempt: number;
-  readonly finalCostCredits: number;
+  readonly providerCostCredits: number;
   readonly generatedAsset: WorkflowRuntimeGeneratedPrimaryAssetPayload;
   readonly ownerUserId: string;
   readonly reviewRequired: boolean;
@@ -48,7 +48,7 @@ export type SettleWorkerFailureCommand = {
     { readonly type: "UPSTREAM_FAILED" }
   >;
   readonly failureSource: TaskRunSettlementFailureSource;
-  readonly finalCostCredits?: number;
+  readonly providerCostCredits?: number;
   readonly ownerUserId: string;
   readonly taskRunId: string;
   readonly workflowId: string;

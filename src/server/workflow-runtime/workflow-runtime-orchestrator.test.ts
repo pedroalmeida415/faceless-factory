@@ -839,7 +839,7 @@ function makeWakeUpCommand(): WakeUpTaskRunChildrenRepositoryCommand & {
 function makeCompletionCommand(): SettleWorkerCompletionCommand {
   return {
     attempt: 0,
-    finalCostCredits: 2,
+    providerCostCredits: 2,
     generatedAsset: {
       assetId: "asset-1",
       contentType: "text/plain",
@@ -864,7 +864,7 @@ function makeFailureCommand(): SettleWorkerFailureCommand {
       taskRunDebitRefundable: false,
       type: "PROVIDER",
     },
-    finalCostCredits: 1,
+    providerCostCredits: 1,
     ownerUserId: "owner-1",
     taskRunId: "task-run-1",
     workflowId: "workflow-1",

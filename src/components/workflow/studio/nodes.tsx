@@ -626,8 +626,8 @@ export function WorkflowExecutionEstimateWarning({
   return (
     <NodeNotice tone="accent">
       {priceQuote
-        ? `${formatCredits(priceQuote.creditCostPerSlot)} estimated per Task Run slot. Final cost varies with generated output and reasoning tokens.`
-        : "Estimate only. Final cost varies with generated output and reasoning tokens."}
+        ? `${formatCredits(priceQuote.creditCostPerSlot)} planned per Task Run slot. LLM reasoning overage may add a ledger adjustment.`
+        : "Planned cost only. LLM reasoning overage may add a ledger adjustment."}
     </NodeNotice>
   );
 }
