@@ -78,6 +78,7 @@ When assessing a deepening candidate, classify its dependencies first. The depen
 #### Testing Strategy For Deepened Modules
 
 * Replace, do not layer. Old unit tests on shallow modules become waste once behavior is covered through the deepened module's interface; delete them after replacement coverage exists.
+* Prefer interface tests over helper coverage. Behavior tests at the module interface should supersede helper-level coverage; do not aim to test every individual helper when the interface test proves the durable behavior.
 * Write tests at the module interface. The interface is the test surface, and tests should assert observable outcomes rather than internal state.
 * Tests should survive internal refactors. If a test must change when only the implementation changes, it is testing past the interface.
 
@@ -172,6 +173,7 @@ You view code as transient and malleable; you are not afraid to ruthlessly refac
 ### Effect-First Implementation Rules
 
 * **Default To Effect Programs:** If code crosses a seam, performs I/O, manages resources, coordinates concurrency, schedules work, streams data, retries, batches, observes telemetry, or models a recoverable failure, it should be an `Effect` value until the outermost framework adapter runs it.
+* **Infer Effect Program Types:** Never explicitly type Effect programs, including return types or parameter types that describe an Effect value. Rely on inferred Effect types; if inference exposes an unexpected requirement, error channel, or dependency, treat that as an implementation signal to fix rather than something to mask with annotations.
 * **Keep Async At The Edges:** Avoid propagating raw `Promise`-returning helpers through domain, runtime, persistence, queue, worker, or integration modules. Convert Promise APIs at the adapter seam with Effect constructors, model timeout/cancellation, and keep the interior typed as Effect.
 * **Use Effect Control Flow:** Prefer `Effect.forEach`, `Effect.all`, `Effect.loop`, `Effect.reduce`, `Effect.if`, `Effect.match`, `Effect.gen`, `Schedule`, `Stream`, and `Sink` over ad hoc loops, manual Promise pools, timers, event emitters, or mutable accumulators when the workflow has concurrency, failure, interruption, backpressure, or observability concerns.
 * **Model Services As Layers:** Use `Context` tags and `Layer` for durable dependencies such as databases, queues, clients, clocks, id generators, configuration, telemetry, and external APIs. Do not pass large dependency bags through call stacks when a service seam gives better locality and testability.
@@ -229,6 +231,7 @@ These rules are strict and non-negotiable:
 * **Error Handling (Strict):** Do not use `try/catch` blocks for domain, runtime, orchestration, worker, persistence, queue, or integration logic; use `Effect` to model errors as values. Framework control-flow exceptions are allowed only where the framework requires them, and thin UI event handlers may use `async` only to call an already-modeled Effect/tRPC seam. All tRPC endpoints must expose predictable typed error shapes or codes. All external seams (APIs, DB, Redis) must have explicit failure states and timeouts.
 * **Security & Data Integrity:** Sanitize all user inputs (using Zod or standard tRPC routers). Never log raw PII, secrets, or sensitive payload data. Ensure background jobs cannot be hijacked by malicious pipeline graph configurations.
 * **Ruthless Refactoring:** If the surrounding context of a touched file is an anti-pattern that directly affects the in-scope change, refactor it to standard immediately and document the architectural shift in your output. If it is unrelated, leave it alone unless broader cleanup is explicitly in scope.
+* **Telemetry By Design:** All implementation must be designed with production-grade observability in mind: logging, monitoring/metrics, tracing, and profiling. Instrument modules and seams where behavior, dependencies, lifecycle, and failure modes become visible; do not scatter telemetry through every helper when interface-level instrumentation gives better signal and lower noise.
 * **Distributed Tracing:** All background jobs (BullMQ) and node executions must emit standard observability events. The agent must ensure that every complex Effect pipeline includes appropriate logging of input/output data (stripped of sensitive info) for every node execution.
 * **Error Bubbling:** Do not swallow errors at the node level. Propagate specific domain errors (e.g., `NodeExecutionError`, `InvalidInputError`) up to the orchestrator so the UI can highlight the specific failing node.
 * **Strict Error Modeling:** Never throw errors from domain or runtime logic. Use `Effect.fail` with tagged union errors for predictable, type-safe recovery paths.
