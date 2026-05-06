@@ -4,7 +4,6 @@ import {
   planWorkflowRun,
   type WorkflowRunPlannerError,
 } from "~/lib/workflow-runtime/planning/workflow-run-planner";
-import type { TaskStatusEvent } from "~/lib/workflow-runtime/runtime/task-status-events";
 import {
   committed,
   ignored,
@@ -28,10 +27,11 @@ import type {
   WorkflowRuntimeSettleCompletionResult,
   WorkflowRuntimeSettleFailureResult,
 } from "~/server/workflow-runtime/workflow-runtime-orchestrator";
-import type {
-  WorkflowRuntimeExecutionJobPayload,
-  WorkflowRuntimeWakeUpJobPayload,
-} from "~/server/workflow-runtime/workflow-runtime-queue";
+import {
+  type PostCommitWork,
+  type PostCommitWorkSource,
+  WorkflowRuntimePostCommitWork,
+} from "~/server/workflow-runtime/workflow-runtime-post-commit-work";
 
 export type WorkflowRuntimeOrchestratorError =
   | (WorkflowRunPlannerError & { readonly committed: false })
@@ -132,17 +132,16 @@ export class WorkflowRuntimeCommands extends Context.Tag(
     this,
     Effect.gen(function* () {
       const repository = yield* WorkflowRuntimeRepository;
-      const queue = yield* WorkflowRuntimeQueue;
-      const eventPublisher = yield* WorkflowRuntimeEventPublisher;
       const ids = yield* WorkflowRuntimeIdGenerator;
+      const postCommit = yield* WorkflowRuntimePostCommitWork;
 
       return {
         approveTaskRun: (command) =>
           handleReviewDecision(
             () => repository.approveTaskRun(command),
-            queue,
-            eventPublisher,
             command.workflowId,
+            postCommit,
+            "approve-task-run",
           ),
         cancelTaskRun: (command) =>
           Effect.flatMap(
@@ -160,9 +159,9 @@ export class WorkflowRuntimeCommands extends Context.Tag(
                   } as const)
                 : handleCommittedReviewDecision(
                     result,
-                    queue,
-                    eventPublisher,
                     command.workflowId,
+                    postCommit,
+                    "cancel-task-run",
                   ),
           ),
         handleWakeUpCall: (command) =>
@@ -174,11 +173,13 @@ export class WorkflowRuntimeCommands extends Context.Tag(
             if (result.parentFound === false) {
               return ignored("WAKE_UP_PARENT_NOT_FOUND");
             }
-            yield* enqueueExecutionJobs(queue, result.executionJobs);
-            yield* publishTaskStatusEvents(
-              eventPublisher,
-              command.workflowId,
-              result.taskStatusEvents,
+            yield* postCommit.deliver(
+              postCommitWork({
+                executionJobs: result.executionJobs,
+                source: "handle-wake-up-call",
+                taskStatusEvents: result.taskStatusEvents,
+                workflowId: command.workflowId,
+              }),
             );
             return committed(result);
           }),
@@ -195,14 +196,13 @@ export class WorkflowRuntimeCommands extends Context.Tag(
             if (!result.rejected) {
               return ignored("STALE_TASK_RUN");
             }
-            yield* enqueueExecutionJobs(
-              queue,
-              result.executionJob ? [result.executionJob] : [],
-            );
-            yield* publishTaskStatusEvents(
-              eventPublisher,
-              command.workflowId,
-              result.taskStatusEvents,
+            yield* postCommit.deliver(
+              postCommitWork({
+                executionJobs: result.executionJob ? [result.executionJob] : [],
+                source: "reject-task-run",
+                taskStatusEvents: result.taskStatusEvents,
+                workflowId: command.workflowId,
+              }),
             );
             return committed(result);
           }),
@@ -215,13 +215,14 @@ export class WorkflowRuntimeCommands extends Context.Tag(
             if (!result.settled) {
               return ignored("STALE_TASK_RUN");
             }
-            yield* enqueueWakeUpJobs(
-              queue,
-              result.wakeUpJob ? [result.wakeUpJob] : [],
+            yield* postCommit.deliver(
+              postCommitWork({
+                source: "settle-worker-completion",
+                taskStatusEvents: [result.event],
+                wakeUpJobs: result.wakeUpJob ? [result.wakeUpJob] : [],
+                workflowId: command.workflowId,
+              }),
             );
-            yield* publishTaskStatusEvents(eventPublisher, command.workflowId, [
-              result.event,
-            ]);
             return committed(result);
           }),
         settleWorkerFailure: (command) =>
@@ -233,10 +234,14 @@ export class WorkflowRuntimeCommands extends Context.Tag(
             if (!result.settled) {
               return ignored("STALE_TASK_RUN");
             }
-            yield* enqueueWakeUpJobs(queue, [result.wakeUpJob]);
-            yield* publishTaskStatusEvents(eventPublisher, command.workflowId, [
-              result.event,
-            ]);
+            yield* postCommit.deliver(
+              postCommitWork({
+                source: "settle-worker-failure",
+                taskStatusEvents: [result.event],
+                wakeUpJobs: [result.wakeUpJob],
+                workflowId: command.workflowId,
+              }),
+            );
             return committed(result);
           }),
         startWorkflowRun: (startInput) =>
@@ -249,7 +254,7 @@ export class WorkflowRuntimeCommands extends Context.Tag(
             if (!planning.ok) {
               return yield* Effect.fail({
                 ...planning.error,
-                committed: false,
+                committed: false as const,
               });
             }
 
@@ -257,12 +262,14 @@ export class WorkflowRuntimeCommands extends Context.Tag(
               () => repository.commitWorkflowRunPlan(planning.value),
               "Failed to commit Workflow Run plan.",
             );
-            yield* enqueueExecutionJobs(queue, result.executionJobs);
-            yield* enqueueWakeUpJobs(queue, result.wakeUpJobs);
-            yield* publishTaskStatusEvents(
-              eventPublisher,
-              startInput.workflowId,
-              result.taskStatusEvents,
+            yield* postCommit.deliver(
+              postCommitWork({
+                executionJobs: result.executionJobs,
+                source: "start-workflow-run",
+                taskStatusEvents: result.taskStatusEvents,
+                wakeUpJobs: result.wakeUpJobs,
+                workflowId: startInput.workflowId,
+              }),
             );
             return committed(result);
           }),
@@ -281,30 +288,42 @@ type WakeUpTaskRunChildrenRepositoryResult = Awaited<
 
 function handleReviewDecision(
   decide: () => Promise<WorkflowRuntimeReviewDecisionResult>,
-  queue: WorkflowRuntimeQueueForOrchestrator,
-  eventPublisher: WorkflowRuntimeEventPublisherForOrchestrator,
   workflowId: string,
-) {
+  postCommit: Context.Tag.Service<typeof WorkflowRuntimePostCommitWork>,
+  source: PostCommitWorkSource,
+): Effect.Effect<
+  WorkflowRuntimeCommandOutcome<WorkflowRuntimeReviewDecisionResult>,
+  WorkflowRuntimeOrchestratorError
+> {
   return Effect.flatMap(
     tryRepositoryCommit(decide, "Failed to decide Task Run review."),
     (result) =>
-      handleCommittedReviewDecision(result, queue, eventPublisher, workflowId),
+      handleCommittedReviewDecision(result, workflowId, postCommit, source),
   );
 }
 
 function handleCommittedReviewDecision(
   result: WorkflowRuntimeReviewDecisionResult,
-  queue: WorkflowRuntimeQueueForOrchestrator,
-  eventPublisher: WorkflowRuntimeEventPublisherForOrchestrator,
   workflowId: string,
-) {
+  postCommit: Context.Tag.Service<typeof WorkflowRuntimePostCommitWork>,
+  source: PostCommitWorkSource,
+): Effect.Effect<
+  WorkflowRuntimeCommandOutcome<WorkflowRuntimeReviewDecisionResult>,
+  never
+> {
   if (!result.decided) {
     return Effect.succeed(ignored("STALE_TASK_RUN"));
   }
 
   return Effect.gen(function* () {
-    yield* enqueueWakeUpJobs(queue, [result.wakeUpJob]);
-    yield* publishTaskStatusEvents(eventPublisher, workflowId, [result.event]);
+    yield* postCommit.deliver(
+      postCommitWork({
+        source,
+        taskStatusEvents: [result.event],
+        wakeUpJobs: [result.wakeUpJob],
+        workflowId,
+      }),
+    );
     return committed(result);
   });
 }
@@ -324,68 +343,17 @@ function tryRepositoryCommit<T>(
   });
 }
 
-function enqueueExecutionJobs(
-  queue: WorkflowRuntimeQueueForOrchestrator,
-  jobs: readonly WorkflowRuntimeExecutionJobPayload[],
-) {
-  return postCommitWork(
-    jobs,
-    () => queue.enqueueExecutionJobs(jobs),
-    "enqueue-execution-jobs",
-  );
-}
-
-function enqueueWakeUpJobs(
-  queue: WorkflowRuntimeQueueForOrchestrator,
-  jobs: readonly WorkflowRuntimeWakeUpJobPayload[],
-) {
-  return postCommitWork(
-    jobs,
-    () => queue.enqueueWakeUpJobs(jobs),
-    "enqueue-wake-up-jobs",
-  );
-}
-
-function publishTaskStatusEvents(
-  eventPublisher: WorkflowRuntimeEventPublisherForOrchestrator,
-  workflowId: string,
-  events: readonly TaskStatusEvent[],
-) {
-  return postCommitWork(
-    events,
-    () => eventPublisher.publishTaskStatusEvents(workflowId, events),
-    "publish-task-status-events",
-  );
-}
-
-function postCommitWork<T>(
-  items: readonly T[],
-  run: () => Promise<void>,
-  sideEffect:
-    | "enqueue-execution-jobs"
-    | "enqueue-wake-up-jobs"
-    | "publish-task-status-events",
-) {
-  if (items.length === 0) {
-    return Effect.void;
-  }
-
-  return Effect.tryPromise({
-    try: run,
-    catch: (cause) => cause,
-  }).pipe(
-    Effect.catchAll((cause) =>
-      Effect.logWarning("Workflow Runtime Post-Commit Work delivery failed", {
-        cause: errorMessage(cause),
-        itemCount: items.length,
-        sideEffect,
-      }),
-    ),
-  );
-}
-
-function errorMessage(cause: unknown) {
-  return cause instanceof Error && cause.message.length > 0
-    ? cause.message
-    : "Unknown Post-Commit Work delivery failure.";
+function postCommitWork(
+  work: Pick<PostCommitWork, "source" | "workflowId"> &
+    Partial<
+      Pick<PostCommitWork, "executionJobs" | "taskStatusEvents" | "wakeUpJobs">
+    >,
+): PostCommitWork {
+  return {
+    executionJobs: work.executionJobs ?? [],
+    source: work.source,
+    taskStatusEvents: work.taskStatusEvents ?? [],
+    wakeUpJobs: work.wakeUpJobs ?? [],
+    workflowId: work.workflowId,
+  };
 }

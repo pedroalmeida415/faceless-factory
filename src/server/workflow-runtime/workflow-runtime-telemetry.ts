@@ -1,7 +1,7 @@
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { Context, Layer } from "effect";
+import { Context, Effect, Layer, Metric } from "effect";
 
 export type WorkflowRuntimeTelemetryConfig = {
   readonly enabled: boolean;
@@ -9,16 +9,53 @@ export type WorkflowRuntimeTelemetryConfig = {
   readonly serviceName: string;
 };
 
+export type WorkflowRuntimePostCommitDeliveryTelemetry = {
+  readonly attempt: number;
+  readonly cause: string;
+  readonly itemIndex?: number;
+  readonly jobId?: string;
+  readonly kind: "execution-job" | "task-status-event" | "wake-up-call-job";
+  readonly nodeExecutionId?: string;
+  readonly source: string;
+  readonly status?: string;
+  readonly taskRunId?: string;
+  readonly workflowId: string;
+};
+
+const postCommitAttemptFailures = Metric.counter(
+  "workflow_runtime_post_commit_delivery_attempt_failures_total",
+  {
+    description: "Failed Workflow Runtime Post-Commit Work delivery attempts.",
+    incremental: true,
+  },
+);
+
+const postCommitExhaustedFailures = Metric.counter(
+  "workflow_runtime_post_commit_delivery_exhausted_failures_total",
+  {
+    description: "Workflow Runtime Post-Commit Work items exhausted by retry.",
+    incremental: true,
+  },
+);
+
+type PostCommitCounter = typeof postCommitAttemptFailures;
+
 export class WorkflowRuntimeTelemetry extends Context.Tag(
   "WorkflowRuntimeTelemetry",
 )<
   WorkflowRuntimeTelemetry,
   {
     readonly config: WorkflowRuntimeTelemetryConfig;
+    readonly postCommitDeliveryAttemptFailed: (
+      details: WorkflowRuntimePostCommitDeliveryTelemetry,
+    ) => Effect.Effect<void>;
+    readonly postCommitDeliveryExhausted: (
+      details: WorkflowRuntimePostCommitDeliveryTelemetry,
+    ) => Effect.Effect<void>;
   }
 >() {
   static readonly fromEnv = (
-    env: NodeJS.ProcessEnv = process.env,
+    env: Partial<NodeJS.ProcessEnv> = process.env,
   ): WorkflowRuntimeTelemetryConfig => {
     const explicit = env.WORKFLOW_RUNTIME_OTEL_ENABLED;
     const exporterEndpoint = env.OTEL_EXPORTER_OTLP_ENDPOINT ?? null;
@@ -46,7 +83,7 @@ export class WorkflowRuntimeTelemetry extends Context.Tag(
       },
       spanProcessor: [
         new BatchSpanProcessor(
-          new OTLPTraceExporter({ url: config.exporterEndpoint }),
+          new OTLPTraceExporter({ url: config.exporterEndpoint ?? undefined }),
         ),
       ],
     }));
@@ -54,7 +91,31 @@ export class WorkflowRuntimeTelemetry extends Context.Tag(
 
   static readonly layerFromConfig = (config: WorkflowRuntimeTelemetryConfig) =>
     Layer.mergeAll(
-      Layer.succeed(WorkflowRuntimeTelemetry, { config }),
+      Layer.succeed(WorkflowRuntimeTelemetry, {
+        config,
+        postCommitDeliveryAttemptFailed: (details) =>
+          Metric.increment(
+            tagPostCommitMetric(postCommitAttemptFailures, details),
+          ).pipe(
+            Effect.zipRight(
+              Effect.logDebug(
+                "Workflow Runtime Post-Commit Work delivery attempt failed",
+                details,
+              ),
+            ),
+          ),
+        postCommitDeliveryExhausted: (details) =>
+          Metric.increment(
+            tagPostCommitMetric(postCommitExhaustedFailures, details),
+          ).pipe(
+            Effect.zipRight(
+              Effect.logWarning(
+                "Workflow Runtime Post-Commit Work delivery exhausted",
+                details,
+              ),
+            ),
+          ),
+      }),
       WorkflowRuntimeTelemetry.setupLayer(config),
     );
 
@@ -64,5 +125,18 @@ export class WorkflowRuntimeTelemetry extends Context.Tag(
 
   static readonly Live = WorkflowRuntimeTelemetry.layerFromConfig(
     WorkflowRuntimeTelemetry.fromEnv(),
+  );
+}
+
+function tagPostCommitMetric(
+  metric: PostCommitCounter,
+  details: WorkflowRuntimePostCommitDeliveryTelemetry,
+) {
+  return metric.pipe(
+    Metric.tagged("work_kind", details.kind),
+    Metric.tagged("source", details.source),
+    Metric.tagged("workflow_id", details.workflowId),
+    Metric.tagged("task_run_id", details.taskRunId ?? "none"),
+    Metric.tagged("status", details.status ?? "none"),
   );
 }

@@ -11,6 +11,7 @@ import {
   WorkflowRuntimeQueue,
   WorkflowRuntimeRepository,
 } from "~/server/workflow-runtime/workflow-runtime-commands";
+import { WorkflowRuntimePostCommitWork } from "~/server/workflow-runtime/workflow-runtime-post-commit-work";
 import { createWorkflowRuntimeQueueAdapter } from "~/server/workflow-runtime/workflow-runtime-queue";
 import { createWorkflowRuntimeRepository } from "~/server/workflow-runtime/workflow-runtime-repository";
 import { WorkflowRuntimeTelemetry } from "~/server/workflow-runtime/workflow-runtime-telemetry";
@@ -22,7 +23,9 @@ import {
 
 const globalForWorkflowRuntime = globalThis as typeof globalThis & {
   __workflowRuntimeManagedRuntime?: ManagedRuntime.ManagedRuntime<
-    WorkflowRuntimeCommands | WorkflowRuntimeTelemetry,
+    | WorkflowRuntimeCommands
+    | WorkflowRuntimePostCommitWork
+    | WorkflowRuntimeTelemetry,
     unknown
   >;
   __workflowRuntimeQueue?: Queue;
@@ -96,9 +99,16 @@ export function createWorkflowRuntimeLiveLayer() {
     EventPublisherLive,
     WorkflowRuntimeIdGenerator.Live,
   );
+  const TelemetryLive = WorkflowRuntimeTelemetry.Live;
+  const PostCommitWorkLive = WorkflowRuntimePostCommitWork.Live.pipe(
+    Layer.provide(Layer.mergeAll(DependenciesLive, TelemetryLive)),
+  );
 
   return Layer.mergeAll(
-    WorkflowRuntimeTelemetry.Live,
-    WorkflowRuntimeCommands.Live.pipe(Layer.provide(DependenciesLive)),
+    TelemetryLive,
+    PostCommitWorkLive,
+    WorkflowRuntimeCommands.Live.pipe(
+      Layer.provide(Layer.mergeAll(DependenciesLive, PostCommitWorkLive)),
+    ),
   );
 }
