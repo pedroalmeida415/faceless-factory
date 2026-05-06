@@ -58,6 +58,12 @@ type DeliveryDependencies = {
   readonly telemetry: Context.Tag.Service<typeof WorkflowRuntimeTelemetry>;
 };
 
+export type PostCommitWorkDeliveryAdapters = Pick<
+  DeliveryDependencies,
+  "eventPublisher" | "queue"
+> &
+  Partial<Pick<DeliveryDependencies, "retrySchedule" | "telemetry">>;
+
 const defaultRetrySchedule = Schedule.exponential("50 millis", 2).pipe(
   Schedule.jittered,
   Schedule.intersect(Schedule.recurs(2)),
@@ -100,6 +106,33 @@ export class WorkflowRuntimePostCommitWork extends Context.Tag(
   static readonly Live =
     WorkflowRuntimePostCommitWork.layerWithSchedule(defaultRetrySchedule);
 }
+
+export function deliverPostCommitWorkBestEffort(
+  work: PostCommitWork,
+  adapters: PostCommitWorkDeliveryAdapters,
+) {
+  return deliverPostCommitWork(work, {
+    eventPublisher: adapters.eventPublisher,
+    queue: adapters.queue,
+    retrySchedule: adapters.retrySchedule ?? defaultRetrySchedule,
+    telemetry: adapters.telemetry ?? fallbackTelemetry,
+  });
+}
+
+const fallbackTelemetry: Context.Tag.Service<typeof WorkflowRuntimeTelemetry> =
+  {
+    config: WorkflowRuntimeTelemetry.fromEnv(),
+    postCommitDeliveryAttemptFailed: (details) =>
+      Effect.logDebug(
+        "Workflow Runtime Post-Commit Work delivery attempt failed",
+        details,
+      ),
+    postCommitDeliveryExhausted: (details) =>
+      Effect.logWarning(
+        "Workflow Runtime Post-Commit Work delivery exhausted",
+        details,
+      ),
+  };
 
 function deliverPostCommitWork(
   work: PostCommitWork,

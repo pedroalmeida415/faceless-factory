@@ -54,7 +54,16 @@ import {
   unwrapPlan,
 } from "~/lib/workflow-runtime/workflow-runtime-contract-harness";
 import * as schema from "~/server/db/schema";
+import {
+  WorkflowRuntimeCommands,
+  WorkflowRuntimeIdGenerator,
+  WorkflowRuntimeRepository,
+} from "~/server/workflow-runtime/workflow-runtime-commands";
 import { createWorkflowRuntimeOrchestrator } from "~/server/workflow-runtime/workflow-runtime-orchestrator";
+import {
+  type PostCommitWork,
+  WorkflowRuntimePostCommitWork,
+} from "~/server/workflow-runtime/workflow-runtime-post-commit-work";
 import { createWorkflowRuntimeProviderExecutor } from "~/server/workflow-runtime/workflow-runtime-provider-executor";
 import {
   buildWorkflowRuntimeCompletionSettlementJobPayload,
@@ -210,6 +219,63 @@ describe("Workflow runtime state-machine contract", () => {
 
   afterAll(async () => {
     await client.end();
+  });
+
+  test("Run Node command delivers Post-Commit Work after the durable commit is visible", async () => {
+    await insertUser(db, { creditBalance: 100 });
+    const delivered: PostCommitWork[] = [];
+    const repository = createWorkflowRuntimeRepository({
+      sqlLayer: ContractRepositorySqlLive,
+    });
+    const layer = WorkflowRuntimeCommands.Live.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(WorkflowRuntimeRepository, repository),
+          Layer.succeed(WorkflowRuntimeIdGenerator, {
+            createNodeExecutionId: nextId("node-execution"),
+            createTaskRunId: nextId("task-run"),
+          }),
+          Layer.succeed(WorkflowRuntimePostCommitWork, {
+            deliver: (work) =>
+              Effect.promise(async () => {
+                delivered.push(work);
+                for (const job of work.executionJobs) {
+                  const taskRun = await getTaskRunState(db, job.taskRunId);
+                  assert.equal(taskRun.runtimeStatus, "QUEUED");
+                }
+                for (const event of work.taskStatusEvents) {
+                  const taskRun = await getTaskRunState(db, event.taskRunId);
+                  assert.equal(taskRun.runtimeStatus, event.status);
+                }
+              }),
+          }),
+        ),
+      ),
+    );
+
+    const outcome = await Effect.runPromise(
+      Effect.flatMap(WorkflowRuntimeCommands, (commands) =>
+        commands.startWorkflowRun({
+          command: { type: "run-node", nodeId: "script" },
+          document: simpleScriptDocument(),
+          documentRevision: 1,
+          latestNodeExecutions: [],
+          latestTaskRuns: [],
+          ownerId: "owner-user",
+          workflowId: "workflow-id",
+        }),
+      ).pipe(Effect.provide(layer)),
+    );
+
+    assert.equal(outcome.status, "committed");
+    assert.equal(delivered.length, 1);
+    assert.deepEqual(delivered[0], {
+      executionJobs: outcome.value.executionJobs,
+      source: "start-workflow-run",
+      taskStatusEvents: outcome.value.taskStatusEvents,
+      wakeUpJobs: outcome.value.wakeUpJobs,
+      workflowId: "workflow-id",
+    });
   });
 
   test("planner run-node contract creates upstream closure, reuses durable batches, waits on active parents, and never creates empty executable Node Executions", () => {

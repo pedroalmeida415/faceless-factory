@@ -11,7 +11,10 @@ import {
   type WorkflowRunPlannerInput,
 } from "~/lib/workflow-runtime/planning/workflow-run-planner";
 import type { TaskStatusEvent } from "~/lib/workflow-runtime/runtime/task-status-events";
-import type { PostCommitWork } from "~/server/workflow-runtime/workflow-runtime-post-commit-work";
+import {
+  deliverPostCommitWorkBestEffort,
+  type PostCommitWork,
+} from "~/server/workflow-runtime/workflow-runtime-post-commit-work";
 import type {
   WorkflowRuntimeExecutionJobPayload,
   WorkflowRuntimeGeneratedPrimaryAssetPayload,
@@ -204,16 +207,6 @@ export type WorkflowRuntimeOrchestratorError =
       readonly cause: unknown;
       readonly committed: false;
       readonly message: string;
-    }
-  | {
-      readonly _tag: "WorkflowRuntimePostCommitSideEffectError";
-      readonly cause: unknown;
-      readonly committed: true;
-      readonly message: string;
-      readonly sideEffect:
-        | "enqueue-execution-jobs"
-        | "enqueue-wake-up-jobs"
-        | "publish-task-status-events";
     };
 
 export type StartWorkflowRunResult =
@@ -278,14 +271,11 @@ export function createWorkflowRuntimeOrchestrator(input: {
         return committed;
       }
 
-      const delivered = await deliverPostCommitWork(
+      await runPostCommitDelivery(
         input.queue,
         input.eventPublisher,
         committed.value.postCommitWork,
       );
-      if (!delivered.ok) {
-        return delivered;
-      }
 
       return { ok: true, value: committed.value.value };
     },
@@ -309,14 +299,11 @@ export function createWorkflowRuntimeOrchestrator(input: {
         return { ok: true, value: settled };
       }
 
-      const delivered = await deliverPostCommitWork(
+      await runPostCommitDelivery(
         input.queue,
         input.eventPublisher,
         outcome.value.postCommitWork,
       );
-      if (!delivered.ok) {
-        return delivered;
-      }
 
       return { ok: true, value: settled };
     },
@@ -340,14 +327,11 @@ export function createWorkflowRuntimeOrchestrator(input: {
         return { ok: true, value: settled };
       }
 
-      const delivered = await deliverPostCommitWork(
+      await runPostCommitDelivery(
         input.queue,
         input.eventPublisher,
         outcome.value.postCommitWork,
       );
-      if (!delivered.ok) {
-        return delivered;
-      }
 
       return { ok: true, value: settled };
     },
@@ -418,14 +402,11 @@ export function createWorkflowRuntimeOrchestrator(input: {
         return { ok: true, value: committed.value.value };
       }
 
-      const delivered = await deliverPostCommitWork(
+      await runPostCommitDelivery(
         input.queue,
         input.eventPublisher,
         committed.value.postCommitWork,
       );
-      if (!delivered.ok) {
-        return delivered;
-      }
 
       return { ok: true, value: committed.value.value };
     },
@@ -452,14 +433,11 @@ export function createWorkflowRuntimeOrchestrator(input: {
         return committed;
       }
 
-      const delivered = await deliverPostCommitWork(
+      await runPostCommitDelivery(
         input.queue,
         input.eventPublisher,
         committed.value.postCommitWork,
       );
-      if (!delivered.ok) {
-        return delivered;
-      }
 
       return { ok: true, value: committed.value.value };
     },
@@ -497,100 +475,19 @@ async function handleCommittedReviewDecision(
     return { ok: true, value: decided };
   }
 
-  const delivered = await deliverPostCommitWork(
-    queue,
-    eventPublisher,
-    outcome.postCommitWork,
-  );
-  if (!delivered.ok) {
-    return delivered;
-  }
+  await runPostCommitDelivery(queue, eventPublisher, outcome.postCommitWork);
 
   return { ok: true, value: decided };
 }
 
-function enqueueExecutionJobs(
-  queue: WorkflowRuntimeQueueForOrchestrator,
-  jobs: readonly WorkflowRuntimeExecutionJobPayload[],
-) {
-  if (jobs.length === 0) {
-    return Promise.resolve({ ok: true } as const);
-  }
-
-  return queue.enqueueExecutionJobs(jobs).then(
-    () => ({ ok: true }) as const,
-    (cause: unknown) => postCommitError("enqueue-execution-jobs", cause),
-  );
-}
-
-function enqueueWakeUpJobs(
-  queue: WorkflowRuntimeQueueForOrchestrator,
-  jobs: readonly WorkflowRuntimeWakeUpJobPayload[],
-) {
-  if (jobs.length === 0) {
-    return Promise.resolve({ ok: true } as const);
-  }
-
-  return queue.enqueueWakeUpJobs(jobs).then(
-    () => ({ ok: true }) as const,
-    (cause: unknown) => postCommitError("enqueue-wake-up-jobs", cause),
-  );
-}
-
-function publishTaskStatusEvents(
-  eventPublisher: WorkflowRuntimeEventPublisherForOrchestrator,
-  workflowId: string,
-  events: readonly TaskStatusEvent[],
-) {
-  if (events.length === 0) {
-    return Promise.resolve({ ok: true } as const);
-  }
-
-  return eventPublisher.publishTaskStatusEvents(workflowId, events).then(
-    () => ({ ok: true }) as const,
-    (cause: unknown) => postCommitError("publish-task-status-events", cause),
-  );
-}
-
-async function deliverPostCommitWork(
+function runPostCommitDelivery(
   queue: WorkflowRuntimeQueueForOrchestrator,
   eventPublisher: WorkflowRuntimeEventPublisherForOrchestrator,
   work: PostCommitWork,
 ) {
-  const executionJobs = await enqueueExecutionJobs(queue, work.executionJobs);
-  if (!executionJobs.ok) {
-    return executionJobs;
-  }
-
-  const wakeUpJobs = await enqueueWakeUpJobs(queue, work.wakeUpJobs);
-  if (!wakeUpJobs.ok) {
-    return wakeUpJobs;
-  }
-
-  return publishTaskStatusEvents(
-    eventPublisher,
-    work.workflowId,
-    work.taskStatusEvents,
+  return Effect.runPromise(
+    deliverPostCommitWorkBestEffort(work, { eventPublisher, queue }),
   );
-}
-
-function postCommitError(
-  sideEffect:
-    | "enqueue-execution-jobs"
-    | "enqueue-wake-up-jobs"
-    | "publish-task-status-events",
-  cause: unknown,
-): { readonly ok: false; readonly error: WorkflowRuntimeOrchestratorError } {
-  return {
-    error: {
-      _tag: "WorkflowRuntimePostCommitSideEffectError",
-      cause,
-      committed: true,
-      message: `Failed to ${sideEffect}.`,
-      sideEffect,
-    },
-    ok: false,
-  } as const;
 }
 
 async function runRepositoryEffectResult<A, B = A>(

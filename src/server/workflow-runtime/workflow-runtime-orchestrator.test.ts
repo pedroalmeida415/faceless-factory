@@ -160,7 +160,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.deepEqual(sideEffects, ["commit-attempt"]);
   });
 
-  test("returns enqueue failures as post-commit failures without publishing", async () => {
+  test("keeps committed start run outcomes when Post-Commit Work delivery is exhausted", async () => {
     const sideEffects: string[] = [];
     const queue = new FakeQueue(sideEffects);
     queue.enqueueError = new Error("queue unavailable");
@@ -174,15 +174,22 @@ describe("WorkflowRuntimeOrchestrator", () => {
 
     const result = await orchestrator.startWorkflowRun(runScriptInput());
 
-    assert.equal(result.ok, false);
-    assert.equal(result.error._tag, "WorkflowRuntimePostCommitSideEffectError");
-    assert.equal(result.error.committed, true);
-    assert.equal(result.error.sideEffect, "enqueue-execution-jobs");
-    assert.equal(result.error.cause, queue.enqueueError);
-    assert.deepEqual(sideEffects, ["commit:task-run-1", "enqueue-attempt"]);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value, {
+      executionJobs: [makeExecutionJob()],
+      taskStatusEvents: [makeTaskStatusEvent("QUEUED")],
+      wakeUpJobs: [],
+    });
+    assert.deepEqual(sideEffects, [
+      "commit:task-run-1",
+      "enqueue-attempt",
+      "enqueue-attempt",
+      "enqueue-attempt",
+      "publish:workflow-1:task-run-1",
+    ]);
   });
 
-  test("returns publish failures as post-commit failures after enqueueing", async () => {
+  test("keeps committed start run outcomes when Task Status Event delivery is exhausted", async () => {
     const sideEffects: string[] = [];
     const eventPublisher = new FakeEventPublisher(sideEffects);
     eventPublisher.publishError = new Error("pubsub unavailable");
@@ -196,14 +203,12 @@ describe("WorkflowRuntimeOrchestrator", () => {
 
     const result = await orchestrator.startWorkflowRun(runScriptInput());
 
-    assert.equal(result.ok, false);
-    assert.equal(result.error._tag, "WorkflowRuntimePostCommitSideEffectError");
-    assert.equal(result.error.committed, true);
-    assert.equal(result.error.sideEffect, "publish-task-status-events");
-    assert.equal(result.error.cause, eventPublisher.publishError);
+    assert.equal(result.ok, true);
     assert.deepEqual(sideEffects, [
       "commit:task-run-1",
       "enqueue:task-run~task-run-1~attempt~0~execute",
+      "publish-attempt:workflow-1",
+      "publish-attempt:workflow-1",
       "publish-attempt:workflow-1",
     ]);
   });
@@ -372,7 +377,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.deepEqual(sideEffects, []);
   });
 
-  test("returns completion wake-up enqueue failures as committed post-commit failures", async () => {
+  test("keeps committed completion outcomes when Wake-Up Call delivery is exhausted", async () => {
     const sideEffects: string[] = [];
     const queue = new FakeQueue(sideEffects);
     queue.enqueueWakeUpError = new Error("queue unavailable");
@@ -392,14 +397,13 @@ describe("WorkflowRuntimeOrchestrator", () => {
       makeCompletionCommand(),
     );
 
-    assert.equal(result.ok, false);
-    assert.equal(result.error._tag, "WorkflowRuntimePostCommitSideEffectError");
-    assert.equal(result.error.committed, true);
-    assert.equal(result.error.sideEffect, "enqueue-wake-up-jobs");
-    assert.equal(result.error.cause, queue.enqueueWakeUpError);
+    assert.equal(result.ok, true);
     assert.deepEqual(sideEffects, [
       "settle-completion:task-run-1",
       "enqueue-wake-up~attempt",
+      "enqueue-wake-up~attempt",
+      "enqueue-wake-up~attempt",
+      "publish:workflow-1:task-run-1",
     ]);
   });
 
@@ -570,7 +574,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.deepEqual(sideEffects, ["reject:task-run-1"]);
   });
 
-  test("returns review decision wake-up enqueue failures as committed post-commit failures", async () => {
+  test("keeps committed review outcomes when Wake-Up Call delivery is exhausted", async () => {
     const sideEffects: string[] = [];
     const queue = new FakeQueue(sideEffects);
     queue.enqueueWakeUpError = new Error("queue unavailable");
@@ -590,14 +594,13 @@ describe("WorkflowRuntimeOrchestrator", () => {
       makeReviewDecisionCommand(),
     );
 
-    assert.equal(result.ok, false);
-    assert.equal(result.error._tag, "WorkflowRuntimePostCommitSideEffectError");
-    assert.equal(result.error.committed, true);
-    assert.equal(result.error.sideEffect, "enqueue-wake-up-jobs");
-    assert.equal(result.error.cause, queue.enqueueWakeUpError);
+    assert.equal(result.ok, true);
     assert.deepEqual(sideEffects, [
       "cancel:task-run-1",
       "enqueue-wake-up~attempt",
+      "enqueue-wake-up~attempt",
+      "enqueue-wake-up~attempt",
+      "publish:workflow-1:task-run-1",
     ]);
   });
 
@@ -735,7 +738,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.deepEqual(sideEffects, ["wake-up~attempt:task-run-1"]);
   });
 
-  test("returns Wake-Up Call enqueue failures as committed post-commit failures without publishing", async () => {
+  test("keeps committed Wake-Up Call outcomes when execution job delivery is exhausted", async () => {
     const sideEffects: string[] = [];
     const queue = new FakeQueue(sideEffects);
     queue.enqueueError = new Error("queue unavailable");
@@ -753,15 +756,17 @@ describe("WorkflowRuntimeOrchestrator", () => {
 
     const result = await orchestrator.handleWakeUpCall(makeWakeUpCommand());
 
-    assert.equal(result.ok, false);
-    assert.equal(result.error._tag, "WorkflowRuntimePostCommitSideEffectError");
-    assert.equal(result.error.committed, true);
-    assert.equal(result.error.sideEffect, "enqueue-execution-jobs");
-    assert.equal(result.error.cause, queue.enqueueError);
-    assert.deepEqual(sideEffects, ["wake-up~task-run-1", "enqueue-attempt"]);
+    assert.equal(result.ok, true);
+    assert.deepEqual(sideEffects, [
+      "wake-up~task-run-1",
+      "enqueue-attempt",
+      "enqueue-attempt",
+      "enqueue-attempt",
+      "publish:workflow-1:task-run-1",
+    ]);
   });
 
-  test("returns Wake-Up Call publish failures as committed post-commit failures after enqueueing", async () => {
+  test("keeps committed Wake-Up Call outcomes when Task Status Event delivery is exhausted", async () => {
     const sideEffects: string[] = [];
     const eventPublisher = new FakeEventPublisher(sideEffects);
     eventPublisher.publishError = new Error("pubsub unavailable");
@@ -779,14 +784,12 @@ describe("WorkflowRuntimeOrchestrator", () => {
 
     const result = await orchestrator.handleWakeUpCall(makeWakeUpCommand());
 
-    assert.equal(result.ok, false);
-    assert.equal(result.error._tag, "WorkflowRuntimePostCommitSideEffectError");
-    assert.equal(result.error.committed, true);
-    assert.equal(result.error.sideEffect, "publish-task-status-events");
-    assert.equal(result.error.cause, eventPublisher.publishError);
+    assert.equal(result.ok, true);
     assert.deepEqual(sideEffects, [
       "wake-up~task-run-1",
       "enqueue:task-run~task-run-1~attempt~0~execute",
+      "publish-attempt:workflow-1",
+      "publish-attempt:workflow-1",
       "publish-attempt:workflow-1",
     ]);
   });
