@@ -24,7 +24,10 @@ import {
   type WorkflowRuntimeCommandsService,
   type WorkflowRuntimeOrchestratorError,
 } from "~/server/workflow-runtime/workflow-runtime-commands";
-import { getWorkflowRuntimeManagedRuntime } from "~/server/workflow-runtime/workflow-runtime-composition";
+import {
+  createWorkflowRuntimeSqlLayer,
+  getWorkflowRuntimeManagedRuntime,
+} from "~/server/workflow-runtime/workflow-runtime-composition";
 import { getPlanningStateForWorkflow } from "~/server/workflow-runtime/workflow-runtime-planning-state-repository";
 import { getTaskRunProjectionForWorkflow } from "~/server/workflow-runtime/workflow-runtime-task-projection-repository";
 
@@ -74,10 +77,12 @@ export const workflowRuntimeRouter = createTRPCRouter({
         ownerUserId,
         projectId: input.projectId,
       }).catch(throwTRPCError);
-      const planningState = await getPlanningStateForWorkflow(db, {
-        ownerUserId,
-        workflowId: project.id,
-      }).catch(throwTRPCError);
+      const planningState = await Effect.runPromise(
+        getPlanningStateForWorkflow({
+          ownerUserId,
+          workflowId: project.id,
+        }).pipe(Effect.provide(createWorkflowRuntimeSqlLayer())),
+      ).catch(throwTRPCError);
       const planning = planWorkflowRun({
         ...planningState,
         command:
@@ -120,10 +125,12 @@ export const workflowRuntimeRouter = createTRPCRouter({
         ownerUserId,
         projectId: input.projectId,
       }).catch(throwTRPCError);
-      const planningState = await getPlanningStateForWorkflow(db, {
-        ownerUserId,
-        workflowId: project.id,
-      }).catch(throwTRPCError);
+      const planningState = await Effect.runPromise(
+        getPlanningStateForWorkflow({
+          ownerUserId,
+          workflowId: project.id,
+        }).pipe(Effect.provide(createWorkflowRuntimeSqlLayer())),
+      ).catch(throwTRPCError);
       const result = await runWorkflowRuntimeCommand((commands) =>
         commands.startWorkflowRun({
           ...planningState,
@@ -223,10 +230,12 @@ export const workflowRuntimeRouter = createTRPCRouter({
         projectId: input.projectId,
       }).catch(throwTRPCError);
 
-      return getTaskRunProjectionForWorkflow(db, {
-        ownerUserId,
-        workflowId: input.projectId,
-      }).catch(throwTRPCError);
+      return Effect.runPromise(
+        getTaskRunProjectionForWorkflow({
+          ownerUserId,
+          workflowId: input.projectId,
+        }).pipe(Effect.provide(createWorkflowRuntimeSqlLayer())),
+      ).catch(throwTRPCError);
     }),
 });
 
@@ -340,7 +349,7 @@ function orchestratorErrorToTRPCError(error: WorkflowRuntimeOrchestratorError) {
 
   return new TRPCError({
     code: "INTERNAL_SERVER_ERROR",
-    message: error.message,
+    message: "message" in error ? error.message : "Workflow runtime failed.",
   });
 }
 

@@ -23,7 +23,7 @@
     "indentWidth": 2
   },
   "files": {
-    "includes": ["**", "!!src/components/ui"]
+    "includes": ["**", "!!src/components/ui", "!!vendor"]
   },
   "linter": {
     "enabled": true,

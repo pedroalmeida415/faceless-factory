@@ -9,10 +9,10 @@ import {
 import { ASSET_KINDS } from "~/lib/workflow/types";
 import { toTRPCError } from "~/server/api/errors";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
-import { db } from "~/server/db";
 import { WorkflowCreditsService } from "~/server/workflow/credits";
 import { saveWorkflowProjectDocument } from "~/server/workflow/projects";
 import { WorkflowStorage } from "~/server/workflow/storage";
+import { createWorkflowRuntimeSqlLayer } from "~/server/workflow-runtime/workflow-runtime-composition";
 import { getTaskRunProjectionForWorkflow } from "~/server/workflow-runtime/workflow-runtime-task-projection-repository";
 
 const workflowAssetSchema = z.object({
@@ -83,10 +83,12 @@ export const workflowRouter = createTRPCRouter({
         const lockedNodeIds = [
           ...new Set(
             (
-              await getTaskRunProjectionForWorkflow(db, {
-                ownerUserId: ctx.session.user.id,
-                workflowId: input.projectId,
-              })
+              await Effect.runPromise(
+                getTaskRunProjectionForWorkflow({
+                  ownerUserId: ctx.session.user.id,
+                  workflowId: input.projectId,
+                }).pipe(Effect.provide(createWorkflowRuntimeSqlLayer())),
+              )
             ).flatMap((slot) =>
               activeRuntimeTaskStatuses.has(slot.status) ? [slot.nodeId] : [],
             ),

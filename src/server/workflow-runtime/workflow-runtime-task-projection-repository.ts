@@ -1,4 +1,6 @@
-import { type SQL, sql } from "drizzle-orm";
+import * as PgDrizzle from "@effect/sql-drizzle/Pg";
+import { desc, inArray, isNotNull, sql } from "drizzle-orm";
+import { Effect } from "effect";
 
 import {
   type GeneratedAsset,
@@ -9,12 +11,7 @@ import type {
   TaskStatusEventFailureReason,
   TaskStatusEventStatus,
 } from "~/lib/workflow-runtime/runtime/task-status-events";
-
-type DbLike = {
-  readonly execute: (query: SQL) => Promise<unknown>;
-};
-
-type QueryRow = Record<string, unknown>;
+import * as schema from "~/server/db/schema";
 
 export type TaskRunProjectionSlot = {
   readonly attempt: number;
@@ -27,205 +24,148 @@ export type TaskRunProjectionSlot = {
   readonly taskRunId: string;
 };
 
-export async function getTaskRunProjectionForWorkflow(
-  db: DbLike,
-  params: {
-    readonly ownerUserId: string;
-    readonly workflowId: string;
-  },
-): Promise<readonly TaskRunProjectionSlot[]> {
-  const rows = rowsFromResult(
-    await db.execute(sql`
-      with latest_node_executions as (
-        select distinct on (node_id)
-          id
-        from node_executions
-        where workflow_id = ${params.workflowId}
-          and owner_user_id = ${params.ownerUserId}
-        order by node_id asc, created_at desc, id desc
-      ), latest_task_runs as (
-        select distinct on (task_runs.node_execution_id, task_runs.item_index)
-          task_runs.id as "taskRunId",
-          task_runs.node_execution_id as "nodeExecutionId",
-          task_runs.node_id as "nodeId",
-          task_runs.item_index as "itemIndex",
-          task_runs.attempt,
-          task_runs.runtime_status as status,
-          task_runs.failure_reason as "failureReason"
-        from task_runs
-        inner join latest_node_executions
-          on latest_node_executions.id = task_runs.node_execution_id
-        where task_runs.workflow_id = ${params.workflowId}
-          and task_runs.owner_user_id = ${params.ownerUserId}
-          and task_runs.runtime_status is not null
-          and task_runs.item_index is not null
-          and task_runs.attempt is not null
-        order by
-          task_runs.node_execution_id asc,
-          task_runs.item_index asc,
-          task_runs.attempt desc,
-          task_runs.id desc
+export function getTaskRunProjectionForWorkflow(params: {
+  readonly ownerUserId: string;
+  readonly workflowId: string;
+}) {
+  return Effect.gen(function* () {
+    const db = yield* PgDrizzle.PgDrizzle;
+    const latestNodeExecutions = yield* db
+      .selectDistinctOn([schema.nodeExecutions.nodeId], {
+        id: schema.nodeExecutions.id,
+      })
+      .from(schema.nodeExecutions)
+      .where(
+        sql`${schema.nodeExecutions.workflowId} = ${params.workflowId}
+          and ${schema.nodeExecutions.ownerUserId} = ${params.ownerUserId}`,
       )
-      select
-        latest_task_runs."taskRunId",
-        latest_task_runs."nodeExecutionId",
-        latest_task_runs."nodeId",
-        latest_task_runs."itemIndex",
-        latest_task_runs.attempt,
-        latest_task_runs.status,
-        latest_task_runs."failureReason",
-        assets.id as "assetId",
-        assets.kind as "assetKind",
-        assets.cdn_url as "cdnUrl",
-        assets.text_content as text,
-        assets.mime_type as "contentType"
-      from latest_task_runs
-      left join assets
-        on assets.task_run_id = latest_task_runs."taskRunId"
-        and assets.source = 'generated'
-        and assets.deleted_at is null
-      order by
-        latest_task_runs."nodeExecutionId" asc,
-        latest_task_runs."itemIndex" asc,
-        assets.created_at asc,
-        assets.id asc
-    `),
-  );
+      .orderBy(
+        schema.nodeExecutions.nodeId,
+        desc(schema.nodeExecutions.createdAt),
+        desc(schema.nodeExecutions.id),
+      );
+    if (!latestNodeExecutions.length) {
+      return [];
+    }
 
-  const slotByKey = new Map<string, TaskRunProjectionSlot>();
-  const assetsByTaskRunId = new Map<string, GeneratedAsset[]>();
+    const latestTaskRuns = yield* db
+      .selectDistinctOn(
+        [schema.taskRuns.nodeExecutionId, schema.taskRuns.itemIndex],
+        {
+          attempt: schema.taskRuns.attempt,
+          failureReason: schema.taskRuns.failureReason,
+          itemIndex: schema.taskRuns.itemIndex,
+          nodeExecutionId: schema.taskRuns.nodeExecutionId,
+          nodeId: schema.taskRuns.nodeId,
+          status: schema.taskRuns.runtimeStatus,
+          taskRunId: schema.taskRuns.id,
+        },
+      )
+      .from(schema.taskRuns)
+      .where(
+        sql`${schema.taskRuns.workflowId} = ${params.workflowId}
+          and ${schema.taskRuns.ownerUserId} = ${params.ownerUserId}
+          and ${inArray(
+            schema.taskRuns.nodeExecutionId,
+            latestNodeExecutions.map(({ id }) => id),
+          )}
+          and ${isNotNull(schema.taskRuns.runtimeStatus)}
+          and ${isNotNull(schema.taskRuns.itemIndex)}
+          and ${isNotNull(schema.taskRuns.attempt)}`,
+      )
+      .orderBy(
+        schema.taskRuns.nodeExecutionId,
+        schema.taskRuns.itemIndex,
+        desc(schema.taskRuns.attempt),
+        desc(schema.taskRuns.id),
+      );
+    if (!latestTaskRuns.length) {
+      return [];
+    }
 
-  for (const row of rows) {
-    const taskRunId = requireString(row.taskRunId);
-    const slotKey = `${requireString(row.nodeExecutionId)}:${requireNumber(row.itemIndex)}`;
-    if (!slotByKey.has(slotKey)) {
-      const failureReason = optionalTaskStatusFailureReason(row.failureReason);
-      slotByKey.set(slotKey, {
+    const assets = yield* db
+      .select({
+        assetId: schema.assets.id,
+        cdnUrl: schema.assets.cdnUrl,
+        contentType: schema.assets.mimeType,
+        kind: schema.assets.kind,
+        taskRunId: schema.assets.taskRunId,
+        text: schema.assets.textContent,
+      })
+      .from(schema.assets)
+      .where(
+        sql`${inArray(
+          schema.assets.taskRunId,
+          latestTaskRuns.map(({ taskRunId }) => taskRunId),
+        )}
+          and ${schema.assets.source} = 'generated'
+          and ${schema.assets.deletedAt} is null`,
+      )
+      .orderBy(schema.assets.createdAt, schema.assets.id);
+
+    const assetsByTaskRunId = new Map<string, GeneratedAsset[]>();
+    for (const taskRun of latestTaskRuns) {
+      assetsByTaskRunId.set(taskRun.taskRunId, []);
+    }
+    for (const row of assets) {
+      const asset = optionalGeneratedAssetFromRow(row);
+      if (asset && row.taskRunId) {
+        assetsByTaskRunId.get(row.taskRunId)?.push(asset);
+      }
+    }
+
+    return latestTaskRuns.map((row) => {
+      const failureReason = row.failureReason ?? undefined;
+      const slot = {
         attempt: requireNumber(row.attempt),
         ...(failureReason ? { failureReason } : {}),
         itemIndex: requireNumber(row.itemIndex),
-        nodeExecutionId: requireString(row.nodeExecutionId),
-        nodeId: requireString(row.nodeId),
+        nodeExecutionId: row.nodeExecutionId,
+        nodeId: row.nodeId,
         status: requireTaskStatus(row.status),
-        taskRunId,
-      });
-      assetsByTaskRunId.set(taskRunId, []);
-    }
-
-    const asset = optionalGeneratedAssetFromRow(row);
-    if (asset) {
-      assetsByTaskRunId.get(taskRunId)?.push(asset);
-    }
-  }
-
-  return [...slotByKey.values()].map((slot) => {
-    const output = projectGeneratedAssetToTaskOutput(
-      assetsByTaskRunId.get(slot.taskRunId) ?? [],
-    );
-
-    return output.kind === "INVALID_PRIMARY_GENERATED_ASSET_COUNT"
-      ? slot
-      : { ...slot, output };
+        taskRunId: row.taskRunId,
+      } satisfies TaskRunProjectionSlot;
+      const output = projectGeneratedAssetToTaskOutput(
+        assetsByTaskRunId.get(slot.taskRunId) ?? [],
+      );
+      return output.kind === "INVALID_PRIMARY_GENERATED_ASSET_COUNT"
+        ? slot
+        : { ...slot, output };
+    });
   });
 }
 
-function optionalGeneratedAssetFromRow(row: QueryRow): GeneratedAsset | null {
-  const assetId = optionalString(row.assetId);
-  if (!assetId) {
-    return null;
+function optionalGeneratedAssetFromRow(row: {
+  readonly assetId: string;
+  readonly cdnUrl: string | null;
+  readonly contentType: string;
+  readonly kind: string;
+  readonly text: string | null;
+}): GeneratedAsset | null {
+  if (row.kind === "text") {
+    return { assetId: row.assetId, kind: row.kind, text: row.text ?? "" };
   }
-
-  const kind = row.assetKind;
-  if (kind === "text") {
-    return { assetId, kind, text: requireString(row.text) };
-  }
-  if (kind === "image" || kind === "video") {
+  if ((row.kind === "image" || row.kind === "video") && row.cdnUrl) {
     return {
-      assetId,
-      cdnUrl: requireString(row.cdnUrl),
-      contentType: requireString(row.contentType),
-      kind,
+      assetId: row.assetId,
+      cdnUrl: row.cdnUrl,
+      contentType: row.contentType,
+      kind: row.kind,
     };
   }
-
   return null;
 }
 
-function rowsFromResult(result: unknown): readonly QueryRow[] {
-  if (Array.isArray(result)) {
-    return result.filter(isQueryRow);
-  }
-
-  if (isQueryRow(result) && Array.isArray(result.rows)) {
-    return result.rows.filter(isQueryRow);
-  }
-
-  return [];
-}
-
-function isQueryRow(value: unknown): value is QueryRow {
-  return typeof value === "object" && value !== null;
-}
-
-function requireString(value: unknown): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new TypeError("Expected non-empty database string value");
-  }
-
-  return value;
-}
-
-function optionalString(value: unknown): string | null {
-  return value === null ? null : requireString(value);
-}
-
-function requireNumber(value: unknown): number {
+function requireNumber(value: number | null): number {
   if (typeof value === "number" && Number.isInteger(value)) {
     return value;
   }
-
-  if (typeof value === "string" && /^-?\d+$/.test(value)) {
-    const parsed = Number(value);
-    if (Number.isSafeInteger(parsed)) {
-      return parsed;
-    }
-  }
-
   throw new TypeError("Expected integer database number value");
 }
 
-function requireTaskStatus(value: unknown): TaskStatusEventStatus {
-  if (
-    value === "WAITING_UPSTREAM" ||
-    value === "QUEUED" ||
-    value === "RUNNING" ||
-    value === "PENDING_REVIEW" ||
-    value === "APPROVED" ||
-    value === "REJECTED" ||
-    value === "CANCELLED" ||
-    value === "FAILED" ||
-    value === "UPSTREAM_FAILED"
-  ) {
+function requireTaskStatus(value: TaskStatusEventStatus | null) {
+  if (value) {
     return value;
   }
-
   throw new TypeError("Expected Task Run runtime status database value");
-}
-
-function optionalTaskStatusFailureReason(
-  value: unknown,
-): TaskStatusEventFailureReason | undefined {
-  if (value === null) {
-    return undefined;
-  }
-  if (
-    value === "INSUFFICIENT_CREDITS" ||
-    value === "PROVIDER_FAILED" ||
-    value === "EXECUTION_FAILED" ||
-    value === "UPSTREAM_FAILED"
-  ) {
-    return value;
-  }
-
-  throw new TypeError("Expected Task Run failure reason database value");
 }

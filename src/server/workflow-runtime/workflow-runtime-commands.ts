@@ -27,14 +27,19 @@ import type {
   WorkflowRuntimeSettleCompletionResult,
   WorkflowRuntimeSettleFailureResult,
 } from "~/server/workflow-runtime/workflow-runtime-orchestrator";
-import {
-  type PostCommitWork,
-  type PostCommitWorkSource,
-  WorkflowRuntimePostCommitWork,
-} from "~/server/workflow-runtime/workflow-runtime-post-commit-work";
+import { WorkflowRuntimePostCommitWork } from "~/server/workflow-runtime/workflow-runtime-post-commit-work";
+import type {
+  RepositoryCommittedOutcome,
+  StaleTaskRunTransition,
+  WakeUpParentNotFound,
+  WakeUpTaskRunChildrenRepositoryResult,
+  WorkflowRuntimeRepositoryFailure,
+} from "~/server/workflow-runtime/workflow-runtime-repository";
 
 export type WorkflowRuntimeOrchestratorError =
   | (WorkflowRunPlannerError & { readonly committed: false })
+  | StaleTaskRunTransition
+  | WakeUpParentNotFound
   | {
       readonly _tag: "TaskRunCancellationBlockedError";
       readonly committed: false;
@@ -137,112 +142,89 @@ export class WorkflowRuntimeCommands extends Context.Tag(
 
       return {
         approveTaskRun: (command) =>
-          handleReviewDecision(
-            () => repository.approveTaskRun(command),
-            command.workflowId,
-            postCommit,
-            "approve-task-run",
-          ),
+          handleReviewDecision(repository.approveTaskRun(command), postCommit),
         cancelTaskRun: (command) =>
           Effect.flatMap(
-            tryRepositoryCommit(
-              () => repository.cancelTaskRun(command),
+            mapRepositoryErrors(
+              repository.cancelTaskRun(command),
               "Failed to cancel Task Run.",
             ),
-            (result) =>
-              "blocked" in result
+            (outcome) =>
+              "blocked" in outcome.value
                 ? Effect.fail({
                     _tag: "TaskRunCancellationBlockedError",
                     committed: false,
-                    message: result.message,
-                    reason: result.reason,
+                    message: outcome.value.message,
+                    reason: outcome.value.reason,
                   } as const)
-                : handleCommittedReviewDecision(
-                    result,
-                    command.workflowId,
-                    postCommit,
-                    "cancel-task-run",
-                  ),
+                : handleCommittedReviewDecision(outcome, postCommit),
           ),
         handleWakeUpCall: (command) =>
           Effect.gen(function* () {
-            const result = yield* tryRepositoryCommit(
-              () => repository.wakeUpTaskRunChildren(command),
+            const outcome = yield* mapRepositoryErrors(
+              repository.wakeUpTaskRunChildren(command),
               "Failed to handle Wake-Up Call.",
+            ).pipe(
+              Effect.catchTag("WakeUpParentNotFound", () =>
+                Effect.succeed(null),
+              ),
             );
-            if (result.parentFound === false) {
+            if (!outcome) {
               return ignored("WAKE_UP_PARENT_NOT_FOUND");
             }
-            yield* postCommit.deliver(
-              postCommitWork({
-                executionJobs: result.executionJobs,
-                source: "handle-wake-up-call",
-                taskStatusEvents: result.taskStatusEvents,
-                workflowId: command.workflowId,
-              }),
-            );
-            return committed(result);
+            yield* postCommit.deliver(outcome.postCommitWork);
+            return committed(outcome.value);
           }),
         rejectTaskRun: (command) =>
           Effect.gen(function* () {
-            const result = yield* tryRepositoryCommit(
-              () =>
-                repository.rejectTaskRunAndCreateRegeneration({
-                  ...command,
-                  newTaskRunId: ids.createTaskRunId(),
-                } satisfies RejectTaskRunRepositoryCommand),
+            const outcome = yield* mapRepositoryErrors(
+              repository.rejectTaskRunAndCreateRegeneration({
+                ...command,
+                newTaskRunId: ids.createTaskRunId(),
+              } satisfies RejectTaskRunRepositoryCommand),
               "Failed to reject Task Run.",
+            ).pipe(
+              Effect.catchTag("StaleTaskRunTransition", () =>
+                Effect.succeed(null),
+              ),
             );
-            if (!result.rejected) {
+            if (!outcome) {
               return ignored("STALE_TASK_RUN");
             }
-            yield* postCommit.deliver(
-              postCommitWork({
-                executionJobs: result.executionJob ? [result.executionJob] : [],
-                source: "reject-task-run",
-                taskStatusEvents: result.taskStatusEvents,
-                workflowId: command.workflowId,
-              }),
-            );
-            return committed(result);
+            yield* postCommit.deliver(outcome.postCommitWork);
+            return committed(outcome.value);
           }),
         settleWorkerCompletion: (command) =>
           Effect.gen(function* () {
-            const result = yield* tryRepositoryCommit(
-              () => repository.settleTaskRunCompletion(command),
+            const outcome = yield* mapRepositoryErrors(
+              repository.settleTaskRunCompletion(command),
               "Failed to settle completed Task Run.",
+            ).pipe(
+              Effect.catchTag("StaleTaskRunTransition", () =>
+                Effect.succeed(null),
+              ),
             );
-            if (!result.settled) {
+            if (!outcome) {
               return ignored("STALE_TASK_RUN");
             }
-            yield* postCommit.deliver(
-              postCommitWork({
-                source: "settle-worker-completion",
-                taskStatusEvents: [result.event],
-                wakeUpJobs: result.wakeUpJob ? [result.wakeUpJob] : [],
-                workflowId: command.workflowId,
-              }),
-            );
-            return committed(result);
+            yield* postCommit.deliver(outcome.postCommitWork);
+            return committed(outcome.value);
           }),
         settleWorkerFailure: (command) =>
           Effect.gen(function* () {
-            const result = yield* tryRepositoryCommit(
-              () => repository.settleTaskRunFailure(command),
+            const outcome = yield* mapRepositoryErrors(
+              repository.settleTaskRunFailure(command),
               "Failed to settle failed Task Run.",
+            ).pipe(
+              Effect.catchTag("StaleTaskRunTransition", () =>
+                Effect.succeed(null),
+              ),
             );
-            if (!result.settled) {
+            if (!outcome) {
               return ignored("STALE_TASK_RUN");
             }
-            yield* postCommit.deliver(
-              postCommitWork({
-                source: "settle-worker-failure",
-                taskStatusEvents: [result.event],
-                wakeUpJobs: [result.wakeUpJob],
-                workflowId: command.workflowId,
-              }),
-            );
-            return committed(result);
+            yield* postCommit.deliver(outcome.postCommitWork);
+            return committed(outcome.value);
           }),
         startWorkflowRun: (startInput) =>
           Effect.gen(function* () {
@@ -258,20 +240,12 @@ export class WorkflowRuntimeCommands extends Context.Tag(
               });
             }
 
-            const result = yield* tryRepositoryCommit(
-              () => repository.commitWorkflowRunPlan(planning.value),
+            const outcome = yield* mapRepositoryErrors(
+              repository.commitWorkflowRunPlan(planning.value),
               "Failed to commit Workflow Run plan.",
             );
-            yield* postCommit.deliver(
-              postCommitWork({
-                executionJobs: result.executionJobs,
-                source: "start-workflow-run",
-                taskStatusEvents: result.taskStatusEvents,
-                wakeUpJobs: result.wakeUpJobs,
-                workflowId: startInput.workflowId,
-              }),
-            );
-            return committed(result);
+            yield* postCommit.deliver(outcome.postCommitWork);
+            return committed(outcome.value);
           }),
       };
     }),
@@ -282,78 +256,53 @@ export type WorkflowRuntimeCommandsService = Context.Tag.Service<
   typeof WorkflowRuntimeCommands
 >;
 
-type WakeUpTaskRunChildrenRepositoryResult = Awaited<
-  ReturnType<WorkflowRuntimeRepositoryForOrchestrator["wakeUpTaskRunChildren"]>
->;
-
 function handleReviewDecision(
-  decide: () => Promise<WorkflowRuntimeReviewDecisionResult>,
-  workflowId: string,
+  decide: ReturnType<
+    WorkflowRuntimeRepositoryForOrchestrator["approveTaskRun"]
+  >,
   postCommit: Context.Tag.Service<typeof WorkflowRuntimePostCommitWork>,
-  source: PostCommitWorkSource,
-): Effect.Effect<
-  WorkflowRuntimeCommandOutcome<WorkflowRuntimeReviewDecisionResult>,
-  WorkflowRuntimeOrchestratorError
-> {
-  return Effect.flatMap(
-    tryRepositoryCommit(decide, "Failed to decide Task Run review."),
-    (result) =>
-      handleCommittedReviewDecision(result, workflowId, postCommit, source),
-  );
+) {
+  return Effect.gen(function* () {
+    const outcome = yield* mapRepositoryErrors<
+      RepositoryCommittedOutcome<WorkflowRuntimeReviewDecisionResult>
+    >(decide, "Failed to decide Task Run review.").pipe(
+      Effect.catchTag("StaleTaskRunTransition", () => Effect.succeed(null)),
+    );
+    if (!outcome) {
+      return ignored<WorkflowRuntimeReviewDecisionResult>("STALE_TASK_RUN");
+    }
+    return yield* handleCommittedReviewDecision(outcome, postCommit);
+  });
 }
 
 function handleCommittedReviewDecision(
-  result: WorkflowRuntimeReviewDecisionResult,
-  workflowId: string,
+  outcome: RepositoryCommittedOutcome<WorkflowRuntimeReviewDecisionResult>,
   postCommit: Context.Tag.Service<typeof WorkflowRuntimePostCommitWork>,
-  source: PostCommitWorkSource,
-): Effect.Effect<
-  WorkflowRuntimeCommandOutcome<WorkflowRuntimeReviewDecisionResult>,
-  never
-> {
-  if (!result.decided) {
-    return Effect.succeed(ignored("STALE_TASK_RUN"));
-  }
-
+) {
   return Effect.gen(function* () {
-    yield* postCommit.deliver(
-      postCommitWork({
-        source,
-        taskStatusEvents: [result.event],
-        wakeUpJobs: [result.wakeUpJob],
-        workflowId,
-      }),
-    );
-    return committed(result);
+    yield* postCommit.deliver(outcome.postCommitWork);
+    return committed<WorkflowRuntimeReviewDecisionResult>(outcome.value);
   });
 }
 
-function tryRepositoryCommit<T>(
-  run: () => Promise<T>,
+function mapRepositoryErrors<T>(
+  run: Effect.Effect<T, WorkflowRuntimeRepositoryFailure>,
   message: string,
-): Effect.Effect<T, WorkflowRuntimeOrchestratorError> {
-  return Effect.tryPromise({
-    try: run,
-    catch: (cause) => ({
-      _tag: "WorkflowRuntimeCommitError",
-      cause,
-      committed: false,
-      message,
+) {
+  return run.pipe(
+    Effect.mapError((error) => {
+      if (
+        error._tag === "StaleTaskRunTransition" ||
+        error._tag === "WakeUpParentNotFound"
+      ) {
+        return error;
+      }
+      return {
+        _tag: "WorkflowRuntimeCommitError",
+        cause: error.cause,
+        committed: false,
+        message,
+      } as const;
     }),
-  });
-}
-
-function postCommitWork(
-  work: Pick<PostCommitWork, "source" | "workflowId"> &
-    Partial<
-      Pick<PostCommitWork, "executionJobs" | "taskStatusEvents" | "wakeUpJobs">
-    >,
-): PostCommitWork {
-  return {
-    executionJobs: work.executionJobs ?? [],
-    source: work.source,
-    taskStatusEvents: work.taskStatusEvents ?? [],
-    wakeUpJobs: work.wakeUpJobs ?? [],
-    workflowId: work.workflowId,
-  };
+  );
 }

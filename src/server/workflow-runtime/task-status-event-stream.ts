@@ -189,12 +189,13 @@ export function parseTaskStatusEventPayloadEffect(
 }
 
 function recordPublishFailure(error: WorkflowEventPublishError) {
-  return Metric.increment(
+  return Metric.update(
     workflowEventStreamMetrics.publishFailures.pipe(
       Metric.tagged("channel", error.channel),
       Metric.tagged("task_run_id", error.taskRunId ?? "none"),
       Metric.tagged("workflow_id", error.workflowId),
     ),
+    1,
   ).pipe(
     Effect.zipRight(
       Effect.logWarning("Workflow Event Stream publish failed", {
@@ -207,11 +208,12 @@ function recordPublishFailure(error: WorkflowEventPublishError) {
 }
 
 function recordSubscribeFailure(error: WorkflowEventSubscribeError) {
-  return Metric.increment(
+  return Metric.update(
     workflowEventStreamMetrics.subscribeFailures.pipe(
       Metric.tagged("channel", error.channel),
       Metric.tagged("workflow_id", error.workflowId),
     ),
+    1,
   ).pipe(
     Effect.zipRight(
       Effect.logWarning("Workflow Event Stream subscribe failed", {
@@ -226,11 +228,12 @@ function recordParseFailure(
   error: WorkflowEventParseError,
   telemetry: WorkflowEventParseTelemetry,
 ) {
-  return Metric.increment(
+  return Metric.update(
     workflowEventStreamMetrics.parseFailures.pipe(
       Metric.tagged("source", telemetry.source ?? "parser"),
       Metric.tagged("workflow_id", telemetry.workflowId ?? "none"),
     ),
+    1,
   ).pipe(
     Effect.zipRight(
       Effect.logWarning("Workflow Event Stream payload parse failed", {

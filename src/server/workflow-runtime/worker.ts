@@ -1,10 +1,7 @@
 import { Effect } from "effect";
 import { ServerRuntime } from "~/effect/server/runtime";
 import { VertexAi } from "~/server/workflow/vertex";
-import {
-  WorkflowRuntimeCommands,
-  type WorkflowRuntimeCommandsService,
-} from "~/server/workflow-runtime/workflow-runtime-commands";
+import { WorkflowRuntimeCommands } from "~/server/workflow-runtime/workflow-runtime-commands";
 import {
   createWorkflowRuntimeComposition,
   getWorkflowRuntimeManagedRuntime,
@@ -29,25 +26,34 @@ async function createProviderExecutor() {
 async function main() {
   const composition = await createWorkflowRuntimeComposition();
   const workflowRuntime = getWorkflowRuntimeManagedRuntime();
-  const runCommand = <T>(
-    build: (
-      commands: WorkflowRuntimeCommandsService,
-    ) => Effect.Effect<T, unknown>,
-  ) =>
-    workflowRuntime.runPromise(Effect.flatMap(WorkflowRuntimeCommands, build));
   const worker = createWorkflowRuntimeWorker({
     eventPublisher: composition.eventPublisher,
     orchestrator: {
       handleWakeUpCall: (command) =>
-        runCommand((commands) => commands.handleWakeUpCall(command)),
+        workflowRuntime.runPromise(
+          Effect.flatMap(WorkflowRuntimeCommands, (commands) =>
+            commands.handleWakeUpCall(command),
+          ),
+        ),
       settleWorkerCompletion: (command) =>
-        runCommand((commands) => commands.settleWorkerCompletion(command)),
+        workflowRuntime.runPromise(
+          Effect.flatMap(WorkflowRuntimeCommands, (commands) =>
+            commands.settleWorkerCompletion(command),
+          ),
+        ),
       settleWorkerFailure: (command) =>
-        runCommand((commands) => commands.settleWorkerFailure(command)),
+        workflowRuntime.runPromise(
+          Effect.flatMap(WorkflowRuntimeCommands, (commands) =>
+            commands.settleWorkerFailure(command),
+          ),
+        ),
     },
     providerExecutor: await createProviderExecutor(),
     queue: composition.queue,
-    repository: composition.repository,
+    repository: {
+      claimQueuedTaskRun: (command) =>
+        Effect.runPromise(composition.repository.claimQueuedTaskRun(command)),
+    },
   });
 
   worker.on("completed", (job) => {

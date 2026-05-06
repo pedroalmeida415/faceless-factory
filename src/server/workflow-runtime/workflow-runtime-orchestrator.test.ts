@@ -1,5 +1,6 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
+import { Effect } from "effect";
 
 import {
   createWorkflowNode,
@@ -8,10 +9,6 @@ import {
 } from "~/lib/workflow/document";
 import type { WorkflowRunPlan } from "~/lib/workflow-runtime/planning/workflow-run-planner";
 import type { TaskStatusEvent } from "~/lib/workflow-runtime/runtime/task-status-events";
-import type {
-  WakeUpTaskRunChildrenRepositoryCommand,
-  WakeUpTaskRunChildrenRepositoryResult,
-} from "~/server/workflow-runtime/workflow-runtime-gatekeeper-repository";
 import {
   createWorkflowRuntimeOrchestrator,
   type RejectTaskRunCommand,
@@ -24,6 +21,11 @@ import type {
   WorkflowRuntimeExecutionJobPayload,
   WorkflowRuntimeWakeUpJobPayload,
 } from "~/server/workflow-runtime/workflow-runtime-queue";
+import type {
+  WakeUpTaskRunChildrenRepositoryCommand,
+  WakeUpTaskRunChildrenRepositoryResult,
+  WorkflowRuntimeRepositoryFailure,
+} from "~/server/workflow-runtime/workflow-runtime-repository";
 
 describe("WorkflowRuntimeOrchestrator", () => {
   test("commits a planned run before enqueueing execution jobs and publishing Task Status Events", async () => {
@@ -150,7 +152,11 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.equal(result.ok, false);
     assert.equal(result.error._tag, "WorkflowRuntimeCommitError");
     assert.equal(result.error.committed, false);
-    assert.equal(result.error.cause, repository.commitError);
+    assert.deepEqual(result.error.cause, {
+      _tag: "WorkflowRuntimeRepositoryFailure",
+      cause: repository.commitError,
+      operation: "commitWorkflowRunPlan",
+    });
     assert.deepEqual(sideEffects, ["commit-attempt"]);
   });
 
@@ -348,6 +354,24 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.deepEqual(sideEffects, ["settle-completion:task-run-1"]);
   });
 
+  test("maps stale completion repository failures to an ignored settled-false result", async () => {
+    const sideEffects: string[] = [];
+    const repository = new FakeRepository(sideEffects);
+    repository.completionError = staleTaskRunFailure("settleTaskRunCompletion");
+    const orchestrator = createWorkflowRuntimeOrchestrator({
+      eventPublisher: new FakeEventPublisher(sideEffects),
+      queue: new FakeQueue(sideEffects),
+      repository,
+    });
+
+    const result = await orchestrator.settleWorkerCompletion(
+      makeCompletionCommand(),
+    );
+
+    assert.deepEqual(result, { ok: true, value: { settled: false } });
+    assert.deepEqual(sideEffects, []);
+  });
+
   test("returns completion wake-up enqueue failures as committed post-commit failures", async () => {
     const sideEffects: string[] = [];
     const queue = new FakeQueue(sideEffects);
@@ -421,6 +445,24 @@ describe("WorkflowRuntimeOrchestrator", () => {
 
     assert.equal(result.ok, true);
     assert.deepEqual(sideEffects, ["approve:task-run-1"]);
+  });
+
+  test("maps stale review decision repository failures to an ignored decided-false result", async () => {
+    const sideEffects: string[] = [];
+    const repository = new FakeRepository(sideEffects);
+    repository.approveError = staleTaskRunFailure("approveTaskRun");
+    const orchestrator = createWorkflowRuntimeOrchestrator({
+      eventPublisher: new FakeEventPublisher(sideEffects),
+      queue: new FakeQueue(sideEffects),
+      repository,
+    });
+
+    const result = await orchestrator.approveTaskRun(
+      makeReviewDecisionCommand(),
+    );
+
+    assert.deepEqual(result, { ok: true, value: { decided: false } });
+    assert.deepEqual(sideEffects, []);
   });
 
   test("cancels a Task Run before enqueueing downstream wake-up jobs and publishing Task Status Events", async () => {
@@ -662,7 +704,34 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.equal(result.ok, false);
     assert.equal(result.error._tag, "WorkflowRuntimeCommitError");
     assert.equal(result.error.committed, false);
-    assert.equal(result.error.cause, repository.wakeUpError);
+    assert.deepEqual(result.error.cause, {
+      _tag: "WorkflowRuntimeRepositoryFailure",
+      cause: repository.wakeUpError,
+      operation: "wakeUpTaskRunChildren",
+    });
+    assert.deepEqual(sideEffects, ["wake-up~attempt:task-run-1"]);
+  });
+
+  test("maps missing Wake-Up parents to a no-work ok result", async () => {
+    const sideEffects: string[] = [];
+    const repository = new FakeRepository(sideEffects);
+    repository.wakeUpError = {
+      _tag: "WakeUpParentNotFound",
+      ownerUserId: "owner-1",
+      settledParentTaskRunId: "task-run-1",
+    };
+    const orchestrator = createWorkflowRuntimeOrchestrator({
+      eventPublisher: new FakeEventPublisher(sideEffects),
+      queue: new FakeQueue(sideEffects),
+      repository,
+    });
+
+    const result = await orchestrator.handleWakeUpCall(makeWakeUpCommand());
+
+    assert.deepEqual(result, {
+      ok: true,
+      value: { executionJobs: [], parentFound: false, taskStatusEvents: [] },
+    });
     assert.deepEqual(sideEffects, ["wake-up~attempt:task-run-1"]);
   });
 
@@ -888,6 +957,17 @@ function makeRejectTaskRunCommand(): RejectTaskRunCommand {
   return makeReviewDecisionCommand();
 }
 
+function staleTaskRunFailure(
+  operation: string,
+): WorkflowRuntimeRepositoryFailure {
+  return {
+    _tag: "StaleTaskRunTransition",
+    attempt: 0,
+    operation,
+    taskRunId: "task-run-1",
+  };
+}
+
 class FakeRepository {
   commitError: Error | null = null;
   commitResultOverride: {
@@ -903,6 +983,7 @@ class FakeRepository {
         readonly wakeUpJob: WorkflowRuntimeWakeUpJobPayload | null;
       }
     | { readonly settled: false } = { settled: false };
+  completionError: WorkflowRuntimeRepositoryFailure | null = null;
   readonly completionCommands: SettleWorkerCompletionCommand[] = [];
   failureResult:
     | {
@@ -919,6 +1000,7 @@ class FakeRepository {
         readonly wakeUpJob: WorkflowRuntimeWakeUpJobPayload;
       }
     | { readonly decided: false } = { decided: false };
+  approveError: WorkflowRuntimeRepositoryFailure | null = null;
   readonly approveCommands: ReviewTaskRunDecisionCommand[] = [];
   cancelResult:
     | {
@@ -933,6 +1015,7 @@ class FakeRepository {
         readonly message: string;
         readonly reason: TaskRunCancellationBlockedReason;
       } = { decided: false };
+  cancelError: WorkflowRuntimeRepositoryFailure | null = null;
   readonly cancelCommands: ReviewTaskRunDecisionCommand[] = [];
   rejectResult:
     | {
@@ -941,6 +1024,7 @@ class FakeRepository {
         readonly taskStatusEvents: readonly TaskStatusEvent[];
       }
     | { readonly rejected: false } = { rejected: false };
+  rejectError: WorkflowRuntimeRepositoryFailure | null = null;
   readonly rejectCommands: (RejectTaskRunCommand & {
     readonly newTaskRunId: string;
   })[] = [];
@@ -949,105 +1033,184 @@ class FakeRepository {
     parentFound: true,
     taskStatusEvents: [],
   };
-  wakeUpError: Error | null = null;
+  wakeUpError: Error | WorkflowRuntimeRepositoryFailure | null = null;
   readonly wakeUpCommands: WakeUpTaskRunChildrenRepositoryCommand[] = [];
 
   constructor(private readonly sideEffects: string[]) {}
 
-  async commitWorkflowRunPlan(plan: WorkflowRunPlan) {
+  commitWorkflowRunPlan(plan: WorkflowRunPlan) {
     if (this.commitError) {
-      this.sideEffects.push("commit-attempt");
-      throw this.commitError;
+      return Effect.sync(() => {
+        this.sideEffects.push("commit-attempt");
+      }).pipe(
+        Effect.flatMap(() =>
+          Effect.fail(
+            repositoryFailure(this.commitError, "commitWorkflowRunPlan"),
+          ),
+        ),
+      );
     }
 
-    this.committedPlans.push(plan);
-    this.sideEffects.push(
-      `commit:${plan.taskRunsToCreate.map((taskRun) => taskRun.id).join(",")}`,
-    );
-    if (this.commitResultOverride) {
-      return this.commitResultOverride;
+    return Effect.sync(() => {
+      this.committedPlans.push(plan);
+      this.sideEffects.push(
+        `commit:${plan.taskRunsToCreate.map((taskRun) => taskRun.id).join(",")}`,
+      );
+      if (this.commitResultOverride) {
+        return this.committed(this.commitResultOverride);
+      }
+
+      return this.committed({
+        executionJobs: plan.taskRunsToCreate.flatMap((taskRun) =>
+          taskRun.status === "QUEUED"
+            ? [
+                {
+                  attempt: taskRun.attempt,
+                  itemIndex: taskRun.itemIndex,
+                  jobId: `task-run~${taskRun.id}~attempt~${taskRun.attempt}~execute`,
+                  nodeExecutionId: taskRun.nodeExecutionId,
+                  ownerUserId: "owner-1",
+                  taskRunId: taskRun.id,
+                  workflowId: "workflow-1",
+                } satisfies WorkflowRuntimeExecutionJobPayload,
+              ]
+            : [],
+        ),
+        taskStatusEvents: plan.taskRunsToCreate.map(
+          (taskRun) =>
+            ({
+              attempt: taskRun.attempt,
+              itemIndex: taskRun.itemIndex,
+              nodeExecutionId: taskRun.nodeExecutionId,
+              status: taskRun.status,
+              taskRunId: taskRun.id,
+            }) satisfies TaskStatusEvent,
+        ),
+        wakeUpJobs: [],
+      });
+    });
+  }
+
+  settleTaskRunCompletion(command: SettleWorkerCompletionCommand) {
+    if (this.completionError) {
+      return Effect.fail(this.completionError);
     }
+    return Effect.sync(() => {
+      this.completionCommands.push(command);
+      this.sideEffects.push(`settle-completion:${command.taskRunId}`);
 
-    return {
-      executionJobs: plan.taskRunsToCreate.flatMap((taskRun) =>
-        taskRun.status === "QUEUED"
-          ? [
-              {
-                attempt: taskRun.attempt,
-                itemIndex: taskRun.itemIndex,
-                jobId: `task-run~${taskRun.id}~attempt~${taskRun.attempt}~execute`,
-                nodeExecutionId: taskRun.nodeExecutionId,
-                ownerUserId: "owner-1",
-                taskRunId: taskRun.id,
-                workflowId: "workflow-1",
-              } satisfies WorkflowRuntimeExecutionJobPayload,
-            ]
-          : [],
-      ),
-      taskStatusEvents: plan.taskRunsToCreate.map(
-        (taskRun) =>
-          ({
-            attempt: taskRun.attempt,
-            itemIndex: taskRun.itemIndex,
-            nodeExecutionId: taskRun.nodeExecutionId,
-            status: taskRun.status,
-            taskRunId: taskRun.id,
-          }) satisfies TaskStatusEvent,
-      ),
-      wakeUpJobs: [],
-    };
+      return this.committed(this.completionResult);
+    });
   }
 
-  async settleTaskRunCompletion(command: SettleWorkerCompletionCommand) {
-    this.completionCommands.push(command);
-    this.sideEffects.push(`settle-completion:${command.taskRunId}`);
+  settleTaskRunFailure(command: SettleWorkerFailureCommand) {
+    return Effect.sync(() => {
+      this.failureCommands.push(command);
+      this.sideEffects.push(`settle-failure:${command.taskRunId}`);
 
-    return this.completionResult;
+      return this.committed(this.failureResult);
+    });
   }
 
-  async settleTaskRunFailure(command: SettleWorkerFailureCommand) {
-    this.failureCommands.push(command);
-    this.sideEffects.push(`settle-failure:${command.taskRunId}`);
+  approveTaskRun(command: ReviewTaskRunDecisionCommand) {
+    if (this.approveError) {
+      return Effect.fail(this.approveError);
+    }
+    return Effect.sync(() => {
+      this.approveCommands.push(command);
+      this.sideEffects.push(`approve:${command.taskRunId}`);
 
-    return this.failureResult;
+      return this.committed(this.approveResult);
+    });
   }
 
-  async approveTaskRun(command: ReviewTaskRunDecisionCommand) {
-    this.approveCommands.push(command);
-    this.sideEffects.push(`approve:${command.taskRunId}`);
+  cancelTaskRun(command: ReviewTaskRunDecisionCommand) {
+    if (this.cancelError) {
+      return Effect.fail(this.cancelError);
+    }
+    return Effect.sync(() => {
+      this.cancelCommands.push(command);
+      this.sideEffects.push(`cancel:${command.taskRunId}`);
 
-    return this.approveResult;
+      return this.committed(this.cancelResult);
+    });
   }
 
-  async cancelTaskRun(command: ReviewTaskRunDecisionCommand) {
-    this.cancelCommands.push(command);
-    this.sideEffects.push(`cancel:${command.taskRunId}`);
-
-    return this.cancelResult;
-  }
-
-  async rejectTaskRunAndCreateRegeneration(
+  rejectTaskRunAndCreateRegeneration(
     command: RejectTaskRunCommand & { readonly newTaskRunId: string },
   ) {
-    this.rejectCommands.push(command);
-    this.sideEffects.push(`reject:${command.taskRunId}`);
+    if (this.rejectError) {
+      return Effect.fail(this.rejectError);
+    }
+    return Effect.sync(() => {
+      this.rejectCommands.push(command);
+      this.sideEffects.push(`reject:${command.taskRunId}`);
 
-    return this.rejectResult;
+      return this.committed(this.rejectResult);
+    });
   }
 
-  async wakeUpTaskRunChildren(command: WakeUpTaskRunChildrenRepositoryCommand) {
-    this.wakeUpCommands.push(command);
+  wakeUpTaskRunChildren(command: WakeUpTaskRunChildrenRepositoryCommand) {
     if (this.wakeUpError) {
-      this.sideEffects.push(
-        `wake-up~attempt:${command.settledParentTaskRunId}`,
+      return Effect.sync(() => {
+        this.wakeUpCommands.push(command);
+        this.sideEffects.push(
+          `wake-up~attempt:${command.settledParentTaskRunId}`,
+        );
+      }).pipe(
+        Effect.flatMap(() =>
+          Effect.fail(
+            repositoryFailure(this.wakeUpError, "wakeUpTaskRunChildren"),
+          ),
+        ),
       );
-      throw this.wakeUpError;
     }
 
-    this.sideEffects.push(`wake-up~${command.settledParentTaskRunId}`);
+    return Effect.sync(() => {
+      this.wakeUpCommands.push(command);
+      this.sideEffects.push(`wake-up~${command.settledParentTaskRunId}`);
 
-    return this.wakeUpResult;
+      return this.committed(this.wakeUpResult);
+    });
   }
+
+  private committed<T>(value: T) {
+    const output = value as {
+      readonly event?: TaskStatusEvent;
+      readonly executionJob?: WorkflowRuntimeExecutionJobPayload | null;
+      readonly executionJobs?: readonly WorkflowRuntimeExecutionJobPayload[];
+      readonly taskStatusEvents?: readonly TaskStatusEvent[];
+      readonly wakeUpJob?: WorkflowRuntimeWakeUpJobPayload | null;
+      readonly wakeUpJobs?: readonly WorkflowRuntimeWakeUpJobPayload[];
+    };
+    return {
+      postCommitWork: {
+        executionJobs:
+          output.executionJobs ??
+          (output.executionJob ? [output.executionJob] : []),
+        source: "start-workflow-run" as const,
+        taskStatusEvents:
+          output.taskStatusEvents ?? (output.event ? [output.event] : []),
+        wakeUpJobs:
+          output.wakeUpJobs ?? (output.wakeUpJob ? [output.wakeUpJob] : []),
+        workflowId: "workflow-1",
+      },
+      value,
+    };
+  }
+}
+
+function repositoryFailure(
+  cause: Error | WorkflowRuntimeRepositoryFailure | null,
+  operation: string,
+): WorkflowRuntimeRepositoryFailure {
+  return cause && "_tag" in cause
+    ? cause
+    : {
+        _tag: "WorkflowRuntimeRepositoryFailure",
+        cause,
+        operation,
+      };
 }
 
 class FakeQueue {

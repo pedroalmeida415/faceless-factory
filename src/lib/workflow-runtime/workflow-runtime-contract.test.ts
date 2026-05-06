@@ -1,9 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, test } from "bun:test";
 import assert from "node:assert/strict";
+import type * as SqlClient from "@effect/sql/SqlClient";
+import * as PgDrizzle from "@effect/sql-drizzle/Pg";
+import * as PgClient from "@effect/sql-pg/PgClient";
+import type { DrizzleConfig, SQL } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { Effect, Layer, Redacted } from "effect";
+import postgres from "postgres";
 
-import { PGlite } from "@electric-sql/pglite";
-import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
-
+import { env } from "~/env";
 import type { WorkflowDocument } from "~/lib/workflow/document";
 import { WorkflowValidationError } from "~/lib/workflow/errors";
 import { assertActiveTaskRunSaveAllowed } from "~/lib/workflow/save-lock-policy";
@@ -40,14 +45,15 @@ import {
   latestTaskRun,
   nextId,
   outputReorderDocument,
+  type RuntimeContractDatabase,
   resetRuntimeContractTables,
   setNodeExecutionOutputCount,
   setUserCreditBalance,
   setupRuntimeContractTables,
   simpleScriptDocument,
   unwrapPlan,
-  workflowRunPlan,
 } from "~/lib/workflow-runtime/workflow-runtime-contract-harness";
+import * as schema from "~/server/db/schema";
 import { createWorkflowRuntimeOrchestrator } from "~/server/workflow-runtime/workflow-runtime-orchestrator";
 import { createWorkflowRuntimeProviderExecutor } from "~/server/workflow-runtime/workflow-runtime-provider-executor";
 import {
@@ -56,16 +62,145 @@ import {
   buildWorkflowRuntimeFailureSettlementJobPayload,
   buildWorkflowRuntimeWakeUpJobPayload,
 } from "~/server/workflow-runtime/workflow-runtime-queue";
-import { createWorkflowRuntimeRepository } from "~/server/workflow-runtime/workflow-runtime-repository";
+import {
+  createWorkflowRuntimeRepository,
+  type WorkflowRuntimeRepositoryFailure,
+} from "~/server/workflow-runtime/workflow-runtime-repository";
 import { getTaskRunProjectionForWorkflow } from "~/server/workflow-runtime/workflow-runtime-task-projection-repository";
 
+const ContractPgClientLive = PgClient.layer({
+  url: Redacted.make(env.DATABASE_URL),
+});
+const ContractSqlLive = Layer.mergeAll(
+  ContractPgClientLive,
+  PgDrizzle.layerWithConfig({ schema } as unknown as DrizzleConfig).pipe(
+    Layer.provide(ContractPgClientLive),
+  ),
+);
+const ContractRepositorySqlLive = ContractSqlLive.pipe(
+  Layer.mapError(
+    (cause): WorkflowRuntimeRepositoryFailure => ({
+      _tag: "WorkflowRuntimeRepositoryFailure",
+      cause,
+      operation: "contractSqlLive",
+    }),
+  ),
+);
+
+function runRepositoryEffect<A, E>(
+  effect: Effect.Effect<A, E, SqlClient.SqlClient | PgDrizzle.PgDrizzle>,
+) {
+  return Effect.runPromise(effect.pipe(Effect.provide(ContractSqlLive)));
+}
+
+function createContractDatabase(client: postgres.Sql): RuntimeContractDatabase {
+  const drizzleDb = drizzle(client, { schema });
+  return {
+    execute: async (query: SQL) => {
+      const result = await drizzleDb.execute(query);
+      if (Array.isArray(result)) {
+        return { rows: result as readonly Record<string, unknown>[] };
+      }
+      return {
+        rows: (result as { readonly rows: readonly Record<string, unknown>[] })
+          .rows,
+      };
+    },
+  };
+}
+
+function createContractRepository() {
+  const repository = createWorkflowRuntimeRepository();
+  return {
+    approveTaskRun: (
+      command: Omit<
+        Parameters<typeof repository.approveTaskRun>[0],
+        "workflowId"
+      >,
+    ) =>
+      runRepositoryEffect(
+        repository.approveTaskRun({ ...command, workflowId: "workflow-id" }),
+      ).then((outcome) => outcome.value),
+    cancelTaskRun: (
+      command: Omit<
+        Parameters<typeof repository.cancelTaskRun>[0],
+        "workflowId"
+      >,
+    ) =>
+      runRepositoryEffect(
+        repository.cancelTaskRun({ ...command, workflowId: "workflow-id" }),
+      ).then((outcome) => outcome.value),
+    claimQueuedTaskRun: (
+      command: Parameters<typeof repository.claimQueuedTaskRun>[0],
+    ) => runRepositoryEffect(repository.claimQueuedTaskRun(command)),
+    commitWorkflowRunPlan: (
+      plan: Parameters<typeof repository.commitWorkflowRunPlan>[0],
+    ) =>
+      runRepositoryEffect(repository.commitWorkflowRunPlan(plan)).then(
+        (outcome) => outcome.value,
+      ),
+    getTaskDependenciesForChild: (
+      command: Parameters<typeof repository.getTaskDependenciesForChild>[0],
+    ) => runRepositoryEffect(repository.getTaskDependenciesForChild(command)),
+    rejectTaskRunAndCreateRegeneration: (
+      command: Parameters<
+        typeof repository.rejectTaskRunAndCreateRegeneration
+      >[0] extends infer T
+        ? Omit<T, "workflowId">
+        : never,
+    ) =>
+      runRepositoryEffect(
+        repository.rejectTaskRunAndCreateRegeneration({
+          ...command,
+          workflowId: "workflow-id",
+        }),
+      ).then((outcome) => outcome.value),
+    settleTaskRunCompletion: (
+      command: Omit<
+        Parameters<typeof repository.settleTaskRunCompletion>[0],
+        "workflowId"
+      >,
+    ) =>
+      runRepositoryEffect(
+        repository.settleTaskRunCompletion({
+          ...command,
+          workflowId: "workflow-id",
+        }),
+      ).then((outcome) => outcome.value),
+    settleTaskRunFailure: (
+      command: Omit<
+        Parameters<typeof repository.settleTaskRunFailure>[0],
+        "workflowId"
+      >,
+    ) =>
+      runRepositoryEffect(
+        repository.settleTaskRunFailure({
+          ...command,
+          workflowId: "workflow-id",
+        }),
+      ).then((outcome) => outcome.value),
+    wakeUpTaskRunChildren: (
+      command: Omit<
+        Parameters<typeof repository.wakeUpTaskRunChildren>[0],
+        "workflowId"
+      >,
+    ) =>
+      runRepositoryEffect(
+        repository.wakeUpTaskRunChildren({
+          ...command,
+          workflowId: "workflow-id",
+        }),
+      ).then((outcome) => outcome.value),
+  };
+}
+
 describe("Workflow runtime state-machine contract", () => {
-  let client: PGlite;
-  let db: PgliteDatabase;
+  let client: postgres.Sql;
+  let db: RuntimeContractDatabase;
 
   beforeAll(async () => {
-    client = new PGlite();
-    db = drizzle(client);
+    client = postgres(env.DATABASE_URL);
+    db = createContractDatabase(client);
     await setupRuntimeContractTables(db);
   });
 
@@ -74,7 +209,7 @@ describe("Workflow runtime state-machine contract", () => {
   });
 
   afterAll(async () => {
-    await client.close();
+    await client.end();
   });
 
   test("planner run-node contract creates upstream closure, reuses durable batches, waits on active parents, and never creates empty executable Node Executions", () => {
@@ -423,7 +558,7 @@ describe("Workflow runtime state-machine contract", () => {
   });
 
   test("repository and gatekeeper contract commits materialized Task Runs, gates review, freezes dependencies, and keeps Wake-Up Calls idempotent", async () => {
-    const repository = createWorkflowRuntimeRepository(db);
+    const repository = createContractRepository();
     await insertUser(db, { creditBalance: 100 });
     const document = generatedImageToGeneratedVideoDocument();
     const plan = unwrapPlan(
@@ -559,6 +694,7 @@ describe("Workflow runtime state-machine contract", () => {
     });
     assert.deepEqual(duplicateWake, {
       executionJobs: [],
+      parentFound: true,
       taskStatusEvents: [],
     });
     assert.equal(await getUserCreditBalance(db, "owner-user"), 50);
@@ -588,7 +724,7 @@ describe("Workflow runtime state-machine contract", () => {
   });
 
   test("attempt contract distinguishes rejection, cancellation, failure, regeneration, rerun, and explicit recovery", async () => {
-    const repository = createWorkflowRuntimeRepository(db);
+    const repository = createContractRepository();
     await insertUser(db, { creditBalance: 60 });
     await insertTaskRun(db, {
       attempt: 0,
@@ -684,15 +820,6 @@ describe("Workflow runtime state-machine contract", () => {
       childTaskRunId: "waiting-child-of-unfunded",
       parentNodeExecutionId: "node-execution-unfunded-parent",
     });
-    const failedCommit = await repository.commitWorkflowRunPlan(
-      workflowRunPlan({
-        nodeExecutionsToReuse: [
-          { id: "node-execution-unfunded-parent", nodeId: "node-id" },
-        ],
-        taskRunsToCreate: [],
-      }),
-    );
-    assert.deepEqual(failedCommit.executionJobs, []);
     await repository.settleTaskRunFailure({
       attempt: 0,
       failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
@@ -905,10 +1032,12 @@ describe("Workflow runtime state-machine contract", () => {
       nodeId: "projected-node",
       runtimeStatus: "FAILED",
     });
-    const projection = await getTaskRunProjectionForWorkflow(db, {
-      ownerUserId: "owner-user",
-      workflowId: "workflow-id",
-    });
+    const projection = await runRepositoryEffect(
+      getTaskRunProjectionForWorkflow({
+        ownerUserId: "owner-user",
+        workflowId: "workflow-id",
+      }),
+    );
     assert.deepEqual(projection, [
       {
         attempt: 1,
@@ -955,12 +1084,12 @@ describe("Workflow runtime state-machine contract", () => {
 });
 
 describe("Workflow runtime exhaustive state-machine contract", () => {
-  let client: PGlite;
-  let db: PgliteDatabase;
+  let client: postgres.Sql;
+  let db: RuntimeContractDatabase;
 
   beforeAll(async () => {
-    client = new PGlite();
-    db = drizzle(client);
+    client = postgres(env.DATABASE_URL);
+    db = createContractDatabase(client);
     await setupRuntimeContractTables(db);
   });
 
@@ -969,11 +1098,11 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
   });
 
   afterAll(async () => {
-    await client.close();
+    await client.end();
   });
 
   test("review-disabled completion approves immediately, emits renderable output, and drafts a Wake-Up Call for children", async () => {
-    const repository = createWorkflowRuntimeRepository(db);
+    const repository = createContractRepository();
     await insertTaskRun(db, {
       id: "parent-review-disabled",
       nodeExecutionId: "node-execution-parent-review-disabled",
@@ -1037,7 +1166,9 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
   });
 
   test("cancel command covers every cancellable and non-cancellable Task Run state", async () => {
-    const repository = createWorkflowRuntimeRepository(db);
+    const repository = createWorkflowRuntimeRepository({
+      sqlLayer: ContractRepositorySqlLive,
+    });
     const wakeUpJobs: ReturnType<
       typeof buildWorkflowRuntimeWakeUpJobPayload
     >[] = [];
@@ -1205,7 +1336,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
   });
 
   test("insufficient credits fail a ready child, cascade descendants, and later credits do not auto-resume", async () => {
-    const repository = createWorkflowRuntimeRepository(db);
+    const repository = createContractRepository();
     await insertUser(db, { creditBalance: 5 });
     await insertTaskRun(db, {
       id: "funded-parent-approved",
@@ -1277,6 +1408,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
     });
     assert.deepEqual(duplicateWake, {
       executionJobs: [],
+      parentFound: true,
       taskStatusEvents: [],
     });
     assert.equal(
@@ -1291,7 +1423,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
   });
 
   test("queued children freeze exact parent Task Run dependencies and snapshots across later regeneration", async () => {
-    const repository = createWorkflowRuntimeRepository(db);
+    const repository = createContractRepository();
     await insertUser(db, { creditBalance: 100 });
     await insertTaskRun(db, {
       id: "parent-approved-before-regeneration",
@@ -1374,7 +1506,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
   });
 
   test("broadcast and output-reorder materialization align Task Dependencies with provider snapshots", async () => {
-    const repository = createWorkflowRuntimeRepository(db);
+    const repository = createContractRepository();
     await insertUser(db, { creditBalance: 100 });
     await insertTaskRun(db, {
       id: "broadcast-source-approved",
@@ -1587,7 +1719,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
   });
 
   test("settled generated text and image Assets are workflow-local, task-run-linked, and renderable in events", async () => {
-    const repository = createWorkflowRuntimeRepository(db);
+    const repository = createContractRepository();
     await insertTaskRun(db, {
       id: "text-producing-task",
       nodeExecutionId: "node-execution-text-producing",

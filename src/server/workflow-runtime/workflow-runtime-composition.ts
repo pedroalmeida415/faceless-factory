@@ -1,7 +1,11 @@
+import * as PgDrizzle from "@effect/sql-drizzle/Pg";
+import * as PgClient from "@effect/sql-pg/PgClient";
 import { Queue } from "bullmq";
-import { Effect, Layer, ManagedRuntime } from "effect";
+import type { DrizzleConfig } from "drizzle-orm";
+import { Effect, Layer, ManagedRuntime, Redacted } from "effect";
 
-import { db } from "~/server/db";
+import { env } from "~/env";
+import * as schema from "~/server/db/schema";
 import { getRedisClient } from "~/server/redis";
 import { createWorkflowEventPublisher } from "~/server/workflow-runtime/task-status-event-stream";
 import {
@@ -13,7 +17,10 @@ import {
 } from "~/server/workflow-runtime/workflow-runtime-commands";
 import { WorkflowRuntimePostCommitWork } from "~/server/workflow-runtime/workflow-runtime-post-commit-work";
 import { createWorkflowRuntimeQueueAdapter } from "~/server/workflow-runtime/workflow-runtime-queue";
-import { createWorkflowRuntimeRepository } from "~/server/workflow-runtime/workflow-runtime-repository";
+import {
+  createWorkflowRuntimeRepository,
+  type WorkflowRuntimeRepositoryFailure,
+} from "~/server/workflow-runtime/workflow-runtime-repository";
 import { WorkflowRuntimeTelemetry } from "~/server/workflow-runtime/workflow-runtime-telemetry";
 import {
   WORKFLOW_RUNTIME_JOB_HISTORY_AGE_SECONDS,
@@ -58,7 +65,9 @@ export function getWorkflowRuntimeQueue() {
 }
 
 export async function createWorkflowRuntimeComposition() {
-  const repository = createWorkflowRuntimeRepository(db);
+  const repository = createWorkflowRuntimeRepository({
+    sqlLayer: createWorkflowRuntimeSqlLayer(),
+  });
   const queue = createWorkflowRuntimeQueueAdapter(getWorkflowRuntimeQueue());
   const eventPublisher = createWorkflowEventPublisher(await getRedisClient());
 
@@ -77,9 +86,10 @@ export function getWorkflowRuntimeManagedRuntime() {
 }
 
 export function createWorkflowRuntimeLiveLayer() {
+  const SqlLive = createWorkflowRuntimeSqlLayer();
   const RepositoryLive = Layer.succeed(
     WorkflowRuntimeRepository,
-    createWorkflowRuntimeRepository(db),
+    createWorkflowRuntimeRepository({ sqlLayer: SqlLive }),
   );
   const QueueLive = Layer.succeed(
     WorkflowRuntimeQueue,
@@ -109,6 +119,26 @@ export function createWorkflowRuntimeLiveLayer() {
     PostCommitWorkLive,
     WorkflowRuntimeCommands.Live.pipe(
       Layer.provide(Layer.mergeAll(DependenciesLive, PostCommitWorkLive)),
+    ),
+  );
+}
+
+export function createWorkflowRuntimeSqlLayer() {
+  const PgClientLive = PgClient.layer({
+    url: Redacted.make(env.DATABASE_URL),
+  });
+  return Layer.mergeAll(
+    PgClientLive,
+    PgDrizzle.layerWithConfig({ schema } as unknown as DrizzleConfig).pipe(
+      Layer.provide(PgClientLive),
+    ),
+  ).pipe(
+    Layer.mapError(
+      (cause): WorkflowRuntimeRepositoryFailure => ({
+        _tag: "WorkflowRuntimeRepositoryFailure",
+        cause,
+        operation: "createWorkflowRuntimeSqlLayer",
+      }),
     ),
   );
 }

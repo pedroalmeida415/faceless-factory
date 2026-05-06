@@ -22,7 +22,13 @@ import { WorkflowRuntimeTelemetry } from "~/server/workflow-runtime/workflow-run
 describe("WorkflowRuntimeCommands", () => {
   test("maps stale Task Run settlement attempts to ignored outcomes", async () => {
     const runtime = makeRuntime({
-      settleTaskRunCompletion: () => Promise.resolve({ settled: false }),
+      settleTaskRunCompletion: () =>
+        Effect.fail({
+          _tag: "StaleTaskRunTransition",
+          attempt: 1,
+          operation: "settleTaskRunCompletion",
+          taskRunId: "task-run-1",
+        }),
     });
 
     const outcome = await runtime.runPromise(
@@ -56,10 +62,10 @@ describe("WorkflowRuntimeCommands", () => {
   test("maps missing Wake-Up Call parents to ignored outcomes", async () => {
     const runtime = makeRuntime({
       wakeUpTaskRunChildren: () =>
-        Promise.resolve({
-          executionJobs: [],
-          parentFound: false,
-          taskStatusEvents: [],
+        Effect.fail({
+          _tag: "WakeUpParentNotFound",
+          ownerUserId: "owner-1",
+          settledParentTaskRunId: "missing-parent",
         }),
     });
 
@@ -83,16 +89,33 @@ describe("WorkflowRuntimeCommands", () => {
     const runtime = makeRuntime(
       {
         settleTaskRunCompletion: () =>
-          Promise.resolve({
-            event: {
-              attempt: 0,
-              itemIndex: 0,
-              nodeExecutionId: "node-execution-1",
-              status: "APPROVED" as const,
-              taskRunId: "task-run-1",
+          Effect.succeed({
+            postCommitWork: {
+              executionJobs: [],
+              source: "settle-worker-completion" as const,
+              taskStatusEvents: [
+                {
+                  attempt: 0,
+                  itemIndex: 0,
+                  nodeExecutionId: "node-execution-1",
+                  status: "APPROVED" as const,
+                  taskRunId: "task-run-1",
+                },
+              ],
+              wakeUpJobs: [],
+              workflowId: "workflow-1",
             },
-            settled: true,
-            wakeUpJob: null,
+            value: {
+              event: {
+                attempt: 0,
+                itemIndex: 0,
+                nodeExecutionId: "node-execution-1",
+                status: "APPROVED" as const,
+                taskRunId: "task-run-1",
+              },
+              settled: true,
+              wakeUpJob: null,
+            },
           }),
       },
       {
@@ -153,10 +176,19 @@ describe("WorkflowRuntimeCommands", () => {
     const runtime = makeRuntimeWithPostCommitWork(
       {
         commitWorkflowRunPlan: () =>
-          Promise.resolve({
-            executionJobs: [executionJob],
-            taskStatusEvents: [taskStatusEvent],
-            wakeUpJobs: [wakeUpJob],
+          Effect.succeed({
+            postCommitWork: {
+              executionJobs: [executionJob],
+              source: "start-workflow-run" as const,
+              taskStatusEvents: [taskStatusEvent],
+              wakeUpJobs: [wakeUpJob],
+              workflowId: "workflow-1",
+            },
+            value: {
+              executionJobs: [executionJob],
+              taskStatusEvents: [taskStatusEvent],
+              wakeUpJobs: [wakeUpJob],
+            },
           }),
       },
       delivered,
@@ -224,24 +256,14 @@ function makeRuntime(
   }> = {},
 ) {
   const repository: Repository = {
-    approveTaskRun: () => Promise.resolve({ decided: false }),
-    cancelTaskRun: () => Promise.resolve({ decided: false }),
+    approveTaskRun: () => staleTaskRunTransition(),
+    cancelTaskRun: () => staleTaskRunTransition(),
     commitWorkflowRunPlan: () =>
-      Promise.resolve({
-        executionJobs: [],
-        taskStatusEvents: [],
-        wakeUpJobs: [],
-      }),
-    rejectTaskRunAndCreateRegeneration: () =>
-      Promise.resolve({ rejected: false }),
-    settleTaskRunCompletion: () => Promise.resolve({ settled: false }),
-    settleTaskRunFailure: () => Promise.resolve({ settled: false }),
-    wakeUpTaskRunChildren: () =>
-      Promise.resolve({
-        executionJobs: [],
-        parentFound: true,
-        taskStatusEvents: [],
-      }),
+      Effect.succeed(emptyRepositoryOutcome("start-workflow-run")),
+    rejectTaskRunAndCreateRegeneration: () => staleTaskRunTransition(),
+    settleTaskRunCompletion: () => staleTaskRunTransition(),
+    settleTaskRunFailure: () => staleTaskRunTransition(),
+    wakeUpTaskRunChildren: () => Effect.succeed(emptyWakeUpOutcome()),
     ...repositoryOverrides,
   };
 
@@ -282,24 +304,14 @@ function makeRuntimeWithPostCommitWork(
   delivered: PostCommitWork[],
 ) {
   const repository: Repository = {
-    approveTaskRun: () => Promise.resolve({ decided: false }),
-    cancelTaskRun: () => Promise.resolve({ decided: false }),
+    approveTaskRun: () => staleTaskRunTransition(),
+    cancelTaskRun: () => staleTaskRunTransition(),
     commitWorkflowRunPlan: () =>
-      Promise.resolve({
-        executionJobs: [],
-        taskStatusEvents: [],
-        wakeUpJobs: [],
-      }),
-    rejectTaskRunAndCreateRegeneration: () =>
-      Promise.resolve({ rejected: false }),
-    settleTaskRunCompletion: () => Promise.resolve({ settled: false }),
-    settleTaskRunFailure: () => Promise.resolve({ settled: false }),
-    wakeUpTaskRunChildren: () =>
-      Promise.resolve({
-        executionJobs: [],
-        parentFound: true,
-        taskStatusEvents: [],
-      }),
+      Effect.succeed(emptyRepositoryOutcome("start-workflow-run")),
+    rejectTaskRunAndCreateRegeneration: () => staleTaskRunTransition(),
+    settleTaskRunCompletion: () => staleTaskRunTransition(),
+    settleTaskRunFailure: () => staleTaskRunTransition(),
+    wakeUpTaskRunChildren: () => Effect.succeed(emptyWakeUpOutcome()),
     ...repositoryOverrides,
   };
 
@@ -337,6 +349,49 @@ function makeWorkflowNode(
         variables: [{ key: "prompt", label: "Prompt" }],
       }
     : node;
+}
+
+function staleTaskRunTransition() {
+  return Effect.fail({
+    _tag: "StaleTaskRunTransition" as const,
+    attempt: 0,
+    operation: "test",
+    taskRunId: "task-run-1",
+  });
+}
+
+function emptyRepositoryOutcome(source: PostCommitWork["source"]) {
+  return {
+    postCommitWork: {
+      executionJobs: [],
+      source,
+      taskStatusEvents: [],
+      wakeUpJobs: [],
+      workflowId: "workflow-1",
+    },
+    value: {
+      executionJobs: [],
+      taskStatusEvents: [],
+      wakeUpJobs: [],
+    },
+  };
+}
+
+function emptyWakeUpOutcome() {
+  return {
+    postCommitWork: {
+      executionJobs: [],
+      source: "handle-wake-up-call" as const,
+      taskStatusEvents: [],
+      wakeUpJobs: [],
+      workflowId: "workflow-1",
+    },
+    value: {
+      executionJobs: [],
+      parentFound: true,
+      taskStatusEvents: [],
+    },
+  };
 }
 
 type Repository = WorkflowRuntimeRepositoryForOrchestrator;

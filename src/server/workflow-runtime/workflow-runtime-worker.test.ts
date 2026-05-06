@@ -1,5 +1,6 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
+import { Effect } from "effect";
 
 import {
   createWorkflowRuntimeProcessor,
@@ -286,7 +287,7 @@ class FakeQueuedTaskRunRepository {
   listQueuedTaskRunJobs(command: { readonly limit: number }) {
     this.commands.push(command);
 
-    return Promise.resolve(this.jobs);
+    return Effect.succeed(this.jobs);
   }
 }
 

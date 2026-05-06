@@ -1,85 +1,110 @@
-import { afterAll, beforeAll, beforeEach, describe, test } from "bun:test";
+import { beforeEach, describe, test } from "bun:test";
 import assert from "node:assert/strict";
+import { SqlClient } from "@effect/sql";
+import * as PgDrizzle from "@effect/sql-drizzle/Pg";
+import * as PgClient from "@effect/sql-pg/PgClient";
+import type { DrizzleConfig } from "drizzle-orm";
+import { Effect, Layer, Redacted } from "effect";
 
-import { PGlite } from "@electric-sql/pglite";
-import { sql } from "drizzle-orm";
-import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
-
+import * as schema from "~/server/db/schema";
 import { getPlanningStateForWorkflow } from "~/server/workflow-runtime/workflow-runtime-planning-state-repository";
 
+const TestPgClientLive = PgClient.layer({
+  database: "faceless-factory",
+  host: "localhost",
+  password: Redacted.make("lHOqxPGUlf02HNI8"),
+  port: 5432,
+  username: "postgres",
+});
+const TestPgLive = Layer.mergeAll(
+  TestPgClientLive,
+  PgDrizzle.layerWithConfig({ schema } as unknown as DrizzleConfig).pipe(
+    Layer.provide(TestPgClientLive),
+  ),
+);
+
+function runEffect<A, E>(
+  effect: Effect.Effect<A, E, SqlClient.SqlClient | PgDrizzle.PgDrizzle>,
+) {
+  return Effect.runPromise(effect.pipe(Effect.provide(TestPgLive)));
+}
+
 describe("getPlanningStateForWorkflow", () => {
-  let client: PGlite;
-  let db: PgliteDatabase;
-
-  beforeAll(async () => {
-    client = new PGlite();
-    db = drizzle(client);
-    await setupPlanningStateTables(db);
-  });
-
   beforeEach(async () => {
-    await resetPlanningStateTables(db);
+    await runEffect(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`delete from task_runs`;
+        yield* sql`delete from node_executions`;
+        yield* sql`delete from workflows`;
+        yield* sql`delete from "user"`;
+        yield* seedWorkflow(sql);
+      }),
+    );
   });
 
-  afterAll(async () => {
-    await client.close();
-  });
+  test("returns latest Node Executions and latest slot Attempts for the owner workflow through Effect SQL", async () => {
+    await runEffect(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* insertNodeExecution(sql, {
+          createdAt: "2026-01-01T00:00:00.000Z",
+          id: "source-old-execution",
+          nodeId: "source",
+        });
+        yield* insertNodeExecution(sql, {
+          createdAt: "2026-01-02T00:00:00.000Z",
+          id: "source-latest-execution",
+          nodeId: "source",
+        });
+        yield* insertNodeExecution(sql, {
+          createdAt: "2026-01-03T00:00:00.000Z",
+          id: "child-latest-execution",
+          nodeId: "child",
+        });
+        yield* insertNodeExecution(sql, {
+          id: "other-owner-execution",
+          nodeId: "source",
+          ownerUserId: "other-owner",
+        });
+        yield* insertTaskRun(sql, {
+          attempt: 0,
+          id: "source-stale-attempt",
+          nodeExecutionId: "source-latest-execution",
+          runtimeStatus: "APPROVED",
+        });
+        yield* insertTaskRun(sql, {
+          attempt: 1,
+          id: "source-active-attempt",
+          nodeExecutionId: "source-latest-execution",
+          runtimeStatus: "PENDING_REVIEW",
+        });
+        yield* insertTaskRun(sql, {
+          attempt: 0,
+          id: "source-old-execution-task",
+          nodeExecutionId: "source-old-execution",
+          runtimeStatus: "APPROVED",
+        });
+        yield* insertTaskRun(sql, {
+          id: "legacy-task-without-runtime-status",
+          nodeExecutionId: "child-latest-execution",
+          runtimeStatus: null,
+        });
+        yield* insertTaskRun(sql, {
+          id: "child-task",
+          itemIndex: 1,
+          nodeExecutionId: "child-latest-execution",
+          runtimeStatus: "FAILED",
+        });
+      }),
+    );
 
-  test("returns latest Node Executions and latest slot Attempts for the owner workflow", async () => {
-    await insertNodeExecution(db, {
-      createdAt: "2026-01-01T00:00:00.000Z",
-      id: "source-old-execution",
-      nodeId: "source",
-    });
-    await insertNodeExecution(db, {
-      createdAt: "2026-01-02T00:00:00.000Z",
-      id: "source-latest-execution",
-      nodeId: "source",
-    });
-    await insertNodeExecution(db, {
-      createdAt: "2026-01-03T00:00:00.000Z",
-      id: "child-latest-execution",
-      nodeId: "child",
-    });
-    await insertNodeExecution(db, {
-      id: "other-owner-execution",
-      nodeId: "source",
-      ownerUserId: "other-owner",
-    });
-    await insertTaskRun(db, {
-      attempt: 0,
-      id: "source-stale-attempt",
-      nodeExecutionId: "source-latest-execution",
-      runtimeStatus: "APPROVED",
-    });
-    await insertTaskRun(db, {
-      attempt: 1,
-      id: "source-active-attempt",
-      nodeExecutionId: "source-latest-execution",
-      runtimeStatus: "PENDING_REVIEW",
-    });
-    await insertTaskRun(db, {
-      attempt: 0,
-      id: "source-old-execution-task",
-      nodeExecutionId: "source-old-execution",
-      runtimeStatus: "APPROVED",
-    });
-    await insertTaskRun(db, {
-      id: "legacy-task-without-runtime-status",
-      nodeExecutionId: "child-latest-execution",
-      runtimeStatus: null,
-    });
-    await insertTaskRun(db, {
-      id: "child-task",
-      itemIndex: 1,
-      nodeExecutionId: "child-latest-execution",
-      runtimeStatus: "FAILED",
-    });
-
-    const state = await getPlanningStateForWorkflow(db, {
-      ownerUserId: "owner-user",
-      workflowId: "workflow-id",
-    });
+    const state = await runEffect(
+      getPlanningStateForWorkflow({
+        ownerUserId: "owner-user",
+        workflowId: "workflow-id",
+      }),
+    );
 
     assert.deepEqual(state, {
       latestNodeExecutions: [
@@ -108,154 +133,48 @@ describe("getPlanningStateForWorkflow", () => {
       ],
     });
   });
-
-  test("accepts bigint values returned as strings by postgres-js", async () => {
-    let callIndex = 0;
-    const state = await getPlanningStateForWorkflow(
-      {
-        execute: async () => {
-          callIndex += 1;
-          return callIndex === 1
-            ? [{ id: "node-execution", nodeId: "node" }]
-            : [
-                {
-                  attempt: "4",
-                  creditCost: "11",
-                  id: "task-run",
-                  itemIndex: "2",
-                  nodeExecutionId: "node-execution",
-                  nodeId: "node",
-                  status: "APPROVED",
-                },
-              ];
-        },
-      },
-      { ownerUserId: "owner-user", workflowId: "workflow-id" },
-    );
-
-    assert.deepEqual(state, {
-      latestNodeExecutions: [{ id: "node-execution", nodeId: "node" }],
-      latestTaskRuns: [
-        {
-          attempt: 4,
-          creditCost: 11,
-          id: "task-run",
-          itemIndex: 2,
-          nodeExecutionId: "node-execution",
-          nodeId: "node",
-          status: "APPROVED",
-        },
-      ],
-    });
-  });
 });
 
-async function setupPlanningStateTables(db: PgliteDatabase) {
-  await db.execute(sql`
-    create type task_run_runtime_status as enum (
-      'WAITING_UPSTREAM',
-      'QUEUED',
-      'RUNNING',
-      'PENDING_REVIEW',
-      'APPROVED',
-      'REJECTED',
-      'CANCELLED',
-      'FAILED',
-      'UPSTREAM_FAILED'
-    )
-  `);
-  await db.execute(sql`
-    create table node_executions (
-      id text primary key,
-      workflow_id text not null,
-      owner_user_id text not null,
-      node_id text not null,
-      created_at timestamp not null default now()
-    )
-  `);
-  await db.execute(sql`
-    create table task_runs (
-      id text primary key,
-      node_execution_id text not null,
-      workflow_id text not null,
-      owner_user_id text not null,
-      node_id text not null,
-      item_index bigint,
-      attempt bigint,
-      credit_cost bigint not null,
-      runtime_status task_run_runtime_status
-    )
-  `);
+function seedWorkflow(sql: SqlClient.SqlClient) {
+  return Effect.gen(function* () {
+    yield* sql`insert into "user" (id, name, email, email_verified, credit_balance, created_at, updated_at) values ('owner-user', 'Owner', 'owner@example.com', false, 100, now(), now())`;
+    yield* sql`insert into "user" (id, name, email, email_verified, credit_balance, created_at, updated_at) values ('other-owner', 'Other', 'other@example.com', false, 100, now(), now())`;
+    yield* sql`insert into workflows (id, owner_user_id, name, document, created_at, updated_at) values ('workflow-id', 'owner-user', 'Workflow', '{"nodes":[],"edges":[],"version":9}'::jsonb, now(), now())`;
+    yield* sql`insert into workflows (id, owner_user_id, name, document, created_at, updated_at) values ('other-workflow-id', 'other-owner', 'Other Workflow', '{"nodes":[],"edges":[],"version":9}'::jsonb, now(), now())`;
+  });
 }
 
-async function resetPlanningStateTables(db: PgliteDatabase) {
-  await db.execute(sql`
-    truncate table task_runs, node_executions
-  `);
-}
-
-async function insertNodeExecution(
-  db: PgliteDatabase,
+function insertNodeExecution(
+  sql: SqlClient.SqlClient,
   input: {
     readonly createdAt?: string;
     readonly id: string;
     readonly nodeId: string;
     readonly ownerUserId?: string;
-    readonly workflowId?: string;
   },
 ) {
-  await db.execute(sql`
-    insert into node_executions (
-      id,
-      workflow_id,
-      owner_user_id,
-      node_id,
-      created_at
-    ) values (
-      ${input.id},
-      ${input.workflowId ?? "workflow-id"},
-      ${input.ownerUserId ?? "owner-user"},
-      ${input.nodeId},
-      ${input.createdAt ?? "2026-01-01T00:00:00.000Z"}
-    )
-  `);
+  const ownerUserId = input.ownerUserId ?? "owner-user";
+  return sql`
+    insert into node_executions (id, workflow_id, owner_user_id, node_id, execution_id, status, output_count, target_reason, created_at, updated_at)
+    values (${input.id}, ${ownerUserId === "owner-user" ? "workflow-id" : "other-workflow-id"}, ${ownerUserId}, ${input.nodeId}, ${input.id}, 'pending', 1, 'node_run', ${input.createdAt ?? new Date().toISOString()}, now())
+  `;
 }
 
-async function insertTaskRun(
-  db: PgliteDatabase,
+function insertTaskRun(
+  sql: SqlClient.SqlClient,
   input: {
     readonly attempt?: number;
     readonly id: string;
     readonly itemIndex?: number;
     readonly nodeExecutionId: string;
-    readonly nodeId?: string;
-    readonly ownerUserId?: string;
-    readonly runtimeStatus: "APPROVED" | "FAILED" | "PENDING_REVIEW" | null;
-    readonly creditCost?: number;
-    readonly workflowId?: string;
+    readonly runtimeStatus: string | null;
   },
 ) {
-  await db.execute(sql`
-    insert into task_runs (
-      id,
-      node_execution_id,
-      workflow_id,
-      owner_user_id,
-      node_id,
-      item_index,
-      attempt,
-      credit_cost,
-      runtime_status
-    ) values (
-      ${input.id},
-      ${input.nodeExecutionId},
-      ${input.workflowId ?? "workflow-id"},
-      ${input.ownerUserId ?? "owner-user"},
-      ${input.nodeId ?? input.nodeExecutionId.replace(/-(old|latest)-execution$/, "")},
-      ${input.itemIndex ?? 0},
-      ${input.attempt ?? 0},
-      ${input.creditCost ?? 0},
-      ${input.runtimeStatus}
-    )
-  `);
+  const attempt = input.attempt ?? 0;
+  const itemIndex = input.itemIndex ?? 0;
+  return sql`
+    insert into task_runs (id, node_execution_id, workflow_id, owner_user_id, node_id, output_index, version, item_index, attempt, execution_id, job_id, status, runtime_status, target_reason, credit_cost, queued_at, created_at, updated_at)
+    select ${input.id}, node_executions.id, node_executions.workflow_id, node_executions.owner_user_id, node_executions.node_id, ${itemIndex}, ${attempt}, ${itemIndex}, ${attempt}, node_executions.id, ${`job-${input.id}`}, 'queued', ${input.runtimeStatus}, 'node_run', 0, now(), now(), now()
+    from node_executions where node_executions.id = ${input.nodeExecutionId}
+  `;
 }

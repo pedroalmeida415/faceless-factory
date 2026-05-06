@@ -1,4 +1,5 @@
 import { Worker, type WorkerOptions } from "bullmq";
+import { Effect } from "effect";
 
 import { env } from "~/env";
 import { sanitizeWorkflowRuntimeProcessorOutcome } from "~/server/workflow-runtime/workflow-runtime-command-outcome";
@@ -12,7 +13,6 @@ import type {
   HandleWakeUpCallCommand,
   WorkflowRuntimeEventPublisherForOrchestrator,
   WorkflowRuntimeQueueForOrchestrator,
-  WorkflowRuntimeRepositoryForOrchestrator,
 } from "~/server/workflow-runtime/workflow-runtime-orchestrator";
 import {
   parseWorkflowRuntimeJob,
@@ -25,6 +25,7 @@ import {
   type WorkflowRuntimeFailureSettlementJobPayload,
   type WorkflowRuntimeWakeUpJobPayload,
 } from "~/server/workflow-runtime/workflow-runtime-queue";
+import type { WorkflowRuntimeRepositoryFailure } from "~/server/workflow-runtime/workflow-runtime-repository";
 
 export const WORKFLOW_RUNTIME_QUEUE_NAME = "workflow-runtime";
 export const WORKFLOW_RUNTIME_JOB_HISTORY_AGE_SECONDS = 60 * 60 * 24;
@@ -79,7 +80,10 @@ export type WorkflowRuntimeOrchestratorForProcessor = {
 export type WorkflowRuntimeQueuedTaskRunRepository = {
   readonly listQueuedTaskRunJobs: (command: {
     readonly limit: number;
-  }) => Promise<readonly WorkflowRuntimeExecutionJobPayload[]>;
+  }) => Effect.Effect<
+    readonly WorkflowRuntimeExecutionJobPayload[],
+    WorkflowRuntimeRepositoryFailure
+  >;
 };
 
 export type WorkflowRuntimeExecutionQueue = {
@@ -128,9 +132,11 @@ export async function sweepQueuedTaskRunJobs(input: {
   readonly queue: WorkflowRuntimeExecutionQueue;
   readonly repository: WorkflowRuntimeQueuedTaskRunRepository;
 }): Promise<{ readonly enqueued: number }> {
-  const jobs = await input.repository.listQueuedTaskRunJobs({
-    limit: input.limit,
-  });
+  const jobs = await Effect.runPromise(
+    input.repository.listQueuedTaskRunJobs({
+      limit: input.limit,
+    }),
+  );
   await input.queue.enqueueExecutionJobs(jobs);
 
   return { enqueued: jobs.length };
@@ -142,8 +148,7 @@ export function createWorkflowRuntimeWorker(input: {
   readonly providerExecutor: WorkflowRuntimeProviderExecutor;
   readonly queue: WorkflowRuntimeQueueForOrchestrator &
     WorkflowRuntimeSettlementQueueForWorker;
-  readonly repository: WorkflowRuntimeRepositoryForOrchestrator &
-    WorkflowRuntimeExecutionWorkerRepository;
+  readonly repository: WorkflowRuntimeExecutionWorkerRepository;
 }) {
   const executionWorker = createWorkflowRuntimeExecutionWorker({
     eventPublisher: input.eventPublisher,

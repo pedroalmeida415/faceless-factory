@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { sql } from "drizzle-orm";
-import type { PgliteDatabase } from "drizzle-orm/pglite";
+import { type SQL, sql } from "drizzle-orm";
 import { Effect } from "effect";
 
 import {
@@ -22,6 +21,12 @@ import type {
   WorkflowRunPlan,
 } from "~/lib/workflow-runtime/planning/workflow-run-planner";
 import type { createWorkflowRuntimeProviderExecutor } from "~/server/workflow-runtime/workflow-runtime-provider-executor";
+
+export type RuntimeContractDatabase = {
+  readonly execute: (
+    query: SQL,
+  ) => Promise<{ readonly rows: readonly Record<string, unknown>[] }>;
+};
 
 export function assertPlanInvariants(
   plan: ReturnType<typeof unwrapPlan>,
@@ -93,7 +98,7 @@ export function assertPlanInvariants(
   );
 }
 
-export async function assertRuntimeInvariants(db: PgliteDatabase) {
+export async function assertRuntimeInvariants(db: RuntimeContractDatabase) {
   const waitingDependencies = await db.execute(sql`
     select tr.id as "taskRunId", count(td.id)::int as "dependencyCount"
     from task_runs tr
@@ -388,76 +393,67 @@ type VertexLike = Parameters<
   typeof createWorkflowRuntimeProviderExecutor
 >[0]["vertexAi"];
 
-export async function setupRuntimeContractTables(db: PgliteDatabase) {
-  await db.execute(
-    sql`create table "user" (id text primary key, name text not null, email text not null unique, credit_balance bigint not null default 0)`,
-  );
-  await db.execute(
-    sql`create type task_run_runtime_status as enum ('WAITING_UPSTREAM','QUEUED','RUNNING','PENDING_REVIEW','APPROVED','REJECTED','CANCELLED','FAILED','UPSTREAM_FAILED')`,
-  );
-  await db.execute(
-    sql`create type task_run_failure_reason as enum ('INSUFFICIENT_CREDITS','PROVIDER_FAILED','EXECUTION_FAILED','UPSTREAM_FAILED')`,
-  );
-  await db.execute(
-    sql`create table assets (id text primary key, owner_user_id text not null, workflow_id text not null, source text not null, kind text not null, task_run_id text, storage_provider text not null, storage_key text, cdn_url text, text_content text, mime_type text not null, file_name text not null default '', size_bytes bigint not null default 0, model text, external_uri text, created_at timestamp not null default now(), deleted_at timestamp)`,
-  );
-  await db.execute(
-    sql`create table node_executions (id text primary key, workflow_id text not null, owner_user_id text not null, node_id text not null, execution_id text not null, document_revision bigint, status text not null, output_count bigint not null, target_reason text not null, created_at timestamp not null default now(), dispatched_at timestamp, updated_at timestamp not null default now())`,
-  );
-  await db.execute(
-    sql`create table task_runs (id text primary key, node_execution_id text not null, workflow_id text not null, owner_user_id text not null, node_id text not null, output_index bigint not null, version bigint not null, item_index bigint, attempt bigint, execution_id text not null, job_id text not null, status text not null, runtime_status task_run_runtime_status, target_reason text not null, asset_ids jsonb not null default '[]'::jsonb, input_snapshot jsonb, credit_cost bigint not null, failure_reason task_run_failure_reason, error text, created_at timestamp not null default now(), updated_at timestamp not null default now(), queued_at timestamp, started_at timestamp, finished_at timestamp, failed_at timestamp)`,
-  );
-  await db.execute(
-    sql`create unique index task_runs_runtime_active_slot_unique on task_runs (node_execution_id, item_index) where runtime_status in ('WAITING_UPSTREAM','QUEUED','RUNNING','PENDING_REVIEW')`,
-  );
-  await db.execute(
-    sql`create table task_dependencies (id text primary key, child_task_run_id text not null, required_parent_node_execution_id text not null, required_parent_node_id text not null, required_parent_item_index bigint not null, source_handle text, target_handle text, target_node_id text not null, resolved_parent_task_run_id text, created_at timestamp not null default now(), resolved_at timestamp)`,
-  );
-  await db.execute(
-    sql`create unique index task_dependencies_child_parent_slot_unique on task_dependencies (child_task_run_id, required_parent_node_execution_id, required_parent_item_index, source_handle, target_handle)`,
-  );
-  await db.execute(
-    sql`create table credit_ledger_entries (id text primary key, user_id text not null, execution_id text, kind text not null, amount bigint not null, balance_after bigint not null, reason text not null, source_key text unique, created_at timestamp not null default now())`,
-  );
-}
+export async function setupRuntimeContractTables(
+  _db: RuntimeContractDatabase,
+) {}
 
-export async function resetRuntimeContractTables(db: PgliteDatabase) {
+export async function resetRuntimeContractTables(db: RuntimeContractDatabase) {
   await db.execute(
-    sql`truncate table credit_ledger_entries, task_dependencies, task_runs, node_executions, assets, "user"`,
+    sql`truncate table credit_ledger_entries, task_dependencies, task_runs, node_executions, assets, workflows, "user" restart identity cascade`,
   );
 }
 
 export async function insertUser(
-  db: PgliteDatabase,
+  db: RuntimeContractDatabase,
   input: { readonly creditBalance: number; readonly id?: string },
 ) {
   const id = input.id ?? "owner-user";
-  await db.execute(
-    sql`insert into "user" (id, name, email, credit_balance) values (${id}, 'Owner User', ${`${id}@example.com`}, ${input.creditBalance}) on conflict (id) do update set credit_balance = excluded.credit_balance`,
-  );
+  await db.execute(sql`
+    insert into "user" (id, name, email, email_verified, credit_balance, created_at, updated_at)
+    values (${id}, 'Owner User', ${`${id}@example.com`}, false, ${input.creditBalance}, now(), now())
+    on conflict (id) do update set credit_balance = excluded.credit_balance, updated_at = now()
+  `);
+  await ensureWorkflow(db, id);
 }
 
-async function ensureUser(db: PgliteDatabase, ownerUserId: string) {
-  await db.execute(
-    sql`insert into "user" (id, name, email, credit_balance) values (${ownerUserId}, 'Owner User', ${`${ownerUserId}@example.com`}, 0) on conflict (id) do nothing`,
-  );
+async function ensureUser(db: RuntimeContractDatabase, ownerUserId: string) {
+  await db.execute(sql`
+    insert into "user" (id, name, email, email_verified, credit_balance, created_at, updated_at)
+    values (${ownerUserId}, 'Owner User', ${`${ownerUserId}@example.com`}, false, 0, now(), now())
+    on conflict (id) do nothing
+  `);
+  await ensureWorkflow(db, ownerUserId);
+}
+
+async function ensureWorkflow(
+  db: RuntimeContractDatabase,
+  ownerUserId: string,
+) {
+  await db.execute(sql`
+    insert into workflows (id, owner_user_id, name, document, created_at, updated_at)
+    values ('workflow-id', ${ownerUserId}, 'Workflow', ${JSON.stringify({ edges: [], nodes: [], version: 9 })}::jsonb, now(), now())
+    on conflict (id) do nothing
+  `);
 }
 
 export async function insertNodeExecution(
-  db: PgliteDatabase,
+  db: RuntimeContractDatabase,
   input: {
     readonly id: string;
     readonly nodeId?: string;
     readonly ownerUserId?: string;
   },
 ) {
-  await db.execute(
-    sql`insert into node_executions (id, workflow_id, owner_user_id, node_id, execution_id, status, output_count, target_reason) values (${input.id}, 'workflow-id', ${input.ownerUserId ?? "owner-user"}, ${input.nodeId ?? "node-id"}, ${input.id}, 'pending', 1, 'node_run') on conflict (id) do nothing`,
-  );
+  await ensureUser(db, input.ownerUserId ?? "owner-user");
+  await db.execute(sql`
+    insert into node_executions (id, workflow_id, owner_user_id, node_id, execution_id, status, output_count, target_reason, created_at, updated_at)
+    values (${input.id}, 'workflow-id', ${input.ownerUserId ?? "owner-user"}, ${input.nodeId ?? "node-id"}, ${input.id}, 'pending', 1, 'node_run', now(), now())
+    on conflict (id) do nothing
+  `);
 }
 
 export async function setNodeExecutionOutputCount(
-  db: PgliteDatabase,
+  db: RuntimeContractDatabase,
   input: { readonly nodeExecutionId: string; readonly outputCount: number },
 ) {
   await db.execute(
@@ -466,7 +462,7 @@ export async function setNodeExecutionOutputCount(
 }
 
 export async function insertTaskRun(
-  db: PgliteDatabase,
+  db: RuntimeContractDatabase,
   input: {
     readonly attempt?: number;
     readonly creditCost?: number;
@@ -481,8 +477,13 @@ export async function insertTaskRun(
   },
 ) {
   const attempt = input.attempt ?? 0;
+  const itemIndex = input.itemIndex ?? 0;
   const nodeExecutionId = input.nodeExecutionId ?? `node-execution-${input.id}`;
   const nodeId = input.nodeId ?? "node-id";
+  const inputSnapshot = JSON.stringify(
+    input.inputSnapshot ??
+      executableSnapshot({ prompt: "", taskRunId: input.id }),
+  );
   await ensureUser(db, input.ownerUserId ?? "owner-user");
   await insertNodeExecution(db, {
     id: nodeExecutionId,
@@ -490,13 +491,13 @@ export async function insertTaskRun(
     ownerUserId: input.ownerUserId,
   });
   await db.execute(sql`
-    insert into task_runs (id, node_execution_id, workflow_id, owner_user_id, node_id, output_index, version, item_index, attempt, execution_id, job_id, status, runtime_status, target_reason, input_snapshot, credit_cost, failure_reason, queued_at)
-    values (${input.id}, ${nodeExecutionId}, 'workflow-id', ${input.ownerUserId ?? "owner-user"}, ${nodeId}, 0, ${attempt}, ${input.itemIndex ?? 0}, ${attempt}, 'legacy-execution-id', ${`legacy-job-${input.id}`}, 'queued', ${input.runtimeStatus}, 'node_run', ${input.inputSnapshot ?? executableSnapshot({ prompt: "", taskRunId: input.id })}, ${input.creditCost ?? 0}, ${input.failureReason ?? null}, now())
+    insert into task_runs (id, node_execution_id, workflow_id, owner_user_id, node_id, output_index, version, item_index, attempt, execution_id, job_id, status, runtime_status, target_reason, input_snapshot, credit_cost, failure_reason, queued_at, created_at, updated_at)
+    values (${input.id}, ${nodeExecutionId}, 'workflow-id', ${input.ownerUserId ?? "owner-user"}, ${nodeId}, ${itemIndex}, ${attempt}, ${itemIndex}, ${attempt}, 'legacy-execution-id', ${`legacy-job-${input.id}`}, 'queued', ${input.runtimeStatus}, 'node_run', ${inputSnapshot}::jsonb, ${input.creditCost ?? 0}, ${input.failureReason ?? null}, now(), now(), now())
   `);
 }
 
 export async function insertTaskDependency(
-  db: PgliteDatabase,
+  db: RuntimeContractDatabase,
   input: {
     readonly childTaskRunId: string;
     readonly parentNodeExecutionId: string;
@@ -509,13 +510,13 @@ export async function insertTaskDependency(
 ) {
   const parentItemIndex = input.parentItemIndex ?? 0;
   await db.execute(sql`
-    insert into task_dependencies (id, child_task_run_id, required_parent_node_execution_id, required_parent_node_id, required_parent_item_index, source_handle, target_handle, target_node_id)
-    values (${[input.childTaskRunId, input.parentNodeExecutionId, parentItemIndex, input.sourceHandle ?? "", input.targetHandle ?? ""].join("~")}, ${input.childTaskRunId}, ${input.parentNodeExecutionId}, ${input.parentNodeId ?? "node-id"}, ${parentItemIndex}, ${input.sourceHandle ?? null}, ${input.targetHandle ?? null}, ${input.targetNodeId ?? "node-id"})
+    insert into task_dependencies (id, child_task_run_id, required_parent_node_execution_id, required_parent_node_id, required_parent_item_index, source_handle, target_handle, target_node_id, created_at)
+    values (${[input.childTaskRunId, input.parentNodeExecutionId, parentItemIndex, input.sourceHandle ?? "", input.targetHandle ?? ""].join("~")}, ${input.childTaskRunId}, ${input.parentNodeExecutionId}, ${input.parentNodeId ?? "node-id"}, ${parentItemIndex}, ${input.sourceHandle ?? null}, ${input.targetHandle ?? null}, ${input.targetNodeId ?? "node-id"}, now())
   `);
 }
 
 export async function insertGeneratedTextAsset(
-  db: PgliteDatabase,
+  db: RuntimeContractDatabase,
   input: {
     readonly assetId: string;
     readonly taskRunId: string;
@@ -523,12 +524,12 @@ export async function insertGeneratedTextAsset(
   },
 ) {
   await db.execute(
-    sql`insert into assets (id, owner_user_id, workflow_id, source, kind, task_run_id, storage_provider, text_content, mime_type, file_name, size_bytes) values (${input.assetId}, 'owner-user', 'workflow-id', 'generated', 'text', ${input.taskRunId}, 'inline', ${input.text}, 'text/plain', ${`${input.assetId}.txt`}, ${input.text.length})`,
+    sql`insert into assets (id, owner_user_id, workflow_id, source, kind, task_run_id, storage_provider, text_content, mime_type, file_name, size_bytes, created_at) values (${input.assetId}, 'owner-user', 'workflow-id', 'generated', 'text', ${input.taskRunId}, 'inline', ${input.text}, 'text/plain', ${`${input.assetId}.txt`}, ${input.text.length}, now())`,
   );
 }
 
 export async function insertGeneratedMediaAsset(
-  db: PgliteDatabase,
+  db: RuntimeContractDatabase,
   input: {
     readonly assetId: string;
     readonly cdnUrl?: string;
@@ -537,12 +538,12 @@ export async function insertGeneratedMediaAsset(
   },
 ) {
   await db.execute(
-    sql`insert into assets (id, owner_user_id, workflow_id, source, kind, task_run_id, storage_provider, storage_key, cdn_url, mime_type, file_name, size_bytes) values (${input.assetId}, 'owner-user', 'workflow-id', 'generated', 'image', ${input.taskRunId}, 'local', ${`generated/${input.assetId}.png`}, ${input.cdnUrl ?? `/api/assets/${input.assetId}`}, ${input.contentType ?? "image/png"}, ${`${input.assetId}.png`}, 1024)`,
+    sql`insert into assets (id, owner_user_id, workflow_id, source, kind, task_run_id, storage_provider, storage_key, cdn_url, mime_type, file_name, size_bytes, created_at) values (${input.assetId}, 'owner-user', 'workflow-id', 'generated', 'image', ${input.taskRunId}, 'local', ${`generated/${input.assetId}.png`}, ${input.cdnUrl ?? `/api/assets/${input.assetId}`}, ${input.contentType ?? "image/png"}, ${`${input.assetId}.png`}, 1024, now())`,
   );
 }
 
 export async function setUserCreditBalance(
-  db: PgliteDatabase,
+  db: RuntimeContractDatabase,
   input: { readonly creditBalance: number; readonly userId?: string },
 ) {
   await db.execute(
@@ -551,7 +552,7 @@ export async function setUserCreditBalance(
 }
 
 export async function getTaskDependenciesForChild(
-  db: PgliteDatabase,
+  db: RuntimeContractDatabase,
   childTaskRunId: string,
 ) {
   const result = await db.execute(sql`
@@ -584,7 +585,7 @@ export async function getTaskDependenciesForChild(
 }
 
 export async function getAssetsForTaskRun(
-  db: PgliteDatabase,
+  db: RuntimeContractDatabase,
   taskRunId: string,
 ) {
   const result = await db.execute(sql`
@@ -616,7 +617,7 @@ export async function getAssetsForTaskRun(
 }
 
 export async function getTaskRunCreditState(
-  db: PgliteDatabase,
+  db: RuntimeContractDatabase,
   taskRunId: string,
 ) {
   const result = await db.execute(
@@ -631,7 +632,10 @@ export async function getTaskRunCreditState(
   };
 }
 
-export async function getTaskRunState(db: PgliteDatabase, taskRunId: string) {
+export async function getTaskRunState(
+  db: RuntimeContractDatabase,
+  taskRunId: string,
+) {
   const result = await db.execute(
     sql`select input_snapshot as "inputSnapshot", runtime_status as "runtimeStatus" from task_runs where id = ${taskRunId}`,
   );
@@ -647,7 +651,10 @@ export async function getTaskRunState(db: PgliteDatabase, taskRunId: string) {
   };
 }
 
-export async function getUserCreditBalance(db: PgliteDatabase, userId: string) {
+export async function getUserCreditBalance(
+  db: RuntimeContractDatabase,
+  userId: string,
+) {
   const result = await db.execute(
     sql`select credit_balance as "creditBalance" from "user" where id = ${userId}`,
   );

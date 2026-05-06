@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Effect } from "effect";
+import { Effect, Either } from "effect";
 import type {
   TaskRunFailureReason,
   TaskRunSettlementFailureSource,
@@ -11,15 +11,18 @@ import {
   type WorkflowRunPlannerInput,
 } from "~/lib/workflow-runtime/planning/workflow-run-planner";
 import type { TaskStatusEvent } from "~/lib/workflow-runtime/runtime/task-status-events";
-import type {
-  WakeUpTaskRunChildrenRepositoryCommand,
-  WakeUpTaskRunChildrenRepositoryResult,
-} from "~/server/workflow-runtime/workflow-runtime-gatekeeper-repository";
+import type { PostCommitWork } from "~/server/workflow-runtime/workflow-runtime-post-commit-work";
 import type {
   WorkflowRuntimeExecutionJobPayload,
   WorkflowRuntimeGeneratedPrimaryAssetPayload,
   WorkflowRuntimeWakeUpJobPayload,
 } from "~/server/workflow-runtime/workflow-runtime-queue";
+import type {
+  RepositoryCommittedOutcome,
+  WakeUpTaskRunChildrenRepositoryCommand,
+  WakeUpTaskRunChildrenRepositoryResult,
+  WorkflowRuntimeRepositoryFailure,
+} from "~/server/workflow-runtime/workflow-runtime-repository";
 
 export type StartWorkflowRunInput = Omit<
   WorkflowRunPlannerInput,
@@ -120,25 +123,46 @@ export type WorkflowRuntimeRejectTaskRunResult =
 export type WorkflowRuntimeRepositoryForOrchestrator = {
   readonly commitWorkflowRunPlan: (
     plan: WorkflowRunPlan,
-  ) => Promise<WorkflowRuntimeCommitPlanResult>;
+  ) => Effect.Effect<
+    RepositoryCommittedOutcome<WorkflowRuntimeCommitPlanResult>,
+    WorkflowRuntimeRepositoryFailure
+  >;
   readonly settleTaskRunCompletion: (
     command: SettleWorkerCompletionCommand,
-  ) => Promise<WorkflowRuntimeSettleCompletionResult>;
+  ) => Effect.Effect<
+    RepositoryCommittedOutcome<WorkflowRuntimeSettleCompletionResult>,
+    WorkflowRuntimeRepositoryFailure
+  >;
   readonly settleTaskRunFailure: (
     command: SettleWorkerFailureCommand,
-  ) => Promise<WorkflowRuntimeSettleFailureResult>;
+  ) => Effect.Effect<
+    RepositoryCommittedOutcome<WorkflowRuntimeSettleFailureResult>,
+    WorkflowRuntimeRepositoryFailure
+  >;
   readonly approveTaskRun: (
     command: ReviewTaskRunDecisionCommand,
-  ) => Promise<WorkflowRuntimeReviewDecisionResult>;
+  ) => Effect.Effect<
+    RepositoryCommittedOutcome<WorkflowRuntimeReviewDecisionResult>,
+    WorkflowRuntimeRepositoryFailure
+  >;
   readonly cancelTaskRun: (
     command: ReviewTaskRunDecisionCommand,
-  ) => Promise<WorkflowRuntimeCancelTaskRunResult>;
+  ) => Effect.Effect<
+    RepositoryCommittedOutcome<WorkflowRuntimeCancelTaskRunResult>,
+    WorkflowRuntimeRepositoryFailure
+  >;
   readonly rejectTaskRunAndCreateRegeneration: (
     command: RejectTaskRunRepositoryCommand,
-  ) => Promise<WorkflowRuntimeRejectTaskRunResult>;
+  ) => Effect.Effect<
+    RepositoryCommittedOutcome<WorkflowRuntimeRejectTaskRunResult>,
+    WorkflowRuntimeRepositoryFailure
+  >;
   readonly wakeUpTaskRunChildren: (
-    command: WakeUpTaskRunChildrenRepositoryCommand,
-  ) => Promise<WakeUpTaskRunChildrenRepositoryResult>;
+    command: HandleWakeUpCallCommand,
+  ) => Effect.Effect<
+    RepositoryCommittedOutcome<WakeUpTaskRunChildrenRepositoryResult>,
+    WorkflowRuntimeRepositoryFailure
+  >;
 };
 
 export type WorkflowRuntimeQueueForOrchestrator = {
@@ -246,85 +270,52 @@ export function createWorkflowRuntimeOrchestrator(input: {
         };
       }
 
-      const committed = await input.repository
-        .commitWorkflowRunPlan(planning.value)
-        .then(
-          (value) => ({ ok: true, value }) as const,
-          (cause: unknown) =>
-            ({
-              error: {
-                _tag: "WorkflowRuntimeCommitError",
-                cause,
-                committed: false,
-                message: "Failed to commit Workflow Run plan.",
-              },
-              ok: false,
-            }) as const,
-        );
+      const committed = await runRepositoryEffectResult(
+        input.repository.commitWorkflowRunPlan(planning.value),
+        "Failed to commit Workflow Run plan.",
+      );
       if (!committed.ok) {
         return committed;
       }
 
-      const enqueued = await input.queue
-        .enqueueExecutionJobs(committed.value.executionJobs)
-        .then(
-          () => ({ ok: true }) as const,
-          (cause: unknown) => postCommitError("enqueue-execution-jobs", cause),
-        );
-      if (!enqueued.ok) {
-        return enqueued;
+      const delivered = await deliverPostCommitWork(
+        input.queue,
+        input.eventPublisher,
+        committed.value.postCommitWork,
+      );
+      if (!delivered.ok) {
+        return delivered;
       }
 
-      const wakeUpsEnqueued = await input.queue
-        .enqueueWakeUpJobs(committed.value.wakeUpJobs)
-        .then(
-          () => ({ ok: true }) as const,
-          (cause: unknown) => postCommitError("enqueue-wake-up-jobs", cause),
-        );
-      if (!wakeUpsEnqueued.ok) {
-        return wakeUpsEnqueued;
-      }
-
-      const published = await input.eventPublisher
-        .publishTaskStatusEvents(
-          startInput.workflowId,
-          committed.value.taskStatusEvents,
-        )
-        .then(
-          () => ({ ok: true }) as const,
-          (cause: unknown) =>
-            postCommitError("publish-task-status-events", cause),
-        );
-      if (!published.ok) {
-        return published;
-      }
-
-      return { ok: true, value: committed.value };
+      return { ok: true, value: committed.value.value };
     },
 
     async settleWorkerCompletion(
       command: SettleWorkerCompletionCommand,
     ): Promise<SettleWorkerCompletionResult> {
-      const settled = await input.repository.settleTaskRunCompletion(command);
+      const outcome = await runRepositoryEffectResult(
+        input.repository.settleTaskRunCompletion(command),
+        "Failed to settle completed Task Run.",
+        (error) =>
+          error._tag === "StaleTaskRunTransition"
+            ? emptyOutcome({ settled: false as const }, command.workflowId)
+            : null,
+      );
+      if (!outcome.ok) {
+        return outcome;
+      }
+      const settled = outcome.value.value;
       if (!settled.settled) {
         return { ok: true, value: settled };
       }
 
-      const enqueued = await enqueueWakeUpJobs(
+      const delivered = await deliverPostCommitWork(
         input.queue,
-        settled.wakeUpJob ? [settled.wakeUpJob] : [],
-      );
-      if (!enqueued.ok) {
-        return enqueued;
-      }
-
-      const published = await publishTaskStatusEvents(
         input.eventPublisher,
-        command.workflowId,
-        [settled.event],
+        outcome.value.postCommitWork,
       );
-      if (!published.ok) {
-        return published;
+      if (!delivered.ok) {
+        return delivered;
       }
 
       return { ok: true, value: settled };
@@ -333,25 +324,29 @@ export function createWorkflowRuntimeOrchestrator(input: {
     async settleWorkerFailure(
       command: SettleWorkerFailureCommand,
     ): Promise<SettleWorkerFailureResult> {
-      const settled = await input.repository.settleTaskRunFailure(command);
+      const outcome = await runRepositoryEffectResult(
+        input.repository.settleTaskRunFailure(command),
+        "Failed to settle failed Task Run.",
+        (error) =>
+          error._tag === "StaleTaskRunTransition"
+            ? emptyOutcome({ settled: false as const }, command.workflowId)
+            : null,
+      );
+      if (!outcome.ok) {
+        return outcome;
+      }
+      const settled = outcome.value.value;
       if (!settled.settled) {
         return { ok: true, value: settled };
       }
 
-      const enqueued = await enqueueWakeUpJobs(input.queue, [
-        settled.wakeUpJob,
-      ]);
-      if (!enqueued.ok) {
-        return enqueued;
-      }
-
-      const published = await publishTaskStatusEvents(
+      const delivered = await deliverPostCommitWork(
+        input.queue,
         input.eventPublisher,
-        command.workflowId,
-        [settled.event],
+        outcome.value.postCommitWork,
       );
-      if (!published.ok) {
-        return published;
+      if (!delivered.ok) {
+        return delivered;
       }
 
       return { ok: true, value: settled };
@@ -371,7 +366,18 @@ export function createWorkflowRuntimeOrchestrator(input: {
     async cancelTaskRun(
       command: ReviewTaskRunDecisionCommand,
     ): Promise<CancelTaskRunResult> {
-      const decided = await input.repository.cancelTaskRun(command);
+      const outcome = await runRepositoryEffectResult(
+        input.repository.cancelTaskRun(command),
+        "Failed to cancel Task Run.",
+        (error) =>
+          error._tag === "StaleTaskRunTransition"
+            ? emptyOutcome({ decided: false as const }, command.workflowId)
+            : null,
+      );
+      if (!outcome.ok) {
+        return outcome;
+      }
+      const decided = outcome.value.value;
       if ("blocked" in decided) {
         return {
           error: {
@@ -385,140 +391,119 @@ export function createWorkflowRuntimeOrchestrator(input: {
       }
 
       return handleCommittedReviewDecision(
-        decided,
+        outcome.value,
         input.queue,
         input.eventPublisher,
-        command.workflowId,
       );
     },
 
     async rejectTaskRun(
       command: RejectTaskRunCommand,
     ): Promise<RejectTaskRunResult> {
-      const committed = await input.repository
-        .rejectTaskRunAndCreateRegeneration({
+      const committed = await runRepositoryEffectResult(
+        input.repository.rejectTaskRunAndCreateRegeneration({
           ...command,
           newTaskRunId: createTaskRunId(),
-        })
-        .then(
-          (value) => ({ ok: true, value }) as const,
-          (cause: unknown) =>
-            ({
-              error: {
-                _tag: "WorkflowRuntimeCommitError",
-                cause,
-                committed: false,
-                message: "Failed to reject Task Run.",
-              },
-              ok: false,
-            }) as const,
-        );
+        }),
+        "Failed to reject Task Run.",
+        (error) =>
+          error._tag === "StaleTaskRunTransition"
+            ? emptyOutcome({ rejected: false as const }, command.workflowId)
+            : null,
+      );
       if (!committed.ok) {
         return committed;
       }
-      if (!committed.value.rejected) {
-        return { ok: true, value: committed.value };
+      if (!committed.value.value.rejected) {
+        return { ok: true, value: committed.value.value };
       }
 
-      const enqueued = await enqueueExecutionJobs(
+      const delivered = await deliverPostCommitWork(
         input.queue,
-        committed.value.executionJob ? [committed.value.executionJob] : [],
-      );
-      if (!enqueued.ok) {
-        return enqueued;
-      }
-
-      const published = await publishTaskStatusEvents(
         input.eventPublisher,
-        command.workflowId,
-        committed.value.taskStatusEvents,
+        committed.value.postCommitWork,
       );
-      if (!published.ok) {
-        return published;
+      if (!delivered.ok) {
+        return delivered;
       }
 
-      return { ok: true, value: committed.value };
+      return { ok: true, value: committed.value.value };
     },
 
     async handleWakeUpCall(
       command: HandleWakeUpCallCommand,
     ): Promise<HandleWakeUpCallResult> {
-      const committed = await input.repository
-        .wakeUpTaskRunChildren(command)
-        .then(
-          (value) => ({ ok: true, value }) as const,
-          (cause: unknown) =>
-            ({
-              error: {
-                _tag: "WorkflowRuntimeCommitError",
-                cause,
-                committed: false,
-                message: "Failed to handle Wake-Up Call.",
-              },
-              ok: false,
-            }) as const,
-        );
+      const committed = await runRepositoryEffectResult(
+        input.repository.wakeUpTaskRunChildren(command),
+        "Failed to handle Wake-Up Call.",
+        (error) =>
+          error._tag === "WakeUpParentNotFound"
+            ? emptyOutcome(
+                {
+                  executionJobs: [],
+                  parentFound: false as const,
+                  taskStatusEvents: [],
+                },
+                command.workflowId,
+              )
+            : null,
+      );
       if (!committed.ok) {
         return committed;
       }
 
-      const enqueued = await enqueueExecutionJobs(
+      const delivered = await deliverPostCommitWork(
         input.queue,
-        committed.value.executionJobs,
-      );
-      if (!enqueued.ok) {
-        return enqueued;
-      }
-
-      const published = await publishTaskStatusEvents(
         input.eventPublisher,
-        command.workflowId,
-        committed.value.taskStatusEvents,
+        committed.value.postCommitWork,
       );
-      if (!published.ok) {
-        return published;
+      if (!delivered.ok) {
+        return delivered;
       }
 
-      return { ok: true, value: committed.value };
+      return { ok: true, value: committed.value.value };
     },
   };
 }
 
 async function handleReviewDecision(
-  decide: () => Promise<WorkflowRuntimeReviewDecisionResult>,
+  decide: () => ReturnType<
+    WorkflowRuntimeRepositoryForOrchestrator["approveTaskRun"]
+  >,
   queue: WorkflowRuntimeQueueForOrchestrator,
   eventPublisher: WorkflowRuntimeEventPublisherForOrchestrator,
   workflowId: string,
 ): Promise<ReviewTaskRunDecisionResult> {
-  const decided = await decide();
-  return handleCommittedReviewDecision(
-    decided,
-    queue,
-    eventPublisher,
-    workflowId,
+  const outcome = await runRepositoryEffectResult(
+    decide(),
+    "Failed to decide Task Run review.",
+    (error) =>
+      error._tag === "StaleTaskRunTransition"
+        ? emptyOutcome({ decided: false as const }, workflowId)
+        : null,
   );
+  return outcome.ok
+    ? handleCommittedReviewDecision(outcome.value, queue, eventPublisher)
+    : outcome;
 }
 
 async function handleCommittedReviewDecision(
-  decided: WorkflowRuntimeReviewDecisionResult,
+  outcome: RepositoryCommittedOutcome<WorkflowRuntimeReviewDecisionResult>,
   queue: WorkflowRuntimeQueueForOrchestrator,
   eventPublisher: WorkflowRuntimeEventPublisherForOrchestrator,
-  workflowId: string,
 ): Promise<ReviewTaskRunDecisionResult> {
+  const decided = outcome.value;
   if (!decided.decided) {
     return { ok: true, value: decided };
   }
 
-  const enqueued = await enqueueWakeUpJobs(queue, [decided.wakeUpJob]);
-  if (!enqueued.ok) {
-    return enqueued;
-  }
-
-  const published = await publishTaskStatusEvents(eventPublisher, workflowId, [
-    decided.event,
-  ]);
-  if (!published.ok) {
-    return published;
+  const delivered = await deliverPostCommitWork(
+    queue,
+    eventPublisher,
+    outcome.postCommitWork,
+  );
+  if (!delivered.ok) {
+    return delivered;
   }
 
   return { ok: true, value: decided };
@@ -567,6 +552,28 @@ function publishTaskStatusEvents(
   );
 }
 
+async function deliverPostCommitWork(
+  queue: WorkflowRuntimeQueueForOrchestrator,
+  eventPublisher: WorkflowRuntimeEventPublisherForOrchestrator,
+  work: PostCommitWork,
+) {
+  const executionJobs = await enqueueExecutionJobs(queue, work.executionJobs);
+  if (!executionJobs.ok) {
+    return executionJobs;
+  }
+
+  const wakeUpJobs = await enqueueWakeUpJobs(queue, work.wakeUpJobs);
+  if (!wakeUpJobs.ok) {
+    return wakeUpJobs;
+  }
+
+  return publishTaskStatusEvents(
+    eventPublisher,
+    work.workflowId,
+    work.taskStatusEvents,
+  );
+}
+
 function postCommitError(
   sideEffect:
     | "enqueue-execution-jobs"
@@ -584,4 +591,45 @@ function postCommitError(
     },
     ok: false,
   } as const;
+}
+
+async function runRepositoryEffectResult<A, B = A>(
+  effect: Effect.Effect<A, WorkflowRuntimeRepositoryFailure>,
+  message: string,
+  recover?: (error: WorkflowRuntimeRepositoryFailure) => B | null,
+) {
+  const result = await Effect.runPromise(Effect.either(effect));
+  if (Either.isLeft(result)) {
+    const recovered = recover?.(result.left) ?? null;
+    if (recovered) {
+      return { ok: true, value: recovered } as const;
+    }
+  }
+  return Either.isRight(result)
+    ? ({ ok: true, value: result.right } as const)
+    : ({
+        error: {
+          _tag: "WorkflowRuntimeCommitError",
+          cause: result.left,
+          committed: false,
+          message,
+        },
+        ok: false,
+      } as const);
+}
+
+function emptyOutcome<T>(
+  value: T,
+  workflowId: string,
+): RepositoryCommittedOutcome<T> {
+  return {
+    postCommitWork: {
+      executionJobs: [],
+      source: "start-workflow-run",
+      taskStatusEvents: [],
+      wakeUpJobs: [],
+      workflowId,
+    },
+    value,
+  };
 }
