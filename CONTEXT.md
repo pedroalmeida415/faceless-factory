@@ -64,6 +64,10 @@ _Avoid_: Regenerate item, rerun item
 A real-time notification that identifies one task run attempt, its new status, and optional renderable output payload.
 _Avoid_: Dependency event, provenance event
 
+**Post-Commit Work**:
+Work derived from a committed runtime transaction that must happen after commit, such as publishing Task Status Events or enqueueing execution and Wake-Up Call jobs.
+_Avoid_: Side effect, after-commit callback
+
 **Workflow Event Stream**:
 A tRPC subscription delivered over server-sent events for workflow task updates.
 _Avoid_: WebSocket, socket event
@@ -71,6 +75,30 @@ _Avoid_: WebSocket, socket event
 **Task Dependency**:
 A durable requirement from one child task run to a parent node execution item, resolved to an exact parent task run when the child is queued.
 _Avoid_: Node dependency, latest dependency
+
+**Task Run Debit**:
+A debit charged for exactly one Task Run immediately before that Task Run moves to `QUEUED`; it is considered spent unless settlement creates a refund or cost reconciliation.
+_Avoid_: Credit reservation, reserved credits, execution debit, output debit
+
+**Task Run Cost Adjustment**:
+An optional post-settlement debit for a Task Run when an LLM provider's actual cost exceeds the Task Run's credit cost.
+_Avoid_: Final cost, final cost credits, reserved reconciliation
+
+**Task Run Refund**:
+A credit ledger refund for a Task Run Debit after queued cancellation or provider/infrastructure failure.
+_Avoid_: Reservation release, cost reversal
+
+**Pricing Catalog**:
+The server-side source of truth for supported node/model credit costs used to assign a Task Run credit cost.
+_Avoid_: Client-provided cost, saved graph cost
+
+**Execution Cost Projection**:
+A server-derived projection that assigns displayable own-node execution costs from the Pricing Catalog to workflow nodes without persisting those costs in the workflow document.
+_Avoid_: Client-computed cost, saved node cost
+
+**Run Cost Preview**:
+A pre-run summary of the Task Runs that will be created or queued by a run command, including target and upstream slot costs.
+_Avoid_: Node cost, aggregate node badge
 
 ## Relationships
 
@@ -126,15 +154,41 @@ _Avoid_: Node dependency, latest dependency
 - A **Task Run** input snapshot stores the minimal execution contract: task identity, target node configuration, resolved parent outputs, relevant document revision, provider settings, and idempotency key.
 - A **Task Run** input snapshot includes fully rendered provider input plus structured provenance; workers do not perform graph or prompt resolution.
 - A **Task Run** idempotency key is scoped to the concrete attempt, such as `task_run:{taskRunId}:attempt:{attempt}`.
-- A **Task Run** stores final cost attribution for its attempt; the credit ledger remains the financial audit trail.
-- Credits are reserved immediately before a **Task Run** moves to `QUEUED`, not when it is created as `WAITING_UPSTREAM`.
-- Credit reservation is per **Task Run** at the moment that task run becomes `QUEUED`.
-- Credit reservation uses a debit/refund model in the credit ledger.
-- A **Task Run** stores both reserved credits and final cost credits.
+- Credits are debited immediately before a **Task Run** moves to `QUEUED`, not when it is created as `WAITING_UPSTREAM`.
+- A **Task Run Debit** is charged only after input materialization and other pre-provider checks succeed, to avoid unnecessary refunds.
+- A **Task Run Debit** is per **Task Run** at the moment that task run becomes `QUEUED`.
+- A **Task Run Debit** belongs to exactly one **Task Run**.
+- Execution-level credit language is obsolete; credit debits and refunds are modeled through **Task Runs** and the credit ledger.
+- Task Run credit accounting uses a debit/refund model in the credit ledger.
+- A **Task Run** stores a single credit cost for its lifecycle.
+- A **Task Run** credit cost is known and stored when the **Task Run** is created, including while it is `WAITING_UPSTREAM`.
+- A **Task Run** credit cost is immutable after the **Task Run** is created; Pricing Catalog changes affect newly planned Task Runs only.
+- A **Task Run** credit cost comes from the server-side **Pricing Catalog**, not from client-supplied workflow document JSON.
+- The UI may display **Pricing Catalog** costs, but saved workflow documents do not persist pricing as node configuration.
+- The **Execution Cost Projection** feeds own-node execution costs to the UI in one server-derived projection for all relevant generation nodes.
+- Node UI displays only its own execution cost; it does not include upstream costs.
+- Aggregate target-plus-upstream cost belongs to a **Run Cost Preview** shown before a run command that will create or queue upstream Task Runs.
+- A **Run Cost Preview** itemizes which node slots are expected to run and the credit cost for each slot.
+- A **Run Cost Preview** is computed by the same planning Module that creates Task Runs, using a read-only preview mode.
+- A **Run Cost Preview** includes Task Runs the command will create, grouped by whether they are expected to debit immediately or wait upstream for a future debit.
+- A run command requires current balance only for Task Runs moving to `QUEUED` immediately; waiting upstream cost is disclosed but not reserved.
+- A **Run Cost Preview** excludes already active or approved upstream Task Runs from the new-cost total.
+- The **Task Run Debit** amount comes from the Task Run's stored credit cost and is charged only when the Task Run is ready to move to `QUEUED`.
+- LLM provider cost overage after settlement is recorded as a **Task Run Cost Adjustment** in the credit ledger, not as a second Task Run cost field.
+- **Task Run Cost Adjustments** are only additional debits when actual LLM cost exceeds the Task Run's credit cost; lower actual cost does not create a refund.
+- Credit ledger amounts are whole credits for this MVP; fractional **Task Run Cost Adjustments** round up to the nearest whole credit.
 - Planning can create **Task Runs** regardless of current credit balance; insufficient credits fail only when a task run attempts to become `QUEUED`.
-- If credit reservation fails, the **Task Run** becomes `FAILED` and waiting downstream **Task Runs** cascade to `UPSTREAM_FAILED`.
+- If a **Task Run Debit** cannot be charged, the **Task Run** becomes `FAILED` and waiting downstream **Task Runs** cascade to `UPSTREAM_FAILED`.
 - Direct task failures use `FAILED` with a structured failure reason such as `INSUFFICIENT_CREDITS`.
 - Failed **Task Runs** do not auto-resume after external conditions change; retry requires explicit user action.
+- A **Task Run** may be cancelled without credit impact while it is `WAITING_UPSTREAM` because no **Task Run Debit** has been charged yet.
+- Cancelling a `QUEUED` **Task Run** refunds its **Task Run Debit** because provider work has not started.
+- Cancelling a `RUNNING` **Task Run** is blocked for this MVP; if cancellation is later allowed after provider work starts, the **Task Run Debit** is still considered spent unless an adapter proves no external cost occurred.
+- Cancelling a post-provider **Task Run** does not refund its **Task Run Debit**.
+- A failed `RUNNING` **Task Run** receives a **Task Run Refund** only when the failure source explicitly marks it refundable.
+- Failed provider work is treated as billable by default after a **Task Run** reaches `RUNNING`; a provider adapter must explicitly mark the failure as refundable for a **Task Run Refund** to be created.
+- Post-provider infrastructure failure is not automatically refundable because recovery may still surface the generated result; the failure source must explicitly mark the Task Run refundable.
+- `PENDING_REVIEW` **Task Runs** are not cancellable; review uses **Rejected** or approval, and replacement attempts use **Run Task Slot**.
 - Input-hash-based output reuse is not part of the domain; **Run Node** and **Run Task Slot** always create new generation attempts for their selected runtime addresses.
 - Input hashes are not stored in the workflow runtime schema.
 - Existing execution/runtime data is disposable during the overhaul; backward compatibility with old task runs, node executions, and legacy execution artifact records is not required.
@@ -153,7 +207,9 @@ _Avoid_: Node dependency, latest dependency
 - The **Workflow Event Stream** is backed by Redis Pub/Sub so worker processes can publish events consumed by web server subscriptions.
 - **Task Status Events** are published only after the database transaction that produced them commits.
 - Execution jobs are enqueued only after the database transaction that marks task runs `QUEUED` commits.
-- A queued-task sweeper idempotently re-enqueues durable `QUEUED` task runs that missed BullMQ enqueueing.
+- **Post-Commit Work** is recorded durably in the same transaction that creates the work intent.
+- **Post-Commit Work** is retried until delivery succeeds; user commands remain successful once the runtime transaction commits.
+- Execution jobs, Wake-Up Calls, and **Task Status Events** are delivered from durable **Post-Commit Work** instead of ad hoc sweepers.
 - Orchestrator queue events use deterministic job ids and idempotent handlers; queue deduplication is a safety net, not the source of truth.
 - BullMQ custom `jobId` values must not contain `:` because BullMQ reserves colon-delimited ids for repeatable-job internals. Workflow runtime queue job ids use `~` as the structural delimiter.
 - The orchestrator owns durable task-run state transitions and downstream wake-up decisions.
