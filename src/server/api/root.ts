@@ -1,6 +1,6 @@
 import { billingRouter } from "~/server/api/routers/billing";
+import { runtimeRouter } from "~/server/api/routers/runtime";
 import { workflowRouter } from "~/server/api/routers/workflow";
-import { workflowRuntimeRouter } from "~/server/api/routers/workflow-runtime";
 import { createCallerFactory, createTRPCRouter } from "~/server/api/trpc";
 
 /**
@@ -10,8 +10,8 @@ import { createCallerFactory, createTRPCRouter } from "~/server/api/trpc";
  */
 export const appRouter = createTRPCRouter({
   billing: billingRouter,
+  runtime: runtimeRouter,
   workflow: workflowRouter,
-  workflowRuntime: workflowRuntimeRouter,
 });
 
 // export type definition of API

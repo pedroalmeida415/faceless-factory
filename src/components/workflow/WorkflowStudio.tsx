@@ -35,23 +35,23 @@ import {
   WORKFLOW_GRID_STEP,
   type WorkflowDocument,
   type WorkflowPosition,
-} from "~/lib/workflow/document";
+} from "~/features/workflow/document";
 import {
   findFirstWorkflowHandleIdByValueType,
   getWorkflowHandleValueType,
   type WorkflowHandleReference,
-} from "~/lib/workflow/graph";
+} from "~/features/workflow/graph";
 import {
   formatNodeTitle,
   type WorkflowValueType,
-} from "~/lib/workflow/node-definitions";
-import { PromptNodeService } from "~/lib/workflow/services/node-services";
+} from "~/features/workflow/node-definitions";
+import { PromptNodeService } from "~/features/workflow/node-operations";
 import type {
   WorkflowCanvasEdge,
   WorkflowCanvasNode,
-} from "~/lib/workflow/studio-state";
-import type { WorkflowStudioView } from "~/lib/workflow/studio-view";
-import type { WorkflowNodeKind } from "~/lib/workflow/types";
+} from "~/features/workflow/studio-state";
+import type { WorkflowStudioView } from "~/features/workflow/studio-view";
+import type { WorkflowNodeKind } from "~/features/workflow/types";
 import { AssetLibrary } from "./studio/AssetLibrary";
 import { getWorkflowAssetDropData } from "./studio/asset-dnd";
 import { WorkflowCreditsBadge } from "./studio/CreditsBadge";

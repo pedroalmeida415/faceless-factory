@@ -5,13 +5,13 @@ import {
   createEmptyWorkflowDocument,
   createWorkflowNode,
   type WorkflowDocument,
-} from "~/lib/workflow/document";
+} from "~/features/workflow/document";
 import {
   buildWorkflowCanvas,
+  createRuntimeState,
   createWorkflowEditorState,
-  createWorkflowRuntimeState,
-} from "~/lib/workflow/studio-state";
-import { DEFAULT_WORKFLOW_ACTIVITY } from "~/lib/workflow/workflow-engine";
+} from "~/features/workflow/studio-state";
+import { DEFAULT_WORKFLOW_ACTIVITY } from "~/features/workflow/workflow-engine";
 
 import { useWorkflowStudioStore } from "./store";
 
@@ -29,10 +29,7 @@ function imageGeneratorNode(id: string) {
 
 function resetStoreWithDocument(document: WorkflowDocument) {
   const editor = createWorkflowEditorState();
-  const runtime = createWorkflowRuntimeState(
-    document,
-    DEFAULT_WORKFLOW_ACTIVITY,
-  );
+  const runtime = createRuntimeState(document, DEFAULT_WORKFLOW_ACTIVITY);
   const canvas = buildWorkflowCanvas({ document, editor, runtime });
 
   useWorkflowStudioStore.setState({

@@ -3,7 +3,7 @@
 import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { RiCloseLine } from "@remixicon/react";
 import { useEffect, useRef } from "react";
-
+import { api } from "~/client/trpc/react";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardContent } from "~/components/ui/card";
 import {
@@ -14,10 +14,9 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "~/components/ui/drawer";
+import { formatWorkflowAssetSize } from "~/features/workflow/assets";
+import type { WorkflowAsset } from "~/features/workflow/types";
 import { cn } from "~/lib/utils";
-import { formatWorkflowAssetSize } from "~/lib/workflow/assets";
-import type { WorkflowAsset } from "~/lib/workflow/types";
-import { api } from "~/trpc/react";
 import { getWorkflowAssetDragData } from "./asset-dnd";
 import { AssetPreview, ShellButton } from "./shared";
 import { useWorkflowStudioStore } from "./store";

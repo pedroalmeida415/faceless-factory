@@ -1,19 +1,18 @@
 import { Effect } from "effect";
 import { z } from "zod";
-
-import { ServerRuntime } from "~/effect/server/runtime";
+import { getTaskRunProjectionForWorkflow } from "~/features/runtime/server/task-projection-repository";
 import {
   deserializeStoredWorkflowGraphDocument,
   type WorkflowGraphDocument,
-} from "~/lib/workflow/document";
-import { ASSET_KINDS } from "~/lib/workflow/types";
+} from "~/features/workflow/document";
+import { saveWorkflowProjectDocument } from "~/features/workflow/server/projects";
+import { ASSET_KINDS } from "~/features/workflow/types";
 import { toTRPCError } from "~/server/api/errors";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
-import { WorkflowCreditsService } from "~/server/workflow/credits";
-import { saveWorkflowProjectDocument } from "~/server/workflow/projects";
-import { WorkflowStorage } from "~/server/workflow/storage";
-import { createWorkflowRuntimeSqlLayer } from "~/server/workflow-runtime/workflow-runtime-composition";
-import { getTaskRunProjectionForWorkflow } from "~/server/workflow-runtime/workflow-runtime-task-projection-repository";
+import { ServerRuntime } from "~/server/effect";
+import { CreditsService } from "~/server/services/credits";
+import { DatabaseServiceLive } from "~/server/services/database";
+import { StorageService } from "~/server/services/storage";
 
 const workflowAssetSchema = z.object({
   id: z.string(),
@@ -65,8 +64,8 @@ export const workflowRouter = createTRPCRouter({
     .query(async ({ ctx, input }) =>
       ServerRuntime.runPromise(
         Effect.gen(function* () {
-          const workflowStorage = yield* WorkflowStorage;
-          return yield* workflowStorage.listWorkflowAssets({
+          const storageService = yield* StorageService;
+          return yield* storageService.listWorkflowAssets({
             ownerUserId: ctx.session.user.id,
             workflowId: input.projectId,
           });
@@ -87,7 +86,7 @@ export const workflowRouter = createTRPCRouter({
                 getTaskRunProjectionForWorkflow({
                   ownerUserId: ctx.session.user.id,
                   workflowId: input.projectId,
-                }).pipe(Effect.provide(createWorkflowRuntimeSqlLayer())),
+                }).pipe(Effect.provide(DatabaseServiceLive)),
               )
             ).flatMap((slot) =>
               activeRuntimeTaskStatuses.has(slot.status) ? [slot.nodeId] : [],
@@ -110,10 +109,8 @@ export const workflowRouter = createTRPCRouter({
   getCredits: protectedProcedure.query(async ({ ctx }) =>
     ServerRuntime.runPromise(
       Effect.gen(function* () {
-        const workflowCreditsService = yield* WorkflowCreditsService;
-        return yield* workflowCreditsService.getBalanceSummary(
-          ctx.session.user.id,
-        );
+        const creditsService = yield* CreditsService;
+        return yield* creditsService.getBalanceSummary(ctx.session.user.id);
       }),
     ).catch((error) => {
       throw toTRPCError(error);

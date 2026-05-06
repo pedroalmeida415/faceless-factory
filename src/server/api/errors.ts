@@ -11,7 +11,7 @@ import {
   WorkflowRequestError,
   WorkflowStorageError,
   WorkflowValidationError,
-} from "~/lib/workflow/errors";
+} from "~/features/workflow/errors";
 
 export function toTRPCError(error: unknown) {
   if (error instanceof TRPCError) {

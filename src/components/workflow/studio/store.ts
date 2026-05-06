@@ -9,7 +9,13 @@ import {
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import type { WorkflowCreditsSummary } from "~/lib/billing";
+import type { WorkflowCreditsSummary } from "~/features/billing/billing";
+import { collectTaskRunMaterializationNodeIds } from "~/features/runtime/materialization/subgraph";
+import {
+  applyTaskRunStudioProjection,
+  type TaskRunStudioProjectionSlot,
+} from "~/features/runtime/task-run-studio-projection";
+import { WorkflowPersistenceService } from "~/features/workflow/client/workflow-persistence-service";
 import {
   hydrateWorkflowGraphDocument,
   toWorkflowGraphDocument,
@@ -17,11 +23,10 @@ import {
   type WorkflowDocument,
   type WorkflowDocumentNode,
   type WorkflowPosition,
-} from "~/lib/workflow/document";
-import { getErrorMessage } from "~/lib/workflow/errors";
-import { collectTaskRunMaterializationNodeIds } from "~/lib/workflow/execution/subgraph";
-import type { WorkflowHandleReference } from "~/lib/workflow/graph";
-import type { WorkflowValueType } from "~/lib/workflow/node-definitions";
+} from "~/features/workflow/document";
+import { getErrorMessage } from "~/features/workflow/errors";
+import type { WorkflowHandleReference } from "~/features/workflow/graph";
+import type { WorkflowValueType } from "~/features/workflow/node-definitions";
 import {
   ImageGeneratorService,
   ListNodeService,
@@ -30,19 +35,18 @@ import {
   PromptNodeService,
   VideoGeneratorService,
   WorkflowNodeAssetService,
-} from "~/lib/workflow/services/node-services";
-import { WorkflowPersistenceService } from "~/lib/workflow/services/workflow-persistence-service";
+} from "~/features/workflow/node-operations";
 import {
   buildWorkflowCanvas,
   createWorkflowNodeRuntimeState,
+  type RuntimeState,
   type WorkflowCanvasEdge,
   type WorkflowCanvasNode,
   type WorkflowEditorState,
   type WorkflowNodeRuntimeState,
-  type WorkflowRuntimeState,
   type WorkflowStudioSnapshot,
-} from "~/lib/workflow/studio-state";
-import type { WorkflowStudioView } from "~/lib/workflow/studio-view";
+} from "~/features/workflow/studio-state";
+import type { WorkflowStudioView } from "~/features/workflow/studio-view";
 import type {
   GeneratorConfigValue,
   ImageGeneratorModelId,
@@ -52,15 +56,11 @@ import type {
   WorkflowAsset,
   WorkflowNodeKind,
   WorkflowNodeStatus,
-} from "~/lib/workflow/types";
+} from "~/features/workflow/types";
 import {
   DEFAULT_WORKFLOW_ACTIVITY,
   WorkflowEngine,
-} from "~/lib/workflow/workflow-engine";
-import {
-  applyTaskRunStudioProjection,
-  type TaskRunStudioProjectionSlot,
-} from "~/lib/workflow-runtime/task-run-studio-projection";
+} from "~/features/workflow/workflow-engine";
 
 function snapshotFromState(
   state: Pick<WorkflowStudioState, "document" | "editor" | "runtime">,
@@ -268,10 +268,10 @@ function pushHistoryEntry(
 }
 
 function updateRuntimeNodeState(
-  runtime: WorkflowRuntimeState,
+  runtime: RuntimeState,
   nodeId: string,
   updater: (nodeState: WorkflowNodeRuntimeState) => WorkflowNodeRuntimeState,
-): WorkflowRuntimeState {
+): RuntimeState {
   return {
     ...runtime,
     nodeStateById: {
@@ -379,7 +379,7 @@ type WorkflowStudioState = {
   localDocumentVersion: number;
   savedLocalDocumentVersion: number;
   projectId: string | null;
-  runtime: WorkflowRuntimeState;
+  runtime: RuntimeState;
   isStreamingExecutionStatus: boolean;
   lockedNodeIds: string[];
   lastExecutionFinishedAt: string | null;

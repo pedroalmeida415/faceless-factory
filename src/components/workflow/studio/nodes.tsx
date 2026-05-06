@@ -24,24 +24,24 @@ import {
   WORKFLOW_ASSET_UPLOAD_ACCEPT,
   WORKFLOW_IMAGE_UPLOAD_ACCEPT,
   WORKFLOW_VIDEO_UPLOAD_ACCEPT,
-} from "~/lib/workflow/assets";
-import { getErrorMessage } from "~/lib/workflow/errors";
+} from "~/features/workflow/assets";
+import {
+  type RuntimeRunCostPreview,
+  WorkflowClientService,
+} from "~/features/workflow/client/workflow-client";
+import { getErrorMessage } from "~/features/workflow/errors";
 import {
   type GeneratorControlDefinition,
   getImageGeneratorControlDefinitions,
   getImageGeneratorModelOptions,
   getVideoGeneratorModelOptions,
   getVideoGeneratorModeOptions,
-} from "~/lib/workflow/generator-models";
-import { getOutputReorderInputValue } from "~/lib/workflow/graph";
+} from "~/features/workflow/generator-models";
+import { getOutputReorderInputValue } from "~/features/workflow/graph";
 import {
   createIdentityOutputPermutation,
   getOutputPermutationValidationMessage,
-} from "~/lib/workflow/runtime-values";
-import {
-  WorkflowClientService,
-  type WorkflowRuntimeRunCostPreview,
-} from "~/lib/workflow/services/workflow-client";
+} from "~/features/workflow/runtime-values";
 import type {
   AssetNodeData,
   GeneratorConfigValue,
@@ -53,7 +53,7 @@ import type {
   VideoGeneratorNodeData,
   WorkflowNodeData,
   WorkflowReviewState,
-} from "~/lib/workflow/types";
+} from "~/features/workflow/types";
 import { useStudioContext } from "./context";
 import { PromptEditor } from "./prompt-editor";
 import {
@@ -457,9 +457,7 @@ function GeneratorRunButton({
   nodeId: string;
 }) {
   const { previewRunNode, runNode } = useStudioContext();
-  const [preview, setPreview] = useState<WorkflowRuntimeRunCostPreview | null>(
-    null,
-  );
+  const [preview, setPreview] = useState<RuntimeRunCostPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
@@ -518,11 +516,7 @@ function GeneratorRunButton({
   );
 }
 
-function RunCostPreviewPanel({
-  preview,
-}: {
-  preview: WorkflowRuntimeRunCostPreview;
-}) {
+function RunCostPreviewPanel({ preview }: { preview: RuntimeRunCostPreview }) {
   const balanceClassName = preview.balance.enoughForImmediateQueue
     ? "text-emerald-300"
     : "text-destructive";
@@ -586,7 +580,7 @@ function CostPreviewMetric({ label, value }: { label: string; value: number }) {
 }
 
 function formatDebitTiming(
-  timing: WorkflowRuntimeRunCostPreview["items"][number]["debitTiming"],
+  timing: RuntimeRunCostPreview["items"][number]["debitTiming"],
 ) {
   switch (timing) {
     case "queued-immediately":

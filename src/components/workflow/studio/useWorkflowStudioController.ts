@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useMemo } from "react";
 
-import { ClientRuntime } from "~/effect/client/runtime";
-import { WorkflowAssetService } from "~/lib/workflow/services/workflow-asset-service";
-import { WorkflowExecutionService } from "~/lib/workflow/services/workflow-execution-service";
-import { api } from "~/trpc/react";
+import { ClientRuntime } from "~/client/effect";
+import { api } from "~/client/trpc/react";
+import { WorkflowAssetService } from "~/features/workflow/client/workflow-asset-service";
+import { WorkflowExecutionService } from "~/features/workflow/client/workflow-execution-service";
 import type { StudioContextValue } from "./context";
 import {
   getGeneratorInputHandles,
@@ -94,7 +94,7 @@ export function useWorkflowStudioController() {
       return;
     }
 
-    void utils.workflowRuntime.executionCostProjection.invalidate({
+    void utils.runtime.executionCostProjection.invalidate({
       projectId,
     });
   }, [projectId, savedLocalDocumentVersion, utils]);

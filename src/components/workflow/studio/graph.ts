@@ -1,9 +1,9 @@
 export {
   type GeneratorIterationInfo,
   getGeneratorIterationPreview,
-} from "~/lib/workflow/execution/subgraph";
-export { getGeneratorInputHandles } from "~/lib/workflow/graph";
-export type { HandleDefinition } from "~/lib/workflow/node-definitions";
+} from "~/features/runtime/materialization/subgraph";
+export { getGeneratorInputHandles } from "~/features/workflow/graph";
+export type { HandleDefinition } from "~/features/workflow/node-definitions";
 
 export function isEditableTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {

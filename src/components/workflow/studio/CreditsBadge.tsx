@@ -1,10 +1,9 @@
 "use client";
 
 import Link from "next/link";
-
+import { api } from "~/client/trpc/react";
 import { Badge } from "~/components/ui/badge";
 import { useWorkflowStudioStore } from "~/components/workflow/studio/store";
-import { api } from "~/trpc/react";
 
 function formatCreditsLabel(credits: number) {
   return `${credits} credit${credits === 1 ? "" : "s"}`;

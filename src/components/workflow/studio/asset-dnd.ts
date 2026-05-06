@@ -1,4 +1,4 @@
-import type { WorkflowAsset } from "~/lib/workflow/types";
+import type { WorkflowAsset } from "~/features/workflow/types";
 
 export const WORKFLOW_ASSET_DND_KEY = "faceless-factory.workflow-asset";
 export const WORKFLOW_ASSET_DND_TYPE = "workflow-asset";

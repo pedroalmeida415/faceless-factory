@@ -1,8 +1,8 @@
 # Testing
 
-## Workflow Runtime Contract Suite
+## Runtime Contract Suite
 
-The `Workflow Runtime Contract Suite` is the behavioral backbone for the Task Run state machine. It is a contract test suite: it defines the runtime behaviors and invariants the product must preserve across features, bug fixes, and refactors.
+The `Runtime Contract Suite` is the behavioral backbone for the Task Run state machine. It is a contract test suite: it defines the runtime behaviors and invariants the product must preserve across features, bug fixes, and refactors.
 
 Run it with:
 
@@ -10,34 +10,34 @@ Run it with:
 bun run test:runtime-contract
 ```
 
-The suite lives in `src/lib/workflow-runtime/workflow-runtime-contract.test.ts`, with reusable PGLite fixtures and invariant assertions in `src/lib/workflow-runtime/workflow-runtime-contract-harness.ts`.
+The suite lives in `src/features/runtime/contract.test.ts`, with the reusable PGLite database Layer in `src/server/services/database.ts` and invariant assertions in `src/features/runtime/contract-harness.ts`. Runtime tests must never connect to the app `DATABASE_URL`; destructive setup such as truncate/delete is only valid against this isolated PGLite Layer.
 
 This is not a smoke test. A smoke test only proves a path basically starts. This suite exercises the real runtime seams deeply enough to catch product-breaking behavior regressions:
 
 - `planWorkflowRun`
 - Task Run Input Materialization
-- workflow runtime repository and Wake-Up Call gatekeeper transactions
+- runtime repository and Wake-Up Call gatekeeper transactions
 - active-slot uniqueness through the test database schema
 - provider executor snapshot consumption
-- workflow runtime queue job payload contracts
+- runtime queue job payload contracts
 - task projection and studio projection
 - save-lock policy
 
-Any change touching workflow runtime behavior must keep this suite green. This includes changes under:
+Any change touching runtime behavior must keep this suite green. This includes changes under:
 
-- `src/lib/workflow-runtime/**`
-- `src/server/workflow-runtime/**`
-- `src/lib/workflow/execution/**`
-- `src/lib/workflow/pricing.ts`
-- `src/lib/workflow/save-lock-policy.ts`
-- `src/server/workflow/projects.ts`
+- `src/features/runtime/**`
+- `src/features/runtime/server/**`
+- `src/features/runtime/materialization/**`
+- `src/features/workflow/pricing.ts`
+- `src/features/workflow/save-lock-policy.ts`
+- `src/features/workflow/server/projects.ts`
 - `src/components/workflow/studio/**`
 
 When a runtime bug is found, add or extend a contract scenario before fixing it when the behavior belongs to the Task Run state machine. The scenario name should describe user-visible behavior, not private helper mechanics.
 
 ## Contract Suite Candidates
 
-The workflow runtime suite protects the core product state machine. Other domains that should eventually get contract suites are:
+The runtime suite protects the core product state machine. Other domains that should eventually get contract suites are:
 
 - `Workflow Studio Contract Suite`: editor graph operations, save behavior, projection hydration, undo/redo, node deletion/recreation, selection-only edits, and React Flow canvas synchronization.
 - `Billing And Credits Contract Suite`: credit ledger debit/refund invariants, subscription changes, reservation reconciliation, insufficient-credit UX states, and final-cost attribution.

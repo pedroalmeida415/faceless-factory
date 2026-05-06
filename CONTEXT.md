@@ -1,6 +1,6 @@
-# Faceless Factory Workflow Runtime
+# Faceless Factory Runtime
 
-This context defines the domain language for the node-based media workflow runtime, including execution, review, new attempts, and dependency gating.
+This context defines the domain language for the node-based media runtime, including execution, review, new attempts, and dependency gating.
 
 ## Language
 
@@ -190,7 +190,7 @@ _Avoid_: Node cost, aggregate node badge
 - Post-provider infrastructure failure is not automatically refundable because recovery may still surface the generated result; the failure source must explicitly mark the Task Run refundable.
 - `PENDING_REVIEW` **Task Runs** are not cancellable; review uses **Rejected** or approval, and replacement attempts use **Run Task Slot**.
 - Input-hash-based output reuse is not part of the domain; **Run Node** and **Run Task Slot** always create new generation attempts for their selected runtime addresses.
-- Input hashes are not stored in the workflow runtime schema.
+- Input hashes are not stored in the runtime schema.
 - Existing execution/runtime data is disposable during the overhaul; backward compatibility with old task runs, node executions, and legacy execution artifact records is not required.
 - A saved workflow document is a blueprint: it stores creative configuration and graph structure, not execution history, review state, or generated output attempts.
 - Review state lives in the **Task Run** status machine; no separate review metadata is required.

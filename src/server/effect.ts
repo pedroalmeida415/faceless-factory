@@ -1,0 +1,60 @@
+import { Effect, Layer, ManagedRuntime } from "effect";
+import {
+  EventPublisherService,
+  RuntimeCommands,
+  RuntimeIdGenerator,
+} from "~/features/runtime/server/commands";
+import { RuntimePostCommitWork } from "~/features/runtime/server/post-commit-work";
+import { RuntimeRepositoryLive } from "~/features/runtime/server/repository";
+import { createWorkflowEventPublisher } from "~/features/runtime/server/task-status-event-stream";
+import { getRedisClient } from "~/server/redis";
+import { CreditsService } from "~/server/services/credits";
+import {
+  DatabaseServiceLive,
+  DatabaseServiceTest,
+} from "~/server/services/database";
+import { ProjectStoreService } from "~/server/services/project-store";
+import {
+  createWorkflowQueueAdapter,
+  getWorkflowQueue,
+  QueueService,
+} from "~/server/services/queue";
+import { StorageService } from "~/server/services/storage";
+import { TelemetryService } from "~/server/services/telemetry";
+import { VertexAiService } from "~/server/services/vertex";
+
+const RuntimeDependenciesLive = Layer.mergeAll(
+  RuntimeRepositoryLive.pipe(Layer.provide(DatabaseServiceLive)),
+  Layer.succeed(QueueService, createWorkflowQueueAdapter(getWorkflowQueue())),
+  Layer.effect(
+    EventPublisherService,
+    Effect.tryPromise({
+      try: async () => createWorkflowEventPublisher(await getRedisClient()),
+      catch: (cause) => cause,
+    }),
+  ),
+  RuntimeIdGenerator.Live,
+);
+
+const RuntimePostCommitWorkLive = RuntimePostCommitWork.Live.pipe(
+  Layer.provide(Layer.mergeAll(RuntimeDependenciesLive, TelemetryService.Live)),
+);
+
+export const ServerRuntime = ManagedRuntime.make(
+  Layer.mergeAll(
+    CreditsService.Live,
+    ProjectStoreService.Live,
+    StorageService.Live,
+    VertexAiService.Live.pipe(Layer.provide(StorageService.Live)),
+    DatabaseServiceLive,
+    RuntimeDependenciesLive,
+    TelemetryService.Live,
+    RuntimePostCommitWorkLive,
+    RuntimeCommands.Live.pipe(
+      Layer.provide(
+        Layer.mergeAll(RuntimeDependenciesLive, RuntimePostCommitWorkLive),
+      ),
+    ),
+  ),
+);
+export const ServerTestRuntime = ManagedRuntime.make(DatabaseServiceTest);

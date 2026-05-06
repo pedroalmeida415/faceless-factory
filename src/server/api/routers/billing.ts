@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { BILLING_PLAN_NAMES } from "~/lib/billing";
-import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
-import { auth } from "~/server/better-auth";
+import { auth } from "~/features/auth/server/config";
+import { BILLING_PLAN_NAMES } from "~/features/billing/billing";
 import {
   createCreditTopUpCheckoutSession,
   getBillingOverview,
-} from "~/server/billing/service";
+} from "~/features/billing/server/service";
+import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 
 export const billingRouter = createTRPCRouter({
   createBillingPortalSession: protectedProcedure.mutation(async ({ ctx }) =>

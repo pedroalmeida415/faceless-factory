@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { getSession } from "~/server/better-auth/server";
+import { getSession } from "~/features/auth/server/session";
 
 export default async function AppLayout({
   children,

@@ -2,8 +2,8 @@ import "~/styles/globals.css";
 
 import type { Metadata } from "next";
 import { Oxanium } from "next/font/google";
+import { TRPCReactProvider } from "~/client/trpc/react";
 import { cn } from "~/lib/utils";
-import { TRPCReactProvider } from "~/trpc/react";
 
 const oxanium = Oxanium({ subsets: ["latin"], variable: "--font-sans" });
 

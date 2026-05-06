@@ -19,9 +19,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "~/components/ui/select";
+import { PROMPT_VARIABLE_PATTERN } from "~/features/workflow/node-definitions";
+import type {
+  PromptDisplayMode,
+  PromptVariable,
+} from "~/features/workflow/types";
 import { cn } from "~/lib/utils";
-import { PROMPT_VARIABLE_PATTERN } from "~/lib/workflow/node-definitions";
-import type { PromptDisplayMode, PromptVariable } from "~/lib/workflow/types";
 
 const VARIABLE_TAG_NAME = "promptVariable";
 const MENTION_TAG_NAME = "@mention";

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-
+import { api } from "~/client/trpc/react";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -21,8 +21,7 @@ import {
   CREDIT_TOP_UP_PACK_SIZE,
   formatUsd,
   isBillingPlanName,
-} from "~/lib/billing";
-import { api } from "~/trpc/react";
+} from "~/features/billing/billing";
 
 function formatBillingDate(value?: Date | null) {
   if (!value) {

@@ -9,8 +9,8 @@ import {
   RiVideoAiLine,
 } from "@remixicon/react";
 import { Card, CardContent } from "~/components/ui/card";
+import type { WorkflowNodeKind } from "~/features/workflow/types";
 import { cn } from "~/lib/utils";
-import type { WorkflowNodeKind } from "~/lib/workflow/types";
 import { ShellButton } from "./shared";
 
 const TextIcon = () => (

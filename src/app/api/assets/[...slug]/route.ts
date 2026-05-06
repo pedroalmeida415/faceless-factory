@@ -1,10 +1,9 @@
 import { Effect } from "effect";
 import { NextResponse } from "next/server";
-
-import { ServerRuntime } from "~/effect/server/runtime";
-import { getErrorMessage } from "~/lib/workflow/errors";
-import { auth } from "~/server/better-auth";
-import { WorkflowStorage } from "~/server/workflow/storage";
+import { auth } from "~/features/auth/server/config";
+import { getErrorMessage } from "~/features/workflow/errors";
+import { ServerRuntime } from "~/server/effect";
+import { StorageService } from "~/server/services/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,8 +26,8 @@ export async function GET(
 
     const { data, externalUri, mimeType } = await ServerRuntime.runPromise(
       Effect.gen(function* () {
-        const workflowStorage = yield* WorkflowStorage;
-        return yield* workflowStorage.readAssetById({
+        const storageService = yield* StorageService;
+        return yield* storageService.readAssetById({
           assetId,
           userId: session.user.id,
         });

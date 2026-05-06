@@ -19,17 +19,6 @@ function attachErrorLogging(client: AppRedisClient) {
   });
 }
 
-function createRedisClient() {
-  const client = createClient({
-    pingInterval: 10_000,
-    url: env.REDIS_URL,
-  });
-
-  attachErrorLogging(client);
-
-  return client;
-}
-
 const redisState = globalForRedis.__workflowRedis ?? {
   client: undefined,
   connectPromise: undefined,
@@ -41,7 +30,11 @@ if (!globalForRedis.__workflowRedis) {
 
 export async function getRedisClient() {
   if (!redisState.client) {
-    redisState.client = createRedisClient();
+    redisState.client = createClient({
+      pingInterval: 10_000,
+      url: env.REDIS_URL,
+    });
+    attachErrorLogging(redisState.client);
   }
 
   const client = redisState.client;

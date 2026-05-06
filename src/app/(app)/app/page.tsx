@@ -1,6 +1,6 @@
 import { WorkflowStudio } from "~/components/workflow/WorkflowStudio";
-import { getSession } from "~/server/better-auth/server";
-import { getOrCreateWorkflowStudioView } from "~/server/workflow/workflow-studio-view";
+import { getSession } from "~/features/auth/server/session";
+import { getOrCreateWorkflowStudioView } from "~/features/workflow/server/workflow-studio-view";
 
 export default async function HomePage() {
   const session = await getSession();

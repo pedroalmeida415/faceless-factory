@@ -1,16 +1,15 @@
 import { Effect } from "effect";
 import { NextResponse } from "next/server";
-
-import { ServerRuntime } from "~/effect/server/runtime";
-import { assertWorkflowUploadFile } from "~/lib/workflow/assets";
+import { auth } from "~/features/auth/server/config";
+import { assertWorkflowUploadFile } from "~/features/workflow/assets";
 import {
   getErrorMessage,
   WorkflowAuthorizationError,
   WorkflowValidationError,
-} from "~/lib/workflow/errors";
-import type { UploadAssetResponse } from "~/lib/workflow/types";
-import { auth } from "~/server/better-auth";
-import { WorkflowStorage } from "~/server/workflow/storage";
+} from "~/features/workflow/errors";
+import type { UploadAssetResponse } from "~/features/workflow/types";
+import { ServerRuntime } from "~/server/effect";
+import { StorageService } from "~/server/services/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,8 +39,8 @@ export async function POST(request: Request) {
     const kind = assertWorkflowUploadFile(file);
     const asset = await ServerRuntime.runPromise(
       Effect.gen(function* () {
-        const workflowStorage = yield* WorkflowStorage;
-        return yield* workflowStorage.saveFormFileAsAsset({
+        const storageService = yield* StorageService;
+        return yield* storageService.saveFormFileAsAsset({
           file,
           kind,
           ownerUserId: session.user.id,

@@ -16,8 +16,12 @@ import {
 } from "~/components/ui/card";
 import { Input } from "~/components/ui/input";
 import { Switch } from "~/components/ui/switch";
-import { BILLING_PLANS, type BillingPlanName, formatUsd } from "~/lib/billing";
-import { authClient } from "~/server/better-auth/client";
+import { authClient } from "~/features/auth/client/client";
+import {
+  BILLING_PLANS,
+  type BillingPlanName,
+  formatUsd,
+} from "~/features/billing/billing";
 
 function getSubscriptionIntentUrl(plan: BillingPlanName, annual: boolean) {
   const searchParams = new URLSearchParams({

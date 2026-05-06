@@ -19,7 +19,6 @@ import {
 } from "~/components/ui/select";
 import { Switch } from "~/components/ui/switch";
 import { Textarea } from "~/components/ui/textarea";
-import { cn } from "~/lib/utils";
 import type {
   AssetWorkflowNode,
   ImageGeneratorWorkflowNode,
@@ -28,7 +27,7 @@ import type {
   PromptWorkflowNode,
   VideoGeneratorWorkflowNode,
   WorkflowDocumentNode,
-} from "~/lib/workflow/document";
+} from "~/features/workflow/document";
 import {
   getImageGeneratorControlDefinitions,
   getImageGeneratorModelOptions,
@@ -36,11 +35,12 @@ import {
   getVideoGeneratorControlDefinitions,
   getVideoGeneratorModelOptions,
   getVideoGeneratorModeOptions,
-} from "~/lib/workflow/generator-models";
+} from "~/features/workflow/generator-models";
 import {
   getLlmGeneratorControlDefinitions,
   getLlmGeneratorModelOptions,
-} from "~/lib/workflow/llm-models";
+} from "~/features/workflow/llm-models";
+import { cn } from "~/lib/utils";
 import {
   GeneratorControlGrid,
   ListItemsEditor,

@@ -6,12 +6,15 @@ import { Fragment, type PropsWithChildren, type ReactNode, useId } from "react";
 
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
-import { cn } from "~/lib/utils";
 import {
   formatWorkflowAssetSize,
   shouldInlineAssetPreview,
-} from "~/lib/workflow/assets";
-import type { WorkflowAsset, WorkflowNodeData } from "~/lib/workflow/types";
+} from "~/features/workflow/assets";
+import type {
+  WorkflowAsset,
+  WorkflowNodeData,
+} from "~/features/workflow/types";
+import { cn } from "~/lib/utils";
 import type { HandleDefinition } from "./graph";
 import { useWorkflowStudioStore } from "./store";
 

@@ -1,13 +1,13 @@
 import { createContext, useContext } from "react";
-import type { GeneratorHandleDefinition } from "~/lib/workflow/generator-models";
-import type { WorkflowRuntimeRunCostPreview } from "~/lib/workflow/services/workflow-client";
+import type { RuntimeRunCostPreview } from "~/features/workflow/client/workflow-client";
+import type { GeneratorHandleDefinition } from "~/features/workflow/generator-models";
 import type {
   GeneratorConfigValue,
   ImageGeneratorModelId,
   PromptDisplayMode,
   PromptVariable,
   VideoGeneratorModelId,
-} from "~/lib/workflow/types";
+} from "~/features/workflow/types";
 import type { GeneratorIterationInfo } from "./graph";
 
 export type StudioContextValue = {
@@ -51,7 +51,7 @@ export type StudioContextValue = {
     value: GeneratorConfigValue,
   ) => void;
   setGeneratorReviewEnabled: (nodeId: string, enabled: boolean) => void;
-  previewRunNode: (nodeId: string) => Promise<WorkflowRuntimeRunCostPreview>;
+  previewRunNode: (nodeId: string) => Promise<RuntimeRunCostPreview>;
   runNode: (nodeId: string) => Promise<void>;
 };
 

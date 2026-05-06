@@ -1,11 +1,11 @@
 "use client";
 
+import { api } from "~/client/trpc/react";
 import { useWorkflowStudioStore } from "~/components/workflow/studio/store";
-import { api } from "~/trpc/react";
 
 export function useWorkflowExecutionQuote(nodeId: string) {
   const projectId = useWorkflowStudioStore((state) => state.projectId);
-  const projectionQuery = api.workflowRuntime.executionCostProjection.useQuery(
+  const projectionQuery = api.runtime.executionCostProjection.useQuery(
     { projectId: projectId ?? "" },
     { enabled: Boolean(projectId), staleTime: 30_000 },
   );
