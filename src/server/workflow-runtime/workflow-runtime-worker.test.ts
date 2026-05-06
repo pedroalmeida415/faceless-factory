@@ -100,6 +100,29 @@ describe("WorkflowRuntimeWorker", () => {
     assertNoPostCommitTransportKeys(outcome);
   });
 
+  test("returns committed execution outcomes from validated execution dispatch", async () => {
+    const result = {
+      status: "committed" as const,
+      value: {
+        settlement: {
+          jobId: "task-run~task-run-1~attempt~0~orchestrator~completion",
+          taskRunId: "task-run-1",
+        },
+      },
+    };
+    const executionWorker = new FakeExecutionWorker({ result });
+    const processor = createWorkflowRuntimeProcessor({
+      executionWorker,
+      orchestrator: new FakeOrchestrator(),
+    });
+
+    assert.deepEqual(
+      await processor(fakeJob("execute-task-run", executionJob())),
+      result,
+    );
+    assert.deepEqual(executionWorker.executed, [executionJob()]);
+  });
+
   test("returns orchestrator ignored command outcomes unchanged", async () => {
     const orchestrator = new FakeOrchestrator({
       wakeUpOutcome: {
@@ -131,6 +154,19 @@ describe("WorkflowRuntimeWorker", () => {
     await assert.rejects(
       processor(fakeJob("wake-up-task-run-children", wakeUpJob())),
       wakeUpError,
+    );
+  });
+
+  test("rejects execution worker infrastructure failures so BullMQ can retry", async () => {
+    const executionError = new Error("repository unavailable");
+    const processor = createWorkflowRuntimeProcessor({
+      executionWorker: new FakeExecutionWorker({ error: executionError }),
+      orchestrator: new FakeOrchestrator(),
+    });
+
+    await assert.rejects(
+      processor(fakeJob("execute-task-run", executionJob())),
+      executionError,
     );
   });
 
@@ -238,10 +274,26 @@ function wakeUpJob() {
 class FakeExecutionWorker {
   readonly executed: unknown[] = [];
 
+  constructor(
+    private readonly outcome: {
+      readonly error?: Error;
+      readonly result?: unknown;
+    } = {},
+  ) {}
+
   execute(job: unknown) {
     this.executed.push(job);
 
-    return Promise.resolve({ claimed: false as const });
+    if (this.outcome.error) {
+      return Promise.reject(this.outcome.error);
+    }
+
+    return Promise.resolve(
+      this.outcome.result ?? {
+        reason: "STALE_TASK_RUN" as const,
+        status: "ignored" as const,
+      },
+    );
   }
 }
 

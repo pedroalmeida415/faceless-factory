@@ -1,10 +1,12 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
+import { Effect } from "effect";
 
 import { createWorkflowNode } from "~/lib/workflow/document";
 import type { ExecutableTaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
 import type { TaskStatusEvent } from "~/lib/workflow-runtime/runtime/task-status-events";
 import {
+  type ClaimQueuedTaskRunForExecutionResult,
   createWorkflowRuntimeExecutionWorker,
   type ProviderExecutionResult,
   type WorkflowRuntimeEventPublisherForWorker,
@@ -17,6 +19,7 @@ import type {
   WorkflowRuntimeExecutionJobPayload,
   WorkflowRuntimeFailureSettlementJobPayload,
 } from "~/server/workflow-runtime/workflow-runtime-queue";
+import type { WorkflowRuntimeRepositoryFailure } from "~/server/workflow-runtime/workflow-runtime-repository";
 
 describe("WorkflowRuntimeExecutionWorker", () => {
   test("does not execute or settle a Task Run when the queued attempt is not claimed", async () => {
@@ -36,7 +39,10 @@ describe("WorkflowRuntimeExecutionWorker", () => {
 
     const result = await worker.execute(executionJob());
 
-    assert.deepEqual(result, { claimed: false });
+    assert.deepEqual(result, {
+      reason: "STALE_TASK_RUN",
+      status: "ignored",
+    });
     assert.deepEqual(repository.claimCommands, [
       { attempt: 0, ownerUserId: "owner-1", taskRunId: "task-run-1" },
     ]);
@@ -104,8 +110,8 @@ describe("WorkflowRuntimeExecutionWorker", () => {
     ]);
     assert.deepEqual(settlementQueue.failures, []);
     assert.deepEqual(result, {
-      claimed: true,
-      settlement: settlementQueue.completions[0],
+      status: "committed",
+      value: { settlement: settlementQueue.completions[0] },
     });
   });
 
@@ -151,12 +157,17 @@ describe("WorkflowRuntimeExecutionWorker", () => {
     assert.deepEqual(settlementQueue.completions, []);
   });
 
-  test("enqueues a structured failure settlement when the provider throws", async () => {
+  test("enqueues a structured failure settlement when the provider reports infrastructure failure", async () => {
     const providerExecutor = new FakeProviderExecutor({
-      ok: true,
-      value: providerCompletion(),
+      error: {
+        failureReason: { message: "sdk exploded", type: "PROVIDER_FAILED" },
+        failureSource: {
+          taskRunDebitRefundable: false,
+          type: "POST_PROVIDER_INFRASTRUCTURE",
+        },
+      },
+      ok: false,
     });
-    providerExecutor.thrownError = new Error("sdk exploded");
     const settlementQueue = new FakeSettlementQueue();
     const worker = createWorkflowRuntimeExecutionWorker({
       eventPublisher: new FakeEventPublisher(),
@@ -183,7 +194,26 @@ describe("WorkflowRuntimeExecutionWorker", () => {
     ]);
   });
 
-  test("does not call the provider for stale execution jobs", async () => {
+  test("rejects settlement enqueue failures so BullMQ can retry without losing the provider result", async () => {
+    const settlementError = new Error("redis unavailable");
+    const settlementQueue = new FakeSettlementQueue();
+    settlementQueue.completionError = settlementError;
+    const worker = createWorkflowRuntimeExecutionWorker({
+      eventPublisher: new FakeEventPublisher(),
+      providerExecutor: new FakeProviderExecutor({
+        ok: true,
+        value: providerCompletion(),
+      }),
+      repository: new FakeRepository(claimedResult()),
+      settlementQueue,
+    });
+
+    await assert.rejects(worker.execute(executionJob()), /redis unavailable/);
+    assert.equal(settlementQueue.completions.length, 1);
+    assert.deepEqual(settlementQueue.failures, []);
+  });
+
+  test("returns the canonical ignored outcome for stale execution jobs", async () => {
     const providerExecutor = new FakeProviderExecutor({
       ok: true,
       value: providerCompletion(),
@@ -202,7 +232,44 @@ describe("WorkflowRuntimeExecutionWorker", () => {
       jobId: "task-run~task-run-1~attempt~1~execute",
     });
 
-    assert.deepEqual(result, { claimed: false });
+    assert.deepEqual(result, {
+      reason: "STALE_TASK_RUN",
+      status: "ignored",
+    });
+    assert.deepEqual(providerExecutor.commands, []);
+    assert.deepEqual(eventPublisher.published, []);
+  });
+
+  test("maps stale repository claim failures to the canonical ignored outcome", async () => {
+    const providerExecutor = new FakeProviderExecutor({
+      ok: true,
+      value: providerCompletion(),
+    });
+    const repository = new FakeRepository(claimedResult());
+    repository.claimFailure = {
+      _tag: "StaleTaskRunTransition" as const,
+      attempt: 1,
+      operation: "claimQueuedTaskRun",
+      taskRunId: "task-run-1",
+    };
+    const eventPublisher = new FakeEventPublisher();
+    const worker = createWorkflowRuntimeExecutionWorker({
+      eventPublisher,
+      providerExecutor,
+      repository,
+      settlementQueue: new FakeSettlementQueue(),
+    });
+
+    const result = await worker.execute({
+      ...executionJob(),
+      attempt: 1,
+      jobId: "task-run~task-run-1~attempt~1~execute",
+    });
+
+    assert.deepEqual(result, {
+      reason: "STALE_TASK_RUN",
+      status: "ignored",
+    });
     assert.deepEqual(providerExecutor.commands, []);
     assert.deepEqual(eventPublisher.published, []);
   });
@@ -212,11 +279,10 @@ class FakeRepository implements WorkflowRuntimeExecutionWorkerRepository {
   readonly claimCommands: Parameters<
     WorkflowRuntimeExecutionWorkerRepository["claimQueuedTaskRun"]
   >[0][] = [];
+  claimFailure: WorkflowRuntimeRepositoryFailure | null = null;
 
   constructor(
-    private readonly claimResult: Awaited<
-      ReturnType<WorkflowRuntimeExecutionWorkerRepository["claimQueuedTaskRun"]>
-    >,
+    private readonly claimResult: ClaimQueuedTaskRunForExecutionResult,
   ) {}
 
   claimQueuedTaskRun(
@@ -225,8 +291,11 @@ class FakeRepository implements WorkflowRuntimeExecutionWorkerRepository {
     >[0],
   ) {
     this.claimCommands.push(command);
+    if (this.claimFailure) {
+      return Effect.fail(this.claimFailure);
+    }
 
-    return Promise.resolve(this.claimResult);
+    return Effect.succeed(this.claimResult);
   }
 }
 
@@ -234,8 +303,6 @@ class FakeProviderExecutor {
   readonly commands: Parameters<
     WorkflowRuntimeProviderExecutor["execute"]
   >[0][] = [];
-  thrownError: Error | null = null;
-
   constructor(
     private readonly result: ProviderExecutionResult,
     private readonly sideEffects?: string[],
@@ -244,11 +311,7 @@ class FakeProviderExecutor {
   execute(command: Parameters<WorkflowRuntimeProviderExecutor["execute"]>[0]) {
     this.sideEffects?.push("provider");
     this.commands.push(command);
-    if (this.thrownError) {
-      throw this.thrownError;
-    }
-
-    return Promise.resolve(this.result);
+    return Effect.succeed(this.result);
   }
 }
 
@@ -278,11 +341,16 @@ class FakeEventPublisher implements WorkflowRuntimeEventPublisherForWorker {
 class FakeSettlementQueue implements WorkflowRuntimeSettlementQueueForWorker {
   readonly completions: WorkflowRuntimeCompletionSettlementJobPayload[] = [];
   readonly failures: WorkflowRuntimeFailureSettlementJobPayload[] = [];
+  completionError: Error | null = null;
+  failureError: Error | null = null;
 
   enqueueCompletionSettlement(
     payload: WorkflowRuntimeCompletionSettlementJobPayload,
   ) {
     this.completions.push(payload);
+    if (this.completionError) {
+      return Promise.reject(this.completionError);
+    }
 
     return Promise.resolve();
   }
@@ -291,6 +359,9 @@ class FakeSettlementQueue implements WorkflowRuntimeSettlementQueueForWorker {
     payload: WorkflowRuntimeFailureSettlementJobPayload,
   ) {
     this.failures.push(payload);
+    if (this.failureError) {
+      return Promise.reject(this.failureError);
+    }
 
     return Promise.resolve();
   }
@@ -324,9 +395,7 @@ function providerCompletion() {
   };
 }
 
-function claimedResult(): Awaited<
-  ReturnType<WorkflowRuntimeExecutionWorkerRepository["claimQueuedTaskRun"]>
-> {
+function claimedResult(): ClaimQueuedTaskRunForExecutionResult {
   return {
     claimed: true,
     event: {

@@ -18,7 +18,6 @@ async function createProviderExecutor() {
   const vertexAi = await ServerRuntime.runPromise(VertexAi);
 
   return createWorkflowRuntimeProviderExecutor({
-    runEffect: (effect) => ServerRuntime.runPromise(effect),
     vertexAi,
   });
 }
@@ -50,10 +49,7 @@ async function main() {
     },
     providerExecutor: await createProviderExecutor(),
     queue: composition.queue,
-    repository: {
-      claimQueuedTaskRun: (command) =>
-        Effect.runPromise(composition.repository.claimQueuedTaskRun(command)),
-    },
+    repository: composition.repository,
   });
 
   worker.on("completed", (job) => {

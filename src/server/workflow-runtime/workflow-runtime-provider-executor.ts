@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
 import type {
   GenerateImageRequest,
   GenerateImageResponse,
@@ -42,95 +42,101 @@ export type WorkflowRuntimeVertexProvider = {
 
 export function createWorkflowRuntimeProviderExecutor(input: {
   readonly createAssetId?: () => string;
-  readonly runEffect?: <A>(effect: Effect.Effect<A, unknown>) => Promise<A>;
   readonly vertexAi: WorkflowRuntimeVertexProvider;
 }): WorkflowRuntimeProviderExecutor {
   const createAssetId = input.createAssetId ?? randomUUID;
-  const runEffect = input.runEffect ?? Effect.runPromise;
 
   return {
-    async execute(command) {
+    execute(command) {
       const { inputSnapshot, ownerUserId, workflowId } = command;
       const requestParams = {
         ownerUserId,
         projectId: workflowId,
       };
+      const providerInput = inputSnapshot.providerInput;
 
-      try {
-        switch (inputSnapshot.providerInput.kind) {
+      return Effect.suspend(() => {
+        switch (providerInput.kind) {
           case "image-generation-request": {
-            const response = await runEffect(
+            return Effect.map(
               input.vertexAi.generateImagesWithNanoBananaPro({
                 ...requestParams,
-                request: inputSnapshot.providerInput.request,
+                request: providerInput.request,
               }),
+              (response) =>
+                generatedMediaResult({
+                  assets: response.assets,
+                  expectedKind: "image",
+                  providerCostCredits: priceImageGeneration(
+                    providerInput.request,
+                  ),
+                  reviewRequired: getReviewRequired(inputSnapshot),
+                }),
             );
-
-            return generatedMediaResult({
-              assets: response.assets,
-              expectedKind: "image",
-              providerCostCredits: priceImageGeneration(
-                inputSnapshot.providerInput.request,
-              ),
-              reviewRequired: getReviewRequired(inputSnapshot),
-            });
           }
           case "video-generation-request": {
-            const response = await runEffect(
+            return Effect.map(
               input.vertexAi.generateVideosWithVeo31({
                 ...requestParams,
-                request: inputSnapshot.providerInput.request,
+                request: providerInput.request,
               }),
+              (response) =>
+                generatedMediaResult({
+                  assets: response.assets,
+                  expectedKind: "video",
+                  providerCostCredits: priceVideoGeneration(
+                    providerInput.request,
+                  ),
+                  reviewRequired: getReviewRequired(inputSnapshot),
+                }),
             );
-
-            return generatedMediaResult({
-              assets: response.assets,
-              expectedKind: "video",
-              providerCostCredits: priceVideoGeneration(
-                inputSnapshot.providerInput.request,
-              ),
-              reviewRequired: getReviewRequired(inputSnapshot),
-            });
           }
           case "llm-generation-request": {
-            const response = await runEffect(
+            return Effect.map(
               input.vertexAi.generateTextWithGemini3Flash({
                 ...requestParams,
-                request: inputSnapshot.providerInput.request,
+                request: providerInput.request,
               }),
+              (response) =>
+                ({
+                  ok: true,
+                  value: {
+                    providerCostCredits: priceLlmGeneration(response),
+                    generatedAsset: {
+                      assetId: createAssetId(),
+                      contentType: "text/plain; charset=utf-8",
+                      fileName: `${inputSnapshot.taskRunId}.txt`,
+                      kind: "text",
+                      model: response.model,
+                      sizeBytes: Buffer.byteLength(
+                        response.responseText,
+                        "utf8",
+                      ),
+                      storageProvider: "inline",
+                      text: response.responseText,
+                    },
+                    reviewRequired: getReviewRequired(inputSnapshot),
+                  },
+                }) satisfies ProviderExecutionResult,
             );
-
-            return {
-              ok: true,
-              value: {
-                providerCostCredits: priceLlmGeneration(response),
-                generatedAsset: {
-                  assetId: createAssetId(),
-                  contentType: "text/plain; charset=utf-8",
-                  fileName: `${inputSnapshot.taskRunId}.txt`,
-                  kind: "text",
-                  model: response.model,
-                  sizeBytes: Buffer.byteLength(response.responseText, "utf8"),
-                  storageProvider: "inline",
-                  text: response.responseText,
-                },
-                reviewRequired: getReviewRequired(inputSnapshot),
-              },
-            } satisfies ProviderExecutionResult;
           }
         }
-      } catch (cause) {
-        return {
-          error: {
-            failureReason: {
-              message: providerFailureMessage(cause),
-              type: "PROVIDER_FAILED",
-            },
-            failureSource: nonRefundableProviderFailureSource(),
-          },
-          ok: false,
-        } satisfies ProviderExecutionResult;
-      }
+      }).pipe(
+        Effect.catchAllCause((cause) =>
+          Cause.isInterruptedOnly(cause)
+            ? Effect.failCause(cause as Cause.Cause<never>)
+            : Effect.succeed({
+                error: {
+                  failureReason: {
+                    message: providerFailureMessage(Cause.squash(cause)),
+                    type: "PROVIDER_FAILED",
+                  },
+                  failureSource: nonRefundableProviderFailureSource(),
+                },
+                ok: false,
+              } satisfies ProviderExecutionResult),
+        ),
+      );
     },
   };
 }

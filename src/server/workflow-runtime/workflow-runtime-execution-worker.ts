@@ -1,9 +1,15 @@
+import { Effect } from "effect";
 import type {
   TaskRunFailureReason,
   TaskRunSettlementFailureSource,
 } from "~/lib/workflow-runtime/domain/task-run-state";
 import type { ExecutableTaskRunInputSnapshot } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
 import type { TaskStatusEvent } from "~/lib/workflow-runtime/runtime/task-status-events";
+import {
+  committed,
+  ignored,
+  type WorkflowRuntimeCommandOutcome,
+} from "~/server/workflow-runtime/workflow-runtime-command-outcome";
 import {
   buildWorkflowRuntimeCompletionSettlementJobPayload,
   buildWorkflowRuntimeFailureSettlementJobPayload,
@@ -12,6 +18,7 @@ import {
   type WorkflowRuntimeFailureSettlementJobPayload,
   type WorkflowRuntimeGeneratedPrimaryAssetPayload,
 } from "~/server/workflow-runtime/workflow-runtime-queue";
+import type { WorkflowRuntimeRepositoryFailure } from "~/server/workflow-runtime/workflow-runtime-repository";
 
 export type ClaimQueuedTaskRunForExecutionCommand = {
   readonly attempt: number;
@@ -51,13 +58,16 @@ export type WorkflowRuntimeProviderExecutor = {
     readonly inputSnapshot: ExecutableTaskRunInputSnapshot;
     readonly ownerUserId: string;
     readonly workflowId: string;
-  }) => Promise<ProviderExecutionResult>;
+  }) => Effect.Effect<ProviderExecutionResult, never>;
 };
 
 export type WorkflowRuntimeExecutionWorkerRepository = {
   readonly claimQueuedTaskRun: (
     command: ClaimQueuedTaskRunForExecutionCommand,
-  ) => Promise<ClaimQueuedTaskRunForExecutionResult>;
+  ) => Effect.Effect<
+    ClaimQueuedTaskRunForExecutionResult,
+    WorkflowRuntimeRepositoryFailure
+  >;
 };
 
 export type WorkflowRuntimeSettlementQueueForWorker = {
@@ -76,14 +86,14 @@ export type WorkflowRuntimeEventPublisherForWorker = {
   ) => Promise<void>;
 };
 
+type WorkflowRuntimeExecutionWorkerValue = {
+  readonly settlement:
+    | WorkflowRuntimeCompletionSettlementJobPayload
+    | WorkflowRuntimeFailureSettlementJobPayload;
+};
+
 export type WorkflowRuntimeExecutionWorkerResult =
-  | { readonly claimed: false }
-  | {
-      readonly claimed: true;
-      readonly settlement:
-        | WorkflowRuntimeCompletionSettlementJobPayload
-        | WorkflowRuntimeFailureSettlementJobPayload;
-    };
+  WorkflowRuntimeCommandOutcome<WorkflowRuntimeExecutionWorkerValue>;
 
 export function createWorkflowRuntimeExecutionWorker(input: {
   readonly eventPublisher: WorkflowRuntimeEventPublisherForWorker;
@@ -91,47 +101,35 @@ export function createWorkflowRuntimeExecutionWorker(input: {
   readonly repository: WorkflowRuntimeExecutionWorkerRepository;
   readonly settlementQueue: WorkflowRuntimeSettlementQueueForWorker;
 }) {
-  return {
-    async execute(
-      job: WorkflowRuntimeExecutionJobPayload,
-    ): Promise<WorkflowRuntimeExecutionWorkerResult> {
-      const claim = await input.repository.claimQueuedTaskRun({
-        attempt: job.attempt,
-        ownerUserId: job.ownerUserId,
-        taskRunId: job.taskRunId,
-      });
+  const executeEffect = (job: WorkflowRuntimeExecutionJobPayload) =>
+    Effect.gen(function* () {
+      const claim = yield* input.repository
+        .claimQueuedTaskRun({
+          attempt: job.attempt,
+          ownerUserId: job.ownerUserId,
+          taskRunId: job.taskRunId,
+        })
+        .pipe(
+          Effect.catchIf(isStaleTaskRunTransition, () =>
+            Effect.succeed({ claimed: false as const }),
+          ),
+        );
 
       if (!claim.claimed) {
-        return { claimed: false };
+        return ignored<WorkflowRuntimeExecutionWorkerValue>("STALE_TASK_RUN");
       }
 
-      await input.eventPublisher.publishTaskStatusEvents(job.workflowId, [
-        claim.event,
-      ]);
+      yield* promiseInfrastructureEffect(() =>
+        input.eventPublisher.publishTaskStatusEvents(job.workflowId, [
+          claim.event,
+        ]),
+      );
 
-      const providerResult = await Promise.resolve()
-        .then(() =>
-          input.providerExecutor.execute({
-            inputSnapshot: claim.inputSnapshot,
-            ownerUserId: job.ownerUserId,
-            workflowId: job.workflowId,
-          }),
-        )
-        .catch(
-          (cause: unknown): ProviderExecutionResult => ({
-            error: {
-              failureReason: {
-                message: providerFailureMessage(cause),
-                type: "PROVIDER_FAILED",
-              },
-              failureSource: {
-                taskRunDebitRefundable: false,
-                type: "POST_PROVIDER_INFRASTRUCTURE",
-              },
-            },
-            ok: false,
-          }),
-        );
+      const providerResult = yield* input.providerExecutor.execute({
+        inputSnapshot: claim.inputSnapshot,
+        ownerUserId: job.ownerUserId,
+        workflowId: job.workflowId,
+      });
       if (!providerResult.ok) {
         const settlement = buildWorkflowRuntimeFailureSettlementJobPayload({
           attempt: job.attempt,
@@ -142,9 +140,11 @@ export function createWorkflowRuntimeExecutionWorker(input: {
           taskRunId: job.taskRunId,
           workflowId: job.workflowId,
         });
-        await input.settlementQueue.enqueueFailureSettlement(settlement);
+        yield* promiseInfrastructureEffect(() =>
+          input.settlementQueue.enqueueFailureSettlement(settlement),
+        );
 
-        return { claimed: true, settlement };
+        return committedSettlement(settlement);
       }
 
       const settlement = buildWorkflowRuntimeCompletionSettlementJobPayload({
@@ -156,15 +156,42 @@ export function createWorkflowRuntimeExecutionWorker(input: {
         taskRunId: job.taskRunId,
         workflowId: job.workflowId,
       });
-      await input.settlementQueue.enqueueCompletionSettlement(settlement);
+      yield* promiseInfrastructureEffect(() =>
+        input.settlementQueue.enqueueCompletionSettlement(settlement),
+      );
 
-      return { claimed: true, settlement };
+      return committedSettlement(settlement);
+    });
+
+  return {
+    async execute(
+      job: WorkflowRuntimeExecutionJobPayload,
+    ): Promise<WorkflowRuntimeExecutionWorkerResult> {
+      return Effect.runPromise(executeEffect(job));
     },
   };
 }
 
-function providerFailureMessage(cause: unknown): string {
-  return cause instanceof Error && cause.message.length > 0
-    ? cause.message
-    : "Provider execution failed.";
+function isStaleTaskRunTransition(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "_tag" in error &&
+    error._tag === "StaleTaskRunTransition"
+  );
+}
+
+function promiseInfrastructureEffect<A>(tryPromise: () => Promise<A>) {
+  return Effect.tryPromise({
+    catch: (cause) => cause,
+    try: tryPromise,
+  });
+}
+
+function committedSettlement(
+  settlement:
+    | WorkflowRuntimeCompletionSettlementJobPayload
+    | WorkflowRuntimeFailureSettlementJobPayload,
+): WorkflowRuntimeExecutionWorkerResult {
+  return committed({ settlement });
 }

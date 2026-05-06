@@ -1,7 +1,7 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
 
-import { Effect } from "effect";
+import { Cause, Effect, Exit } from "effect";
 
 import { createWorkflowNode } from "~/lib/workflow/document";
 import type { StagedGeneratedMediaArtifact } from "~/lib/workflow/types";
@@ -18,11 +18,13 @@ describe("WorkflowRuntimeProviderExecutor", () => {
     const executor = createWorkflowRuntimeProviderExecutor({ vertexAi });
     const snapshot = inputSnapshot({ kind: "imageGenerator" });
 
-    const result = await executor.execute({
-      inputSnapshot: snapshot,
-      ownerUserId: "owner-1",
-      workflowId: "workflow-1",
-    });
+    const result = await Effect.runPromise(
+      executor.execute({
+        inputSnapshot: snapshot,
+        ownerUserId: "owner-1",
+        workflowId: "workflow-1",
+      }),
+    );
 
     assert.deepEqual(vertexAi.imageCalls, [
       {
@@ -62,11 +64,13 @@ describe("WorkflowRuntimeProviderExecutor", () => {
     const executor = createWorkflowRuntimeProviderExecutor({ vertexAi });
     const snapshot = inputSnapshot({ kind: "videoGenerator" });
 
-    const result = await executor.execute({
-      inputSnapshot: snapshot,
-      ownerUserId: "owner-1",
-      workflowId: "workflow-1",
-    });
+    const result = await Effect.runPromise(
+      executor.execute({
+        inputSnapshot: snapshot,
+        ownerUserId: "owner-1",
+        workflowId: "workflow-1",
+      }),
+    );
 
     assert.deepEqual(vertexAi.videoCalls, [
       {
@@ -110,11 +114,13 @@ describe("WorkflowRuntimeProviderExecutor", () => {
     });
     const snapshot = inputSnapshot({ kind: "llmGenerator" });
 
-    const result = await executor.execute({
-      inputSnapshot: snapshot,
-      ownerUserId: "owner-1",
-      workflowId: "workflow-1",
-    });
+    const result = await Effect.runPromise(
+      executor.execute({
+        inputSnapshot: snapshot,
+        ownerUserId: "owner-1",
+        workflowId: "workflow-1",
+      }),
+    );
 
     assert.deepEqual(vertexAi.llmCalls, [
       {
@@ -174,11 +180,13 @@ describe("WorkflowRuntimeProviderExecutor", () => {
       },
     } satisfies ExecutableTaskRunInputSnapshot;
 
-    await executor.execute({
-      inputSnapshot: snapshot,
-      ownerUserId: "owner-1",
-      workflowId: "workflow-1",
-    });
+    await Effect.runPromise(
+      executor.execute({
+        inputSnapshot: snapshot,
+        ownerUserId: "owner-1",
+        workflowId: "workflow-1",
+      }),
+    );
 
     assert.deepEqual(
       vertexAi.llmCalls.map((call) => call.request),
@@ -197,11 +205,13 @@ describe("WorkflowRuntimeProviderExecutor", () => {
     };
     const executor = createWorkflowRuntimeProviderExecutor({ vertexAi });
 
-    const result = await executor.execute({
-      inputSnapshot: inputSnapshot({ kind: "imageGenerator" }),
-      ownerUserId: "owner-1",
-      workflowId: "workflow-1",
-    });
+    const result = await Effect.runPromise(
+      executor.execute({
+        inputSnapshot: inputSnapshot({ kind: "imageGenerator" }),
+        ownerUserId: "owner-1",
+        workflowId: "workflow-1",
+      }),
+    );
 
     assert.deepEqual(result, {
       error: {
@@ -224,11 +234,13 @@ describe("WorkflowRuntimeProviderExecutor", () => {
     vertexAi.thrownError = new Error("Vertex quota exhausted");
     const executor = createWorkflowRuntimeProviderExecutor({ vertexAi });
 
-    const result = await executor.execute({
-      inputSnapshot: inputSnapshot({ kind: "imageGenerator" }),
-      ownerUserId: "owner-1",
-      workflowId: "workflow-1",
-    });
+    const result = await Effect.runPromise(
+      executor.execute({
+        inputSnapshot: inputSnapshot({ kind: "imageGenerator" }),
+        ownerUserId: "owner-1",
+        workflowId: "workflow-1",
+      }),
+    );
 
     assert.deepEqual(result, {
       error: {
@@ -245,6 +257,26 @@ describe("WorkflowRuntimeProviderExecutor", () => {
     });
   });
 
+  test("preserves provider interruption instead of mapping it to provider failure", async () => {
+    const vertexAi = new FakeVertexAi();
+    vertexAi.imageEffect = Effect.interrupt;
+    const executor = createWorkflowRuntimeProviderExecutor({ vertexAi });
+
+    const exit = await Effect.runPromiseExit(
+      executor.execute({
+        inputSnapshot: inputSnapshot({ kind: "imageGenerator" }),
+        ownerUserId: "owner-1",
+        workflowId: "workflow-1",
+      }),
+    );
+
+    assert.equal(Exit.isFailure(exit), true);
+    assert.equal(
+      Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause),
+      true,
+    );
+  });
+
   test("propagates reviewRequired from generator target node config", async () => {
     const vertexAi = new FakeVertexAi();
     vertexAi.imageResponse = {
@@ -253,14 +285,16 @@ describe("WorkflowRuntimeProviderExecutor", () => {
     };
     const executor = createWorkflowRuntimeProviderExecutor({ vertexAi });
 
-    const result = await executor.execute({
-      inputSnapshot: inputSnapshot({
-        kind: "imageGenerator",
-        reviewEnabled: true,
+    const result = await Effect.runPromise(
+      executor.execute({
+        inputSnapshot: inputSnapshot({
+          kind: "imageGenerator",
+          reviewEnabled: true,
+        }),
+        ownerUserId: "owner-1",
+        workflowId: "workflow-1",
       }),
-      ownerUserId: "owner-1",
-      workflowId: "workflow-1",
-    });
+    );
 
     assert.equal(result.ok ? result.value.reviewRequired : false, true);
   });
@@ -272,6 +306,9 @@ class FakeVertexAi {
   llmCalls: Parameters<VertexLike["generateTextWithGemini3Flash"]>[0][] = [];
   videoCalls: Parameters<VertexLike["generateVideosWithVeo31"]>[0][] = [];
   thrownError: Error | null = null;
+  imageEffect: ReturnType<
+    VertexLike["generateImagesWithNanoBananaPro"]
+  > | null = null;
   imageResponse: GenerateEffectSuccess<
     ReturnType<VertexLike["generateImagesWithNanoBananaPro"]>
   > = { assets: [], model: "gemini-3-pro-image-preview" };
@@ -297,6 +334,9 @@ class FakeVertexAi {
     this.imageCalls.push(params);
     if (this.thrownError) {
       throw this.thrownError;
+    }
+    if (this.imageEffect) {
+      return this.imageEffect;
     }
 
     return Effect.succeed(this.imageResponse);
