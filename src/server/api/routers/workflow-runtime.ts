@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { type SQL, sql } from "drizzle-orm";
+import { Effect } from "effect";
 import { z } from "zod";
 import { planWorkflowRun } from "~/lib/workflow-runtime/planning/workflow-run-planner";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
@@ -14,8 +15,16 @@ import {
   parseTaskStatusEventPayload,
   workflowEventChannel,
 } from "~/server/workflow-runtime/task-status-event-stream";
-import { createWorkflowRuntimeComposition } from "~/server/workflow-runtime/workflow-runtime-composition";
-import type { WorkflowRuntimeOrchestratorError } from "~/server/workflow-runtime/workflow-runtime-orchestrator";
+import {
+  toWorkflowRuntimeTransportOutcome,
+  type WorkflowRuntimeCommandOutcome,
+} from "~/server/workflow-runtime/workflow-runtime-command-outcome";
+import {
+  WorkflowRuntimeCommands,
+  type WorkflowRuntimeCommandsService,
+  type WorkflowRuntimeOrchestratorError,
+} from "~/server/workflow-runtime/workflow-runtime-commands";
+import { getWorkflowRuntimeManagedRuntime } from "~/server/workflow-runtime/workflow-runtime-composition";
 import { getPlanningStateForWorkflow } from "~/server/workflow-runtime/workflow-runtime-planning-state-repository";
 import { getTaskRunProjectionForWorkflow } from "~/server/workflow-runtime/workflow-runtime-task-projection-repository";
 
@@ -115,25 +124,24 @@ export const workflowRuntimeRouter = createTRPCRouter({
         ownerUserId,
         workflowId: project.id,
       }).catch(throwTRPCError);
-      const { orchestrator } =
-        await createWorkflowRuntimeComposition().catch(throwTRPCError);
+      const result = await runWorkflowRuntimeCommand((commands) =>
+        commands.startWorkflowRun({
+          ...planningState,
+          command:
+            input.target.type === "node"
+              ? { nodeId: input.target.nodeId, type: "run-node" }
+              : {
+                  itemIndex: input.target.itemIndex,
+                  nodeExecutionId: input.target.nodeExecutionId,
+                  type: "run-task-slot",
+                },
+          document: project.document,
+          ownerId: ownerUserId,
+          workflowId: project.id,
+        }),
+      );
 
-      const result = await orchestrator.startWorkflowRun({
-        ...planningState,
-        command:
-          input.target.type === "node"
-            ? { nodeId: input.target.nodeId, type: "run-node" }
-            : {
-                itemIndex: input.target.itemIndex,
-                nodeExecutionId: input.target.nodeExecutionId,
-                type: "run-task-slot",
-              },
-        document: project.document,
-        ownerId: ownerUserId,
-        workflowId: project.id,
-      });
-
-      return unwrapOrchestratorResult(result);
+      return unwrapWorkflowRuntimeOutcome(result);
     }),
 
   approveTaskRun: protectedProcedure
@@ -236,8 +244,6 @@ async function decideTaskRun(
     workflowId: input.projectId,
   }).catch(throwTRPCError);
 
-  const { orchestrator } =
-    await createWorkflowRuntimeComposition().catch(throwTRPCError);
   const command = {
     attempt: input.attempt,
     ownerUserId,
@@ -246,14 +252,26 @@ async function decideTaskRun(
   };
 
   if (decision === "approve") {
-    return unwrapOrchestratorResult(await orchestrator.approveTaskRun(command));
+    return unwrapWorkflowRuntimeOutcome(
+      await runWorkflowRuntimeCommand((commands) =>
+        commands.approveTaskRun(command),
+      ),
+    );
   }
 
   if (decision === "cancel") {
-    return unwrapOrchestratorResult(await orchestrator.cancelTaskRun(command));
+    return unwrapWorkflowRuntimeOutcome(
+      await runWorkflowRuntimeCommand((commands) =>
+        commands.cancelTaskRun(command),
+      ),
+    );
   }
 
-  return unwrapOrchestratorResult(await orchestrator.rejectTaskRun(command));
+  return unwrapWorkflowRuntimeOutcome(
+    await runWorkflowRuntimeCommand((commands) =>
+      commands.rejectTaskRun(command),
+    ),
+  );
 }
 
 async function assertTaskRunBelongsToProject(
@@ -285,19 +303,25 @@ async function assertTaskRunBelongsToProject(
   }
 }
 
-function unwrapOrchestratorResult<T>(
-  result:
-    | { readonly ok: true; readonly value: T }
-    | {
-        readonly error: WorkflowRuntimeOrchestratorError;
-        readonly ok: false;
-      },
+async function runWorkflowRuntimeCommand<T>(
+  build: (
+    commands: WorkflowRuntimeCommandsService,
+  ) => Effect.Effect<
+    WorkflowRuntimeCommandOutcome<T>,
+    WorkflowRuntimeOrchestratorError
+  >,
 ) {
-  if (result.ok) {
-    return result.value;
-  }
+  return getWorkflowRuntimeManagedRuntime()
+    .runPromise(Effect.flatMap(WorkflowRuntimeCommands, build))
+    .catch((error: unknown) => {
+      throw orchestratorErrorToTRPCError(toOrchestratorError(error));
+    });
+}
 
-  throw orchestratorErrorToTRPCError(result.error);
+function unwrapWorkflowRuntimeOutcome<T>(
+  outcome: WorkflowRuntimeCommandOutcome<T>,
+) {
+  return toWorkflowRuntimeTransportOutcome(outcome);
 }
 
 function orchestratorErrorToTRPCError(error: WorkflowRuntimeOrchestratorError) {
@@ -314,9 +338,32 @@ function orchestratorErrorToTRPCError(error: WorkflowRuntimeOrchestratorError) {
 
   return new TRPCError({
     code: "INTERNAL_SERVER_ERROR",
-    cause: error.cause,
     message: error.message,
   });
+}
+
+function toOrchestratorError(error: unknown): WorkflowRuntimeOrchestratorError {
+  if (isOrchestratorError(error)) {
+    return error;
+  }
+
+  return {
+    _tag: "WorkflowRuntimeCommitError",
+    cause: error,
+    committed: false,
+    message: "Workflow runtime failed.",
+  };
+}
+
+function isOrchestratorError(
+  error: unknown,
+): error is WorkflowRuntimeOrchestratorError {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "_tag" in error &&
+    typeof error._tag === "string"
+  );
 }
 
 async function getCurrentCreditBalance(ownerUserId: string) {

@@ -1,11 +1,19 @@
 import { Queue } from "bullmq";
+import { Effect, Layer, ManagedRuntime } from "effect";
 
 import { db } from "~/server/db";
 import { getRedisClient } from "~/server/redis";
 import { createWorkflowEventPublisher } from "~/server/workflow-runtime/task-status-event-stream";
-import { createWorkflowRuntimeOrchestrator } from "~/server/workflow-runtime/workflow-runtime-orchestrator";
+import {
+  WorkflowRuntimeCommands,
+  WorkflowRuntimeEventPublisher,
+  WorkflowRuntimeIdGenerator,
+  WorkflowRuntimeQueue,
+  WorkflowRuntimeRepository,
+} from "~/server/workflow-runtime/workflow-runtime-commands";
 import { createWorkflowRuntimeQueueAdapter } from "~/server/workflow-runtime/workflow-runtime-queue";
 import { createWorkflowRuntimeRepository } from "~/server/workflow-runtime/workflow-runtime-repository";
+import { WorkflowRuntimeTelemetry } from "~/server/workflow-runtime/workflow-runtime-telemetry";
 import {
   WORKFLOW_RUNTIME_JOB_HISTORY_AGE_SECONDS,
   WORKFLOW_RUNTIME_QUEUE_NAME,
@@ -13,6 +21,10 @@ import {
 } from "~/server/workflow-runtime/workflow-runtime-worker";
 
 const globalForWorkflowRuntime = globalThis as typeof globalThis & {
+  __workflowRuntimeManagedRuntime?: ManagedRuntime.ManagedRuntime<
+    WorkflowRuntimeCommands | WorkflowRuntimeTelemetry,
+    unknown
+  >;
   __workflowRuntimeQueue?: Queue;
 };
 
@@ -49,12 +61,44 @@ export async function createWorkflowRuntimeComposition() {
 
   return {
     eventPublisher,
-    orchestrator: createWorkflowRuntimeOrchestrator({
-      eventPublisher,
-      queue,
-      repository,
-    }),
     queue,
     repository,
   };
+}
+
+export function getWorkflowRuntimeManagedRuntime() {
+  globalForWorkflowRuntime.__workflowRuntimeManagedRuntime ??=
+    ManagedRuntime.make(createWorkflowRuntimeLiveLayer());
+
+  return globalForWorkflowRuntime.__workflowRuntimeManagedRuntime;
+}
+
+export function createWorkflowRuntimeLiveLayer() {
+  const RepositoryLive = Layer.succeed(
+    WorkflowRuntimeRepository,
+    createWorkflowRuntimeRepository(db),
+  );
+  const QueueLive = Layer.succeed(
+    WorkflowRuntimeQueue,
+    createWorkflowRuntimeQueueAdapter(getWorkflowRuntimeQueue()),
+  );
+  const EventPublisherLive = Layer.effect(
+    WorkflowRuntimeEventPublisher,
+    Effect.tryPromise({
+      try: async () => createWorkflowEventPublisher(await getRedisClient()),
+      catch: (cause) => cause,
+    }),
+  );
+
+  const DependenciesLive = Layer.mergeAll(
+    RepositoryLive,
+    QueueLive,
+    EventPublisherLive,
+    WorkflowRuntimeIdGenerator.Live,
+  );
+
+  return Layer.mergeAll(
+    WorkflowRuntimeTelemetry.Live,
+    WorkflowRuntimeCommands.Live.pipe(Layer.provide(DependenciesLive)),
+  );
 }

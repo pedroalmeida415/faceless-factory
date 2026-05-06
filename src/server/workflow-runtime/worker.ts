@@ -1,6 +1,14 @@
+import { Effect } from "effect";
 import { ServerRuntime } from "~/effect/server/runtime";
 import { VertexAi } from "~/server/workflow/vertex";
-import { createWorkflowRuntimeComposition } from "~/server/workflow-runtime/workflow-runtime-composition";
+import {
+  WorkflowRuntimeCommands,
+  type WorkflowRuntimeCommandsService,
+} from "~/server/workflow-runtime/workflow-runtime-commands";
+import {
+  createWorkflowRuntimeComposition,
+  getWorkflowRuntimeManagedRuntime,
+} from "~/server/workflow-runtime/workflow-runtime-composition";
 import { createWorkflowRuntimeProviderExecutor } from "~/server/workflow-runtime/workflow-runtime-provider-executor";
 import {
   createWorkflowRuntimeWorker,
@@ -20,9 +28,23 @@ async function createProviderExecutor() {
 
 async function main() {
   const composition = await createWorkflowRuntimeComposition();
+  const workflowRuntime = getWorkflowRuntimeManagedRuntime();
+  const runCommand = <T>(
+    build: (
+      commands: WorkflowRuntimeCommandsService,
+    ) => Effect.Effect<T, unknown>,
+  ) =>
+    workflowRuntime.runPromise(Effect.flatMap(WorkflowRuntimeCommands, build));
   const worker = createWorkflowRuntimeWorker({
     eventPublisher: composition.eventPublisher,
-    orchestrator: composition.orchestrator,
+    orchestrator: {
+      handleWakeUpCall: (command) =>
+        runCommand((commands) => commands.handleWakeUpCall(command)),
+      settleWorkerCompletion: (command) =>
+        runCommand((commands) => commands.settleWorkerCompletion(command)),
+      settleWorkerFailure: (command) =>
+        runCommand((commands) => commands.settleWorkerFailure(command)),
+    },
     providerExecutor: await createProviderExecutor(),
     queue: composition.queue,
     repository: composition.repository,

@@ -46,6 +46,7 @@ export type WakeUpTaskRunChildrenRepositoryCommand = {
 
 export type WakeUpTaskRunChildrenRepositoryResult = {
   readonly executionJobs: readonly WorkflowRuntimeExecutionJobPayload[];
+  readonly parentFound: boolean;
   readonly taskStatusEvents: readonly TaskStatusEvent[];
 };
 
@@ -80,7 +81,7 @@ export async function wakeUpTaskRunChildrenInRepository(
   return db.transaction(async (tx) => {
     const parent = await loadGatekeeperParentTaskRun(tx, command);
     if (!parent) {
-      return { executionJobs: [], taskStatusEvents: [] };
+      return { executionJobs: [], parentFound: false, taskStatusEvents: [] };
     }
 
     const taskRuns = await loadGatekeeperTaskRuns(tx, parent);
@@ -126,6 +127,7 @@ export async function wakeUpTaskRunChildrenInRepository(
           workflowId: taskRun.workflowId,
         });
       }),
+      parentFound: true,
       taskStatusEvents: persisted.taskStatusEvents,
     };
   });

@@ -45,6 +45,65 @@ describe("WorkflowRuntimeWorker", () => {
     );
   });
 
+  test("returns sanitized orchestrator committed command outcomes", async () => {
+    const orchestrator = new FakeOrchestrator({
+      completionOutcome: {
+        status: "committed" as const,
+        value: {
+          event: { type: "task-run-status-changed" },
+          executionJob: { jobId: "execution-job-1" },
+          executionJobs: [{ jobId: "execution-job-2" }],
+          nested: {
+            settledTaskRunId: "task-run-1",
+            taskStatusEvents: [{ type: "task-run-status-changed" }],
+            wakeUpJob: { jobId: "wake-up-job-1" },
+            wakeUpJobs: [{ jobId: "wake-up-job-2" }],
+          },
+          settled: true as const,
+          taskStatusEvents: [{ type: "task-run-status-changed" }],
+        },
+      },
+    });
+    const processor = createWorkflowRuntimeProcessor({
+      executionWorker: new FakeExecutionWorker(),
+      orchestrator,
+    });
+
+    const outcome = await processor(
+      fakeJob("settle-task-run-completion", completionJob()),
+    );
+
+    assert.deepEqual(outcome, {
+      status: "committed",
+      value: {
+        nested: { settledTaskRunId: "task-run-1" },
+        settled: true,
+      },
+    });
+    assertNoPostCommitTransportKeys(outcome);
+  });
+
+  test("returns orchestrator ignored command outcomes unchanged", async () => {
+    const orchestrator = new FakeOrchestrator({
+      wakeUpOutcome: {
+        reason: "WAKE_UP_PARENT_NOT_FOUND" as const,
+        status: "ignored" as const,
+      },
+    });
+    const processor = createWorkflowRuntimeProcessor({
+      executionWorker: new FakeExecutionWorker(),
+      orchestrator,
+    });
+
+    assert.deepEqual(
+      await processor(fakeJob("wake-up-task-run-children", wakeUpJob())),
+      {
+        reason: "WAKE_UP_PARENT_NOT_FOUND",
+        status: "ignored",
+      },
+    );
+  });
+
   test("re-enqueues durable queued Task Runs idempotently", async () => {
     const repository = new FakeQueuedTaskRunRepository([
       executionJob("task-run-1", 0),
@@ -69,6 +128,21 @@ describe("WorkflowRuntimeWorker", () => {
 
 function fakeJob(name: string, data: WorkflowRuntimeJobPayload) {
   return { data, name };
+}
+
+function assertNoPostCommitTransportKeys(value: unknown) {
+  const serialized = JSON.stringify(value);
+  assert.ok(serialized);
+  for (const key of [
+    "event",
+    "executionJob",
+    "executionJobs",
+    "taskStatusEvents",
+    "wakeUpJob",
+    "wakeUpJobs",
+  ]) {
+    assert.equal(serialized.includes(key), false, key);
+  }
 }
 
 function executionJob(taskRunId = "task-run-1", attempt = 0) {
@@ -146,31 +220,45 @@ class FakeOrchestrator {
   readonly failures: unknown[] = [];
   readonly wakeUps: unknown[] = [];
 
+  constructor(
+    private readonly outcomes: {
+      readonly completionOutcome?: unknown;
+      readonly failureOutcome?: unknown;
+      readonly wakeUpOutcome?: unknown;
+    } = {},
+  ) {}
+
   settleWorkerCompletion(job: unknown) {
     this.completions.push(job);
 
-    return Promise.resolve({
-      ok: true as const,
-      value: { settled: false as const },
-    });
+    return Promise.resolve(
+      this.outcomes.completionOutcome ?? {
+        ok: true as const,
+        value: { settled: false as const },
+      },
+    );
   }
 
   settleWorkerFailure(job: unknown) {
     this.failures.push(job);
 
-    return Promise.resolve({
-      ok: true as const,
-      value: { settled: false as const },
-    });
+    return Promise.resolve(
+      this.outcomes.failureOutcome ?? {
+        ok: true as const,
+        value: { settled: false as const },
+      },
+    );
   }
 
   handleWakeUpCall(job: unknown) {
     this.wakeUps.push(job);
 
-    return Promise.resolve({
-      ok: true as const,
-      value: { executionJobs: [], taskStatusEvents: [] },
-    });
+    return Promise.resolve(
+      this.outcomes.wakeUpOutcome ?? {
+        ok: true as const,
+        value: { executionJobs: [], taskStatusEvents: [] },
+      },
+    );
   }
 }
 

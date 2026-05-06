@@ -80,7 +80,11 @@ describe("WorkflowRuntimeRepository", () => {
       { ownerUserId: "owner-user", settledParentTaskRunId: "missing-parent" },
     );
 
-    assert.deepEqual(result, { executionJobs: [], taskStatusEvents: [] });
+    assert.deepEqual(result, {
+      executionJobs: [],
+      parentFound: false,
+      taskStatusEvents: [],
+    });
     assert.deepEqual(calls, ["transaction"]);
   });
 
@@ -148,6 +152,7 @@ describe("WorkflowRuntimeRepository", () => {
 
     assert.deepEqual(result, {
       executionJobs: [],
+      parentFound: true,
       taskStatusEvents: [
         {
           attempt: 0,
@@ -1571,7 +1576,11 @@ describe("WorkflowRuntimeRepository", () => {
       settledParentTaskRunId: "parent-approved-for-review-block",
     });
 
-    assert.deepEqual(result, { executionJobs: [], taskStatusEvents: [] });
+    assert.deepEqual(result, {
+      executionJobs: [],
+      parentFound: true,
+      taskStatusEvents: [],
+    });
     assert.equal(
       (await getWakeUpTaskRunState(db, "child-review-blocked")).runtimeStatus,
       "WAITING_UPSTREAM",
@@ -1677,7 +1686,11 @@ describe("WorkflowRuntimeRepository", () => {
       settledParentTaskRunId: "parent-duplicate-wake",
     });
 
-    assert.deepEqual(duplicate, { executionJobs: [], taskStatusEvents: [] });
+    assert.deepEqual(duplicate, {
+      executionJobs: [],
+      parentFound: true,
+      taskStatusEvents: [],
+    });
     assert.equal(await getUserCreditBalance(db, "owner-user"), 88);
     assert.equal((await getCreditLedgerEntries(db)).length, 1);
   });
@@ -1711,7 +1724,11 @@ describe("WorkflowRuntimeRepository", () => {
       settledParentTaskRunId: "parent-stale-wake",
     });
 
-    assert.deepEqual(result, { executionJobs: [], taskStatusEvents: [] });
+    assert.deepEqual(result, {
+      executionJobs: [],
+      parentFound: true,
+      taskStatusEvents: [],
+    });
     assert.equal(await getUserCreditBalance(db, "owner-user"), 88);
     assert.deepEqual(await getCreditLedgerEntries(db), [
       {

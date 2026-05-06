@@ -1,6 +1,7 @@
 import { Worker, type WorkerOptions } from "bullmq";
 
 import { env } from "~/env";
+import { sanitizeWorkflowRuntimeProcessorOutcome } from "~/server/workflow-runtime/workflow-runtime-command-outcome";
 import type {
   WorkflowRuntimeExecutionWorkerRepository,
   WorkflowRuntimeProviderExecutor,
@@ -97,20 +98,28 @@ export function createWorkflowRuntimeProcessor(input: {
           job.data as WorkflowRuntimeExecutionJobPayload,
         );
       case WORKFLOW_RUNTIME_COMPLETION_SETTLEMENT_JOB_NAME:
-        return input.orchestrator.settleWorkerCompletion(
-          job.data as WorkflowRuntimeCompletionSettlementJobPayload,
+        return sanitizeWorkflowRuntimeProcessorOutcome(
+          await input.orchestrator.settleWorkerCompletion(
+            job.data as WorkflowRuntimeCompletionSettlementJobPayload,
+          ),
         );
       case WORKFLOW_RUNTIME_FAILURE_SETTLEMENT_JOB_NAME:
-        return input.orchestrator.settleWorkerFailure(
-          job.data as WorkflowRuntimeFailureSettlementJobPayload,
+        return sanitizeWorkflowRuntimeProcessorOutcome(
+          await input.orchestrator.settleWorkerFailure(
+            job.data as WorkflowRuntimeFailureSettlementJobPayload,
+          ),
         );
       case WORKFLOW_RUNTIME_WAKE_UP_JOB_NAME:
-        return input.orchestrator.handleWakeUpCall({
-          ownerUserId: job.data.ownerUserId,
-          settledParentTaskRunId: (job.data as WorkflowRuntimeWakeUpJobPayload)
-            .parentTaskRunId,
-          workflowId: (job.data as WorkflowRuntimeWakeUpJobPayload).workflowId,
-        });
+        return sanitizeWorkflowRuntimeProcessorOutcome(
+          await input.orchestrator.handleWakeUpCall({
+            ownerUserId: job.data.ownerUserId,
+            settledParentTaskRunId: (
+              job.data as WorkflowRuntimeWakeUpJobPayload
+            ).parentTaskRunId,
+            workflowId: (job.data as WorkflowRuntimeWakeUpJobPayload)
+              .workflowId,
+          }),
+        );
       default:
         throw new Error(`Unknown workflow runtime job name: ${job.name}`);
     }
