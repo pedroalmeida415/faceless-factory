@@ -1,3 +1,0 @@
-[submodule "vendor/effect"]
-	path = vendor/effect
-	url = git@github.com:Effect-TS/effect.git
