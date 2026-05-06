@@ -23,6 +23,7 @@ Coordinate implementation of a parent PRD and its child issues without directly 
 - Do not stop before the full parent PRD plan is complete unless a real roadblock significantly hinders progress, requires human input, or puts the plan in jeopardy.
 - You may read code lightly for coordination, inspect issues, run high-level verification, inspect git state, ask clarifying questions, dispatch implementation agents, dispatch review agents, and request revisions.
 - You may create commits for accepted subagent work. Each commit must contain exactly one reviewed slice or prerequisite slice.
+- Implementation subagents must load and follow the `tdd` skill for every implementation or revision slice. The orchestrator brief must state this requirement explicitly.
 - Review agents must independently reread every file changed by an implementation subagent before recommending acceptance. Implementation summaries, file lists, and diffs are navigation aids, not review evidence.
 - If a blocker requires implementation, assign it to a subagent instead of patching it locally.
 - If a review agent finds that implementation diverges from the PRD, overreaches into another slice, weakens project principles, or leaves a temporary workaround, dispatch a follow-up implementation agent with the exact findings instead of patching it locally.
@@ -53,6 +54,7 @@ For each ready issue, brief the subagent with:
 - Child issue acceptance criteria and non-goals.
 - Known dependencies and completed sibling work it must preserve.
 - Expected source-of-truth modules, seams, and verification commands.
+- Mandatory instruction to load and follow the `tdd` skill before implementation.
 - Explicit ownership boundaries: files, modules, domain invariants, and sibling issues it must not touch.
 - Requirement to report changed files, tests run, architectural decisions, temporary workarounds, and any scope gaps.
 
