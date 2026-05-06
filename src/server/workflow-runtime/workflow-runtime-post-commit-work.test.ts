@@ -1,6 +1,16 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { Effect, Fiber, Layer, Schedule, TestClock, TestContext } from "effect";
+import {
+  Effect,
+  Fiber,
+  Layer,
+  Logger,
+  LogLevel,
+  Metric,
+  Schedule,
+  TestClock,
+  TestContext,
+} from "effect";
 
 import type { TaskStatusEvent } from "~/lib/workflow-runtime/runtime/task-status-events";
 import {
@@ -18,6 +28,7 @@ import type {
 import {
   type WorkflowRuntimePostCommitDeliveryTelemetry,
   WorkflowRuntimeTelemetry,
+  workflowRuntimeTelemetryMetrics,
 } from "~/server/workflow-runtime/workflow-runtime-telemetry";
 
 describe("WorkflowRuntimePostCommitWork", () => {
@@ -146,6 +157,121 @@ describe("WorkflowRuntimePostCommitWork", () => {
     ]);
   });
 
+  test("records real telemetry for failed and exhausted Post-Commit Work delivery", async () => {
+    const logs: Array<{ level: string; message: unknown }> = [];
+    const failures = new Map([
+      ["event:event-real-telemetry:PENDING_REVIEW", Number.POSITIVE_INFINITY],
+    ]);
+    const event = taskStatusEvent("event-real-telemetry", "PENDING_REVIEW");
+    const taggedAttemptFailures = tagPostCommitMetric(
+      workflowRuntimeTelemetryMetrics.postCommitAttemptFailures,
+      {
+        kind: "task-status-event",
+        source: "settle-worker-completion",
+        status: event.status,
+        taskRunId: event.taskRunId,
+        workflowId: "workflow-real-telemetry",
+      },
+    );
+    const taggedExhaustedFailures = tagPostCommitMetric(
+      workflowRuntimeTelemetryMetrics.postCommitExhaustedFailures,
+      {
+        kind: "task-status-event",
+        source: "settle-worker-completion",
+        status: event.status,
+        taskRunId: event.taskRunId,
+        workflowId: "workflow-real-telemetry",
+      },
+    );
+
+    await WorkflowRuntimePostCommitWork.deliver(
+      work({
+        source: "settle-worker-completion",
+        taskStatusEvents: [event],
+        workflowId: "workflow-real-telemetry",
+      }),
+    ).pipe(
+      Effect.provide(
+        makeLayer({
+          failures,
+          retrySchedule: Schedule.recurs(1),
+          telemetryLayer: WorkflowRuntimeTelemetry.layerFromConfig(
+            WorkflowRuntimeTelemetry.fromEnv({}),
+          ),
+        }),
+      ),
+      Effect.provide(
+        Logger.replace(
+          Logger.defaultLogger,
+          Logger.make((entry) => {
+            logs.push({
+              level: entry.logLevel.label,
+              message: entry.message,
+            });
+          }),
+        ),
+      ),
+      Logger.withMinimumLogLevel(LogLevel.Debug),
+      Effect.runPromise,
+    );
+
+    assert.equal(await metricCount(taggedAttemptFailures), 2);
+    assert.equal(await metricCount(taggedExhaustedFailures), 1);
+    assert.deepEqual(logs, [
+      {
+        level: "DEBUG",
+        message: [
+          "Workflow Runtime Post-Commit Work delivery attempt failed",
+          {
+            attempt: 1,
+            cause: "forced event:event-real-telemetry:PENDING_REVIEW failure",
+            itemIndex: 0,
+            kind: "task-status-event",
+            nodeExecutionId: "node-execution-event-real-telemetry",
+            source: "settle-worker-completion",
+            status: "PENDING_REVIEW",
+            taskRunId: "event-real-telemetry",
+            workflowId: "workflow-real-telemetry",
+          },
+        ],
+      },
+      {
+        level: "DEBUG",
+        message: [
+          "Workflow Runtime Post-Commit Work delivery attempt failed",
+          {
+            attempt: 2,
+            cause: "forced event:event-real-telemetry:PENDING_REVIEW failure",
+            itemIndex: 0,
+            kind: "task-status-event",
+            nodeExecutionId: "node-execution-event-real-telemetry",
+            source: "settle-worker-completion",
+            status: "PENDING_REVIEW",
+            taskRunId: "event-real-telemetry",
+            workflowId: "workflow-real-telemetry",
+          },
+        ],
+      },
+      {
+        level: "WARN",
+        message: [
+          "Workflow Runtime Post-Commit Work delivery exhausted",
+          {
+            attempt: 2,
+            cause: "forced event:event-real-telemetry:PENDING_REVIEW failure",
+            itemIndex: 0,
+            kind: "task-status-event",
+            nodeExecutionId: "node-execution-event-real-telemetry",
+            source: "settle-worker-completion",
+            status: "PENDING_REVIEW",
+            taskRunId: "event-real-telemetry",
+            workflowId: "workflow-real-telemetry",
+          },
+        ],
+      },
+    ]);
+  });
+
   test("remains interruptible while waiting on retry backoff", async () => {
     const calls: string[] = [];
     const failures = new Map([["execution:exec-1", Number.POSITIVE_INFINITY]]);
@@ -193,6 +319,7 @@ type LayerOptions = {
   readonly retrySchedule?: Parameters<
     typeof WorkflowRuntimePostCommitWork.layerWithSchedule
   >[0];
+  readonly telemetryLayer?: Layer.Layer<WorkflowRuntimeTelemetry>;
 };
 
 function makeLayer({
@@ -201,6 +328,7 @@ function makeLayer({
   exhausted = [],
   failures = new Map(),
   retrySchedule = Schedule.recurs(0),
+  telemetryLayer,
 }: LayerOptions) {
   return WorkflowRuntimePostCommitWork.layerWithSchedule(retrySchedule).pipe(
     Layer.provide(
@@ -229,20 +357,48 @@ function makeLayer({
               catch: (cause) => cause,
             }),
         }),
-        Layer.succeed(WorkflowRuntimeTelemetry, {
-          config: WorkflowRuntimeTelemetry.fromEnv({}),
-          postCommitDeliveryAttemptFailed: (details) =>
-            Effect.sync(() => {
-              attempts.push(details);
-            }),
-          postCommitDeliveryExhausted: (details) =>
-            Effect.sync(() => {
-              exhausted.push(details);
-            }),
-        }),
+        telemetryLayer ??
+          Layer.succeed(WorkflowRuntimeTelemetry, {
+            config: WorkflowRuntimeTelemetry.fromEnv({}),
+            postCommitDeliveryAttemptFailed: (details) =>
+              Effect.sync(() => {
+                attempts.push(details);
+              }),
+            postCommitDeliveryExhausted: (details) =>
+              Effect.sync(() => {
+                exhausted.push(details);
+              }),
+          }),
       ),
     ),
   );
+}
+
+function tagPostCommitMetric(
+  metric: (typeof workflowRuntimeTelemetryMetrics)[keyof typeof workflowRuntimeTelemetryMetrics],
+  tags: {
+    readonly kind: WorkflowRuntimePostCommitDeliveryTelemetry["kind"];
+    readonly source: string;
+    readonly status?: string;
+    readonly taskRunId?: string;
+    readonly workflowId: string;
+  },
+) {
+  return metric.pipe(
+    Metric.tagged("work_kind", tags.kind),
+    Metric.tagged("source", tags.source),
+    Metric.tagged("workflow_id", tags.workflowId),
+    Metric.tagged("task_run_id", tags.taskRunId ?? "none"),
+    Metric.tagged("status", tags.status ?? "none"),
+  );
+}
+
+async function metricCount(
+  metric: (typeof workflowRuntimeTelemetryMetrics)[keyof typeof workflowRuntimeTelemetryMetrics],
+) {
+  const state = await Effect.runPromise(Metric.value(metric));
+
+  return state.count;
 }
 
 function record(key: string, calls: string[], failures: Map<string, number>) {

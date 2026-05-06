@@ -22,23 +22,27 @@ export type WorkflowRuntimePostCommitDeliveryTelemetry = {
   readonly workflowId: string;
 };
 
-const postCommitAttemptFailures = Metric.counter(
-  "workflow_runtime_post_commit_delivery_attempt_failures_total",
-  {
-    description: "Failed Workflow Runtime Post-Commit Work delivery attempts.",
-    incremental: true,
-  },
-);
+export const workflowRuntimeTelemetryMetrics = {
+  postCommitAttemptFailures: Metric.counter(
+    "workflow_runtime_post_commit_delivery_attempt_failures_total",
+    {
+      description:
+        "Failed Workflow Runtime Post-Commit Work delivery attempts.",
+      incremental: true,
+    },
+  ),
+  postCommitExhaustedFailures: Metric.counter(
+    "workflow_runtime_post_commit_delivery_exhausted_failures_total",
+    {
+      description:
+        "Workflow Runtime Post-Commit Work items exhausted by retry.",
+      incremental: true,
+    },
+  ),
+} as const;
 
-const postCommitExhaustedFailures = Metric.counter(
-  "workflow_runtime_post_commit_delivery_exhausted_failures_total",
-  {
-    description: "Workflow Runtime Post-Commit Work items exhausted by retry.",
-    incremental: true,
-  },
-);
-
-type PostCommitCounter = typeof postCommitAttemptFailures;
+type PostCommitCounter =
+  (typeof workflowRuntimeTelemetryMetrics)[keyof typeof workflowRuntimeTelemetryMetrics];
 
 export class WorkflowRuntimeTelemetry extends Context.Tag(
   "WorkflowRuntimeTelemetry",
@@ -95,7 +99,10 @@ export class WorkflowRuntimeTelemetry extends Context.Tag(
         config,
         postCommitDeliveryAttemptFailed: (details) =>
           Metric.increment(
-            tagPostCommitMetric(postCommitAttemptFailures, details),
+            tagPostCommitMetric(
+              workflowRuntimeTelemetryMetrics.postCommitAttemptFailures,
+              details,
+            ),
           ).pipe(
             Effect.zipRight(
               Effect.logDebug(
@@ -106,7 +113,10 @@ export class WorkflowRuntimeTelemetry extends Context.Tag(
           ),
         postCommitDeliveryExhausted: (details) =>
           Metric.increment(
-            tagPostCommitMetric(postCommitExhaustedFailures, details),
+            tagPostCommitMetric(
+              workflowRuntimeTelemetryMetrics.postCommitExhaustedFailures,
+              details,
+            ),
           ).pipe(
             Effect.zipRight(
               Effect.logWarning(
