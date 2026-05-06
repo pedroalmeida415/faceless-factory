@@ -210,6 +210,8 @@ _Avoid_: Node cost, aggregate node badge
 - **Post-Commit Work** is delivered after commit on a best-effort basis during the MVP.
 - User commands remain successful once the runtime transaction commits, even if **Post-Commit Work** delivery fails.
 - If best-effort **Post-Commit Work** delivery is missed, the user can cancel affected active attempts and run the leaf node again to re-plan the upstream cascade from durable state.
+- **Post-Commit Work** enqueues Wake-Up Call jobs; it does not process Wake-Up Call domain logic inline.
+- Wake-Up Call workers run the gatekeeper transaction and may produce their own **Post-Commit Work**.
 - Orchestrator queue events use deterministic job ids and idempotent handlers; queue deduplication is a safety net, not the source of truth.
 - BullMQ custom `jobId` values must not contain `:` because BullMQ reserves colon-delimited ids for repeatable-job internals. Workflow runtime queue job ids use `~` as the structural delimiter.
 - The orchestrator owns durable task-run state transitions and downstream wake-up decisions.
