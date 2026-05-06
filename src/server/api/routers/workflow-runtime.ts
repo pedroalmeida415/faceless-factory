@@ -12,7 +12,7 @@ import {
   getWorkflowProject,
 } from "~/server/workflow/projects";
 import {
-  parseTaskStatusEventPayload,
+  parseTaskStatusEventPayloadEffect,
   workflowEventChannel,
 } from "~/server/workflow-runtime/task-status-event-stream";
 import {
@@ -186,7 +186,9 @@ export const workflowRuntimeRouter = createTRPCRouter({
         while (!signal?.aborted) {
           const payload = events.shift();
           if (payload) {
-            yield parseTaskStatusEventPayload(payload);
+            yield await Effect.runPromise(
+              parseTaskStatusEventPayloadEffect(payload),
+            ).catch(throwTRPCError);
             continue;
           }
 

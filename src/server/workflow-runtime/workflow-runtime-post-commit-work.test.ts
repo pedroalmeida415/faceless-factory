@@ -54,6 +54,25 @@ describe("WorkflowRuntimePostCommitWork", () => {
     ]);
   });
 
+  test("uses item-level queue and event methods for retry targets", async () => {
+    const calls: string[] = [];
+
+    await runDeliver(
+      work({
+        executionJobs: [executionJob("exec-1")],
+        taskStatusEvents: [taskStatusEvent("event-1")],
+        wakeUpJobs: [wakeUpJob("wake-1")],
+      }),
+      { batchMethodsFail: true, calls },
+    );
+
+    assert.deepEqual(calls, [
+      "execution:exec-1",
+      "wake-up:wake-1",
+      "event:event-1:APPROVED",
+    ]);
+  });
+
   test("retries an individual item without redelivering prior successes", async () => {
     const calls: string[] = [];
     const failures = new Map([["execution:exec-2", 1]]);
@@ -168,6 +187,7 @@ function runDeliver(work: PostCommitWork, options: LayerOptions) {
 
 type LayerOptions = {
   readonly attempts?: WorkflowRuntimePostCommitDeliveryTelemetry[];
+  readonly batchMethodsFail?: boolean;
   readonly calls?: string[];
   readonly exhausted?: WorkflowRuntimePostCommitDeliveryTelemetry[];
   readonly failures?: Map<string, number>;
@@ -178,6 +198,7 @@ type LayerOptions = {
 
 function makeLayer({
   attempts = [],
+  batchMethodsFail = false,
   calls = [],
   exhausted = [],
   failures = new Map(),
@@ -187,28 +208,54 @@ function makeLayer({
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(WorkflowRuntimeQueue, {
+          enqueueExecutionJob: (job) =>
+            Effect.tryPromise({
+              try: () => record(`execution:${job.jobId}`, calls, failures),
+              catch: (cause) => cause,
+            }),
           enqueueExecutionJobs: ([job]) =>
-            record(
-              `${job ? `execution:${job.jobId}` : "execution:missing"}`,
-              calls,
-              failures,
-            ),
+            batchMethodsFail
+              ? Promise.reject(new Error("batch execution enqueue called"))
+              : record(
+                  `${job ? `execution:${job.jobId}` : "execution:missing"}`,
+                  calls,
+                  failures,
+                ),
+          enqueueWakeUpJob: (job) =>
+            Effect.tryPromise({
+              try: () => record(`wake-up:${job.jobId}`, calls, failures),
+              catch: (cause) => cause,
+            }),
           enqueueWakeUpJobs: ([job]) =>
-            record(
-              `${job ? `wake-up:${job.jobId}` : "wake-up:missing"}`,
-              calls,
-              failures,
-            ),
+            batchMethodsFail
+              ? Promise.reject(new Error("batch wake-up enqueue called"))
+              : record(
+                  `${job ? `wake-up:${job.jobId}` : "wake-up:missing"}`,
+                  calls,
+                  failures,
+                ),
         }),
         Layer.succeed(WorkflowRuntimeEventPublisher, {
+          publishTaskStatusEvent: (_workflowId, event) =>
+            Effect.tryPromise({
+              try: () =>
+                record(
+                  `event:${event.taskRunId}:${event.status}`,
+                  calls,
+                  failures,
+                ),
+              catch: (cause) => cause,
+            }),
           publishTaskStatusEvents: (_workflowId, [event]) =>
-            record(
-              event
-                ? `event:${event.taskRunId}:${event.status}`
-                : "event:missing",
-              calls,
-              failures,
-            ),
+            batchMethodsFail
+              ? Promise.reject(new Error("batch event publish called"))
+              : record(
+                  event
+                    ? `event:${event.taskRunId}:${event.status}`
+                    : "event:missing",
+                  calls,
+                  failures,
+                ),
         }),
         Layer.succeed(WorkflowRuntimeTelemetry, {
           config: WorkflowRuntimeTelemetry.fromEnv({}),

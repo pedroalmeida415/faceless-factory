@@ -15,6 +15,7 @@ import type {
   WorkflowRuntimeRepositoryForOrchestrator,
 } from "~/server/workflow-runtime/workflow-runtime-orchestrator";
 import {
+  parseWorkflowRuntimeJob,
   WORKFLOW_RUNTIME_COMPLETION_SETTLEMENT_JOB_NAME,
   WORKFLOW_RUNTIME_EXECUTION_JOB_NAME,
   WORKFLOW_RUNTIME_FAILURE_SETTLEMENT_JOB_NAME,
@@ -53,7 +54,7 @@ export type WorkflowRuntimeJobPayload =
   | WorkflowRuntimeWakeUpJobPayload;
 
 export type WorkflowRuntimeJobLike = {
-  readonly data: WorkflowRuntimeJobPayload;
+  readonly data: unknown;
   readonly name: string;
 };
 
@@ -92,32 +93,28 @@ export function createWorkflowRuntimeProcessor(input: {
   readonly orchestrator: WorkflowRuntimeOrchestratorForProcessor;
 }) {
   return async (job: WorkflowRuntimeJobLike) => {
-    switch (job.name) {
+    const parsed = parseWorkflowRuntimeJob(job);
+    if (!parsed.success) {
+      throw new Error(parsed.error.message, { cause: parsed.error });
+    }
+
+    switch (parsed.job.name) {
       case WORKFLOW_RUNTIME_EXECUTION_JOB_NAME:
-        return input.executionWorker.execute(
-          job.data as WorkflowRuntimeExecutionJobPayload,
-        );
+        return input.executionWorker.execute(parsed.job.data);
       case WORKFLOW_RUNTIME_COMPLETION_SETTLEMENT_JOB_NAME:
         return sanitizeWorkflowRuntimeProcessorOutcome(
-          await input.orchestrator.settleWorkerCompletion(
-            job.data as WorkflowRuntimeCompletionSettlementJobPayload,
-          ),
+          await input.orchestrator.settleWorkerCompletion(parsed.job.data),
         );
       case WORKFLOW_RUNTIME_FAILURE_SETTLEMENT_JOB_NAME:
         return sanitizeWorkflowRuntimeProcessorOutcome(
-          await input.orchestrator.settleWorkerFailure(
-            job.data as WorkflowRuntimeFailureSettlementJobPayload,
-          ),
+          await input.orchestrator.settleWorkerFailure(parsed.job.data),
         );
       case WORKFLOW_RUNTIME_WAKE_UP_JOB_NAME:
         return sanitizeWorkflowRuntimeProcessorOutcome(
           await input.orchestrator.handleWakeUpCall({
-            ownerUserId: job.data.ownerUserId,
-            settledParentTaskRunId: (
-              job.data as WorkflowRuntimeWakeUpJobPayload
-            ).parentTaskRunId,
-            workflowId: (job.data as WorkflowRuntimeWakeUpJobPayload)
-              .workflowId,
+            ownerUserId: parsed.job.data.ownerUserId,
+            settledParentTaskRunId: parsed.job.data.parentTaskRunId,
+            workflowId: parsed.job.data.workflowId,
           }),
         );
       default:

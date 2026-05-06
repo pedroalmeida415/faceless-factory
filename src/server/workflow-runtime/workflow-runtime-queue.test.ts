@@ -1,5 +1,6 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
+import { Effect } from "effect";
 
 import {
   buildWorkflowRuntimeCompletionSettlementJobPayload,
@@ -135,6 +136,74 @@ describe("WorkflowRuntimeQueueAdapter", () => {
     ]);
   });
 
+  test("enqueues one execution job as an Effect with one BullMQ add attempt", async () => {
+    const queue = new FakeQueueLike();
+    const adapter = createWorkflowRuntimeQueueAdapter(queue);
+    const job = buildWorkflowRuntimeExecutionJobPayload({
+      attempt: 1,
+      itemIndex: 0,
+      nodeExecutionId: "node-execution-1",
+      ownerUserId: "owner-user-1",
+      taskRunId: "task-run-1",
+      workflowId: "workflow-1",
+    });
+
+    await Effect.runPromise(adapter.enqueueExecutionJob(job));
+
+    assert.deepEqual(queue.added, [
+      {
+        name: "execute-task-run",
+        options: { jobId: "task-run~task-run-1~attempt~1~execute" },
+        payload: job,
+      },
+    ]);
+  });
+
+  test("rejects custom BullMQ job ids that contain colons before enqueue", async () => {
+    const queue = new FakeQueueLike();
+    const adapter = createWorkflowRuntimeQueueAdapter(queue);
+    const job = {
+      ...buildWorkflowRuntimeExecutionJobPayload({
+        attempt: 1,
+        itemIndex: 0,
+        nodeExecutionId: "node-execution-1",
+        ownerUserId: "owner-user-1",
+        taskRunId: "task-run-1",
+        workflowId: "workflow-1",
+      }),
+      jobId: "task-run:task-run-1:attempt:1:execute",
+    };
+
+    await Effect.runPromiseExit(adapter.enqueueExecutionJob(job)).then(
+      (exit) => {
+        assert.equal(exit._tag, "Failure");
+        assert.match(
+          String(exit.cause),
+          /WorkflowRuntimeQueueInvalidJobIdError/,
+        );
+      },
+    );
+    assert.deepEqual(queue.added, []);
+  });
+
+  test("returns typed Effect failures when BullMQ add rejects", async () => {
+    const queue = new FakeQueueLike({ failAdds: true });
+    const adapter = createWorkflowRuntimeQueueAdapter(queue);
+    const job = buildWorkflowRuntimeExecutionJobPayload({
+      attempt: 1,
+      itemIndex: 0,
+      nodeExecutionId: "node-execution-1",
+      ownerUserId: "owner-user-1",
+      taskRunId: "task-run-1",
+      workflowId: "workflow-1",
+    });
+
+    const exit = await Effect.runPromiseExit(adapter.enqueueExecutionJob(job));
+
+    assert.equal(exit._tag, "Failure");
+    assert.match(String(exit.cause), /WorkflowRuntimeQueuePublishError/);
+  });
+
   test("enqueues Wake-Up Call jobs through BullMQ add with deterministic job id options", async () => {
     const queue = new FakeQueueLike();
     const adapter = createWorkflowRuntimeQueueAdapter(queue);
@@ -145,6 +214,26 @@ describe("WorkflowRuntimeQueueAdapter", () => {
     });
 
     await adapter.enqueueWakeUpJobs([job]);
+
+    assert.deepEqual(queue.added, [
+      {
+        name: "wake-up-task-run-children",
+        options: { jobId: "wake-up~parent-task-run-1" },
+        payload: job,
+      },
+    ]);
+  });
+
+  test("enqueues one Wake-Up Call job as an Effect with one BullMQ add attempt", async () => {
+    const queue = new FakeQueueLike();
+    const adapter = createWorkflowRuntimeQueueAdapter(queue);
+    const job = buildWorkflowRuntimeWakeUpJobPayload({
+      ownerUserId: "owner-user-1",
+      parentTaskRunId: "parent-task-run-1",
+      workflowId: "workflow-1",
+    });
+
+    await Effect.runPromise(adapter.enqueueWakeUpJob(job));
 
     assert.deepEqual(queue.added, [
       {
@@ -224,7 +313,13 @@ type AddedJob = {
 class FakeQueueLike {
   readonly added: AddedJob[] = [];
 
+  constructor(private readonly options: { readonly failAdds?: boolean } = {}) {}
+
   add(name: string, payload: unknown, options: { readonly jobId: string }) {
+    if (this.options.failAdds) {
+      return Promise.reject(new Error("forced queue failure"));
+    }
+
     this.added.push({ name, options, payload });
 
     return Promise.resolve({ id: options.jobId });

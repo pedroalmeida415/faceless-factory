@@ -606,6 +606,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     const repository = new FakeRepository(sideEffects);
     repository.wakeUpResult = {
       executionJobs: [makeExecutionJob()],
+      parentFound: true,
       taskStatusEvents: [makeTaskStatusEvent("QUEUED")],
     };
     const orchestrator = createWorkflowRuntimeOrchestrator({
@@ -640,6 +641,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     assert.equal(result.ok, true);
     assert.deepEqual(result.value, {
       executionJobs: [],
+      parentFound: true,
       taskStatusEvents: [],
     });
     assert.deepEqual(sideEffects, ["wake-up~task-run-1"]);
@@ -671,6 +673,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     const repository = new FakeRepository(sideEffects);
     repository.wakeUpResult = {
       executionJobs: [makeExecutionJob()],
+      parentFound: true,
       taskStatusEvents: [makeTaskStatusEvent("QUEUED")],
     };
     const orchestrator = createWorkflowRuntimeOrchestrator({
@@ -696,6 +699,7 @@ describe("WorkflowRuntimeOrchestrator", () => {
     const repository = new FakeRepository(sideEffects);
     repository.wakeUpResult = {
       executionJobs: [makeExecutionJob()],
+      parentFound: true,
       taskStatusEvents: [makeTaskStatusEvent("QUEUED")],
     };
     const orchestrator = createWorkflowRuntimeOrchestrator({
@@ -942,6 +946,7 @@ class FakeRepository {
   })[] = [];
   wakeUpResult: WakeUpTaskRunChildrenRepositoryResult = {
     executionJobs: [],
+    parentFound: true,
     taskStatusEvents: [],
   };
   wakeUpError: Error | null = null;

@@ -157,6 +157,33 @@ function deliverItemOnce(
   item: PostCommitWorkItem,
   dependencies: DeliveryDependencies,
 ) {
+  const delivery = (() => {
+    switch (item.kind) {
+      case "execution-job":
+        return dependencies.queue.enqueueExecutionJob?.(item.value);
+      case "wake-up-call-job":
+        return dependencies.queue.enqueueWakeUpJob?.(item.value);
+      case "task-status-event":
+        return dependencies.eventPublisher.publishTaskStatusEvent?.(
+          work.workflowId,
+          item.value,
+        );
+    }
+  })();
+
+  if (delivery) {
+    return delivery.pipe(
+      Effect.mapError(
+        (cause): PostCommitWorkDeliveryError => ({
+          _tag: "PostCommitWorkDeliveryError",
+          cause,
+          item,
+          work,
+        }),
+      ),
+    );
+  }
+
   return Effect.tryPromise({
     try: () => {
       switch (item.kind) {

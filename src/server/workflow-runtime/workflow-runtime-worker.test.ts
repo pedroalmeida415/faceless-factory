@@ -45,6 +45,22 @@ describe("WorkflowRuntimeWorker", () => {
     );
   });
 
+  test("rejects mismatched job names and payloads before dispatch", async () => {
+    const executionWorker = new FakeExecutionWorker();
+    const orchestrator = new FakeOrchestrator();
+    const processor = createWorkflowRuntimeProcessor({
+      executionWorker,
+      orchestrator,
+    });
+
+    await assert.rejects(
+      processor(fakeJob("execute-task-run", wakeUpJob())),
+      /WorkflowRuntimeJobDispatchError/,
+    );
+    assert.deepEqual(executionWorker.executed, []);
+    assert.deepEqual(orchestrator.wakeUps, []);
+  });
+
   test("returns sanitized orchestrator committed command outcomes", async () => {
     const orchestrator = new FakeOrchestrator({
       completionOutcome: {

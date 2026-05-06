@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Effect } from "effect";
 import type {
   TaskRunFailureReason,
   TaskRunSettlementFailureSource,
@@ -141,15 +142,25 @@ export type WorkflowRuntimeRepositoryForOrchestrator = {
 };
 
 export type WorkflowRuntimeQueueForOrchestrator = {
+  readonly enqueueExecutionJob?: (
+    job: WorkflowRuntimeExecutionJobPayload,
+  ) => Effect.Effect<void, unknown>;
   readonly enqueueExecutionJobs: (
     jobs: readonly WorkflowRuntimeExecutionJobPayload[],
   ) => Promise<void>;
+  readonly enqueueWakeUpJob?: (
+    job: WorkflowRuntimeWakeUpJobPayload,
+  ) => Effect.Effect<void, unknown>;
   readonly enqueueWakeUpJobs: (
     jobs: readonly WorkflowRuntimeWakeUpJobPayload[],
   ) => Promise<void>;
 };
 
 export type WorkflowRuntimeEventPublisherForOrchestrator = {
+  readonly publishTaskStatusEvent?: (
+    workflowId: string,
+    event: TaskStatusEvent,
+  ) => Effect.Effect<void, unknown>;
   readonly publishTaskStatusEvents: (
     workflowId: string,
     events: readonly TaskStatusEvent[],
