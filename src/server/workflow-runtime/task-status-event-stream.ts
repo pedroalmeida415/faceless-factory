@@ -105,15 +105,6 @@ export function createWorkflowEventPublisher(pubSub: WorkflowEventPubSubLike) {
         }),
       );
     },
-
-    async publishTaskStatusEvents(
-      workflowId: string,
-      events: readonly TaskStatusEvent[],
-    ) {
-      for (const event of events) {
-        await Effect.runPromise(this.publishTaskStatusEvent(workflowId, event));
-      }
-    },
   };
 }
 

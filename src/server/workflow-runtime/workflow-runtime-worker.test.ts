@@ -1,10 +1,8 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { Effect } from "effect";
 
 import {
   createWorkflowRuntimeProcessor,
-  sweepQueuedTaskRunJobs,
   type WorkflowRuntimeJobPayload,
 } from "~/server/workflow-runtime/workflow-runtime-worker";
 
@@ -169,27 +167,6 @@ describe("WorkflowRuntimeWorker", () => {
       executionError,
     );
   });
-
-  test("re-enqueues durable queued Task Runs idempotently", async () => {
-    const repository = new FakeQueuedTaskRunRepository([
-      executionJob("task-run-1", 0),
-      executionJob("task-run-2", 1),
-    ]);
-    const queue = new FakeExecutionQueue();
-
-    const result = await sweepQueuedTaskRunJobs({
-      limit: 50,
-      queue,
-      repository,
-    });
-
-    assert.deepEqual(result, { enqueued: 2 });
-    assert.deepEqual(repository.commands, [{ limit: 50 }]);
-    assert.deepEqual(queue.enqueued, [
-      executionJob("task-run-1", 0),
-      executionJob("task-run-2", 1),
-    ]);
-  });
 });
 
 function fakeJob(name: string, data: WorkflowRuntimeJobPayload) {
@@ -345,27 +322,5 @@ class FakeOrchestrator {
         value: { executionJobs: [], taskStatusEvents: [] },
       },
     );
-  }
-}
-
-class FakeQueuedTaskRunRepository {
-  readonly commands: { readonly limit: number }[] = [];
-
-  constructor(private readonly jobs: ReturnType<typeof executionJob>[]) {}
-
-  listQueuedTaskRunJobs(command: { readonly limit: number }) {
-    this.commands.push(command);
-
-    return Effect.succeed(this.jobs);
-  }
-}
-
-class FakeExecutionQueue {
-  readonly enqueued: ReturnType<typeof executionJob>[] = [];
-
-  enqueueExecutionJobs(jobs: readonly ReturnType<typeof executionJob>[]) {
-    this.enqueued.push(...jobs);
-
-    return Promise.resolve();
   }
 }

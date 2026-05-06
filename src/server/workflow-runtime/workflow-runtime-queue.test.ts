@@ -125,7 +125,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
 
     assert.deepEqual(queue.added, []);
 
-    await adapter.enqueueExecutionJobs([job]);
+    await Effect.runPromise(adapter.enqueueExecutionJob(job));
 
     assert.deepEqual(queue.added, [
       {
@@ -213,7 +213,7 @@ describe("WorkflowRuntimeQueueAdapter", () => {
       workflowId: "workflow-1",
     });
 
-    await adapter.enqueueWakeUpJobs([job]);
+    await Effect.runPromise(adapter.enqueueWakeUpJob(job));
 
     assert.deepEqual(queue.added, [
       {

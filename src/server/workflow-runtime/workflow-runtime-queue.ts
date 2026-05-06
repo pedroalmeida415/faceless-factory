@@ -437,16 +437,6 @@ export function createWorkflowRuntimeQueueAdapter(
       return enqueueOne(WORKFLOW_RUNTIME_WAKE_UP_JOB_NAME, job);
     },
 
-    async enqueueExecutionJobs(
-      jobs: readonly WorkflowRuntimeExecutionJobPayload[],
-    ): Promise<void> {
-      for (const job of jobs) {
-        await Effect.runPromise(
-          enqueueOne(WORKFLOW_RUNTIME_EXECUTION_JOB_NAME, job),
-        );
-      }
-    },
-
     async enqueueCompletionSettlement(
       job: WorkflowRuntimeCompletionSettlementJobPayload,
     ): Promise<void> {
@@ -461,16 +451,6 @@ export function createWorkflowRuntimeQueueAdapter(
       await queue.add(WORKFLOW_RUNTIME_FAILURE_SETTLEMENT_JOB_NAME, job, {
         jobId: job.jobId,
       });
-    },
-
-    async enqueueWakeUpJobs(
-      jobs: readonly WorkflowRuntimeWakeUpJobPayload[],
-    ): Promise<void> {
-      for (const job of jobs) {
-        await Effect.runPromise(
-          enqueueOne(WORKFLOW_RUNTIME_WAKE_UP_JOB_NAME, job),
-        );
-      }
     },
   };
 }

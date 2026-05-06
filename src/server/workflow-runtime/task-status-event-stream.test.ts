@@ -37,7 +37,11 @@ describe("workflow runtime Task Status Event Pub/Sub seam", () => {
       }),
     ] satisfies TaskStatusEvent[];
 
-    await publisher.publishTaskStatusEvents("workflow-123", events);
+    for (const event of events) {
+      await Effect.runPromise(
+        publisher.publishTaskStatusEvent("workflow-123", event),
+      );
+    }
 
     assert.deepEqual(
       pubSub.published.map((message) => message.channel),
@@ -189,15 +193,6 @@ describe("workflow runtime Task Status Event Pub/Sub seam", () => {
 
     assert.deepEqual(redis.subscriptions, ["workflow-events:workflow-123"]);
     assert.deepEqual(Array.from(await eventsPromise), [event]);
-  });
-
-  test("publishes no messages for an empty event list", async () => {
-    const pubSub = createFakePubSub();
-    const publisher = createWorkflowEventPublisher(pubSub);
-
-    await publisher.publishTaskStatusEvents("workflow-123", []);
-
-    assert.deepEqual(pubSub.published, []);
   });
 
   test("parses incoming Task Status Event payloads through the runtime schema", () => {

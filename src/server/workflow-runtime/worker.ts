@@ -7,12 +7,7 @@ import {
   getWorkflowRuntimeManagedRuntime,
 } from "~/server/workflow-runtime/workflow-runtime-composition";
 import { createWorkflowRuntimeProviderExecutor } from "~/server/workflow-runtime/workflow-runtime-provider-executor";
-import {
-  createWorkflowRuntimeWorker,
-  sweepQueuedTaskRunJobs,
-} from "~/server/workflow-runtime/workflow-runtime-worker";
-
-const QUEUED_TASK_SWEEP_LIMIT = 500;
+import { createWorkflowRuntimeWorker } from "~/server/workflow-runtime/workflow-runtime-worker";
 
 async function createProviderExecutor() {
   const vertexAi = await ServerRuntime.runPromise(VertexAi);
@@ -65,14 +60,7 @@ async function main() {
   });
 
   await worker.waitUntilReady();
-  const sweep = await sweepQueuedTaskRunJobs({
-    limit: QUEUED_TASK_SWEEP_LIMIT,
-    queue: composition.queue,
-    repository: composition.repository,
-  });
-  console.info(
-    `Workflow runtime worker ready. Re-enqueued ${sweep.enqueued} queued Task Runs.`,
-  );
+  console.info("Workflow runtime worker ready.");
 
   let shuttingDown = false;
 

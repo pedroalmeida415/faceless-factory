@@ -19,14 +19,14 @@ import type {
   StartWorkflowRunInput,
   TaskRunCancellationBlockedReason,
   WorkflowRuntimeCommitPlanResult,
-  WorkflowRuntimeEventPublisherForOrchestrator,
-  WorkflowRuntimeQueueForOrchestrator,
+  WorkflowRuntimeEventPublisherForCommands,
+  WorkflowRuntimeQueueForCommands,
   WorkflowRuntimeRejectTaskRunResult,
-  WorkflowRuntimeRepositoryForOrchestrator,
+  WorkflowRuntimeRepositoryForCommands,
   WorkflowRuntimeReviewDecisionResult,
   WorkflowRuntimeSettleCompletionResult,
   WorkflowRuntimeSettleFailureResult,
-} from "~/server/workflow-runtime/workflow-runtime-orchestrator";
+} from "~/server/workflow-runtime/workflow-runtime-command-types";
 import { WorkflowRuntimePostCommitWork } from "~/server/workflow-runtime/workflow-runtime-post-commit-work";
 import type {
   RepositoryCommittedOutcome,
@@ -36,7 +36,7 @@ import type {
   WorkflowRuntimeRepositoryFailure,
 } from "~/server/workflow-runtime/workflow-runtime-repository";
 
-export type WorkflowRuntimeOrchestratorError =
+export type WorkflowRuntimeCommandError =
   | (WorkflowRunPlannerError & { readonly committed: false })
   | StaleTaskRunTransition
   | WakeUpParentNotFound
@@ -55,19 +55,16 @@ export type WorkflowRuntimeOrchestratorError =
 
 export class WorkflowRuntimeRepository extends Context.Tag(
   "WorkflowRuntimeRepository",
-)<WorkflowRuntimeRepository, WorkflowRuntimeRepositoryForOrchestrator>() {}
+)<WorkflowRuntimeRepository, WorkflowRuntimeRepositoryForCommands>() {}
 
 export class WorkflowRuntimeQueue extends Context.Tag("WorkflowRuntimeQueue")<
   WorkflowRuntimeQueue,
-  WorkflowRuntimeQueueForOrchestrator
+  WorkflowRuntimeQueueForCommands
 >() {}
 
 export class WorkflowRuntimeEventPublisher extends Context.Tag(
   "WorkflowRuntimeEventPublisher",
-)<
-  WorkflowRuntimeEventPublisher,
-  WorkflowRuntimeEventPublisherForOrchestrator
->() {}
+)<WorkflowRuntimeEventPublisher, WorkflowRuntimeEventPublisherForCommands>() {}
 
 export class WorkflowRuntimeIdGenerator extends Context.Tag(
   "WorkflowRuntimeIdGenerator",
@@ -93,43 +90,43 @@ export class WorkflowRuntimeCommands extends Context.Tag(
       command: ReviewTaskRunDecisionCommand,
     ) => Effect.Effect<
       WorkflowRuntimeCommandOutcome<WorkflowRuntimeReviewDecisionResult>,
-      WorkflowRuntimeOrchestratorError
+      WorkflowRuntimeCommandError
     >;
     readonly cancelTaskRun: (
       command: ReviewTaskRunDecisionCommand,
     ) => Effect.Effect<
       WorkflowRuntimeCommandOutcome<WorkflowRuntimeReviewDecisionResult>,
-      WorkflowRuntimeOrchestratorError
+      WorkflowRuntimeCommandError
     >;
     readonly handleWakeUpCall: (
       command: HandleWakeUpCallCommand,
     ) => Effect.Effect<
       WorkflowRuntimeCommandOutcome<WakeUpTaskRunChildrenRepositoryResult>,
-      WorkflowRuntimeOrchestratorError
+      WorkflowRuntimeCommandError
     >;
     readonly rejectTaskRun: (
       command: RejectTaskRunCommand,
     ) => Effect.Effect<
       WorkflowRuntimeCommandOutcome<WorkflowRuntimeRejectTaskRunResult>,
-      WorkflowRuntimeOrchestratorError
+      WorkflowRuntimeCommandError
     >;
     readonly settleWorkerCompletion: (
       command: SettleWorkerCompletionCommand,
     ) => Effect.Effect<
       WorkflowRuntimeCommandOutcome<WorkflowRuntimeSettleCompletionResult>,
-      WorkflowRuntimeOrchestratorError
+      WorkflowRuntimeCommandError
     >;
     readonly settleWorkerFailure: (
       command: SettleWorkerFailureCommand,
     ) => Effect.Effect<
       WorkflowRuntimeCommandOutcome<WorkflowRuntimeSettleFailureResult>,
-      WorkflowRuntimeOrchestratorError
+      WorkflowRuntimeCommandError
     >;
     readonly startWorkflowRun: (
       input: StartWorkflowRunInput,
     ) => Effect.Effect<
       WorkflowRuntimeCommandOutcome<WorkflowRuntimeCommitPlanResult>,
-      WorkflowRuntimeOrchestratorError
+      WorkflowRuntimeCommandError
     >;
   }
 >() {
@@ -148,16 +145,22 @@ export class WorkflowRuntimeCommands extends Context.Tag(
             mapRepositoryErrors(
               repository.cancelTaskRun(command),
               "Failed to cancel Task Run.",
+            ).pipe(
+              Effect.catchTag("StaleTaskRunTransition", () =>
+                Effect.succeed(null),
+              ),
             ),
             (outcome) =>
-              "blocked" in outcome.value
-                ? Effect.fail({
-                    _tag: "TaskRunCancellationBlockedError",
-                    committed: false,
-                    message: outcome.value.message,
-                    reason: outcome.value.reason,
-                  } as const)
-                : handleCommittedReviewDecision(outcome, postCommit),
+              !outcome
+                ? Effect.succeed(ignored("STALE_TASK_RUN"))
+                : "blocked" in outcome.value
+                  ? Effect.fail({
+                      _tag: "TaskRunCancellationBlockedError",
+                      committed: false,
+                      message: outcome.value.message,
+                      reason: outcome.value.reason,
+                    } as const)
+                  : handleCommittedReviewDecision(outcome, postCommit),
           ),
         handleWakeUpCall: (command) =>
           Effect.gen(function* () {
@@ -260,9 +263,7 @@ export type WorkflowRuntimeCommandsService = Context.Tag.Service<
 >;
 
 function handleReviewDecision(
-  decide: ReturnType<
-    WorkflowRuntimeRepositoryForOrchestrator["approveTaskRun"]
-  >,
+  decide: ReturnType<WorkflowRuntimeRepositoryForCommands["approveTaskRun"]>,
   postCommit: Context.Tag.Service<typeof WorkflowRuntimePostCommitWork>,
 ) {
   return Effect.gen(function* () {

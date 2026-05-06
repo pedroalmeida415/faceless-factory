@@ -138,10 +138,6 @@ type CancelTaskRunResult =
       readonly reason: CancelTaskRunBlockedReason;
     };
 
-type ListQueuedTaskRunJobsCommand = {
-  readonly limit: number;
-};
-
 type CreditLedgerForUser = {
   readonly creditBalance: number;
   readonly ledgerEntries: readonly {
@@ -298,13 +294,6 @@ type WorkflowRuntimeRepository<R> = {
     WorkflowRuntimeRepositoryFailure,
     R
   >;
-  readonly listQueuedTaskRunJobs: (
-    command: ListQueuedTaskRunJobsCommand,
-  ) => Effect.Effect<
-    readonly WorkflowRuntimeExecutionJobPayload[],
-    WorkflowRuntimeRepositoryFailure,
-    R
-  >;
   readonly rejectTaskRunAndCreateRegeneration: (
     command: RejectTaskRunAndCreateRegenerationCommand & { workflowId: string },
   ) => Effect.Effect<
@@ -455,8 +444,6 @@ function buildWorkflowRuntimeRepository<R>(
     }) => provideSql(getTaskDependenciesForChildEffect(command)),
     getCreditLedgerForUser: (command: { readonly ownerUserId: string }) =>
       provideSql(getCreditLedgerForUserEffect(command)),
-    listQueuedTaskRunJobs: (command: ListQueuedTaskRunJobsCommand) =>
-      provideSql(listQueuedTaskRunJobsEffect(command)),
   };
 }
 
@@ -2108,38 +2095,6 @@ function getCreditLedgerForUserEffect(command: {
           sourceKey: requireString(row.sourceKey),
         })),
       };
-    }),
-  );
-}
-
-function listQueuedTaskRunJobsEffect(command: ListQueuedTaskRunJobsCommand) {
-  return repositoryTransaction(
-    "listQueuedTaskRunJobs",
-    Effect.gen(function* () {
-      const db = yield* PgDrizzle.PgDrizzle;
-      const rows = yield* db
-        .select({
-          attempt: schema.taskRuns.attempt,
-          itemIndex: schema.taskRuns.itemIndex,
-          nodeExecutionId: schema.taskRuns.nodeExecutionId,
-          ownerUserId: schema.taskRuns.ownerUserId,
-          taskRunId: schema.taskRuns.id,
-          workflowId: schema.taskRuns.workflowId,
-        })
-        .from(schema.taskRuns)
-        .where(sql`${schema.taskRuns.runtimeStatus} = 'QUEUED'`)
-        .orderBy(schema.taskRuns.updatedAt, schema.taskRuns.id)
-        .limit(command.limit);
-      return rows.map((row) =>
-        buildWorkflowRuntimeExecutionJobPayload({
-          attempt: requireNumber(row.attempt),
-          itemIndex: requireNumber(row.itemIndex),
-          nodeExecutionId: row.nodeExecutionId,
-          ownerUserId: row.ownerUserId,
-          taskRunId: row.taskRunId,
-          workflowId: row.workflowId,
-        }),
-      );
     }),
   );
 }

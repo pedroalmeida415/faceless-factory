@@ -5,6 +5,7 @@ import {
   createWorkflowNode,
   WORKFLOW_DOCUMENT_VERSION,
 } from "~/lib/workflow/document";
+import type { WorkflowRuntimeRepositoryForCommands } from "~/server/workflow-runtime/workflow-runtime-command-types";
 import {
   WorkflowRuntimeCommands,
   WorkflowRuntimeEventPublisher,
@@ -12,7 +13,6 @@ import {
   WorkflowRuntimeQueue,
   WorkflowRuntimeRepository,
 } from "~/server/workflow-runtime/workflow-runtime-commands";
-import type { WorkflowRuntimeRepositoryForOrchestrator } from "~/server/workflow-runtime/workflow-runtime-orchestrator";
 import {
   type PostCommitWork,
   WorkflowRuntimePostCommitWork,
@@ -85,6 +85,28 @@ describe("WorkflowRuntimeCommands", () => {
     });
   });
 
+  test("maps stale Task Run cancellation attempts to ignored outcomes", async () => {
+    const runtime = makeRuntime({
+      cancelTaskRun: () => staleTaskRunTransition(),
+    });
+
+    const outcome = await runtime.runPromise(
+      Effect.flatMap(WorkflowRuntimeCommands, (commands) =>
+        commands.cancelTaskRun({
+          attempt: 0,
+          ownerUserId: "owner-1",
+          taskRunId: "task-run-1",
+          workflowId: "workflow-1",
+        }),
+      ),
+    );
+
+    assert.deepEqual(outcome, {
+      reason: "STALE_TASK_RUN",
+      status: "ignored",
+    });
+  });
+
   test("maps duplicate Wake-Up Calls with no durable child changes to ignored outcomes", async () => {
     const runtime = makeRuntime({
       wakeUpTaskRunChildren: () => Effect.succeed(emptyWakeUpOutcome()),
@@ -140,8 +162,8 @@ describe("WorkflowRuntimeCommands", () => {
           }),
       },
       {
-        publishTaskStatusEvents: () =>
-          Promise.reject(new Error("redis unavailable")),
+        publishTaskStatusEvent: () =>
+          Effect.fail(new Error("redis unavailable")),
       },
     );
 
@@ -338,10 +360,10 @@ describe("WorkflowRuntimeCommands", () => {
 function makeRuntime(
   repositoryOverrides: Partial<Repository>,
   eventPublisherOverrides: Partial<{
-    readonly publishTaskStatusEvents: (
+    readonly publishTaskStatusEvent: (
       workflowId: string,
-      events: readonly unknown[],
-    ) => Promise<void>;
+      event: unknown,
+    ) => Effect.Effect<void, unknown>;
   }> = {},
 ) {
   const repository: Repository = {
@@ -371,11 +393,11 @@ function makeRuntime(
             Layer.provide(
               Layer.mergeAll(
                 Layer.succeed(WorkflowRuntimeQueue, {
-                  enqueueExecutionJobs: () => Promise.resolve(),
-                  enqueueWakeUpJobs: () => Promise.resolve(),
+                  enqueueExecutionJob: () => Effect.void,
+                  enqueueWakeUpJob: () => Effect.void,
                 }),
                 Layer.succeed(WorkflowRuntimeEventPublisher, {
-                  publishTaskStatusEvents: () => Promise.resolve(),
+                  publishTaskStatusEvent: () => Effect.void,
                   ...eventPublisherOverrides,
                 }),
                 WorkflowRuntimeTelemetry.Local,
@@ -483,4 +505,4 @@ function emptyWakeUpOutcome() {
   };
 }
 
-type Repository = WorkflowRuntimeRepositoryForOrchestrator;
+type Repository = WorkflowRuntimeRepositoryForCommands;

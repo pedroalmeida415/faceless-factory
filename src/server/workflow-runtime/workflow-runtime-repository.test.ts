@@ -557,48 +557,6 @@ describe("WorkflowRuntimeRepository", () => {
     });
   });
 
-  test("lists queued Task Run jobs through the Effect SQL transaction layer", async () => {
-    const repository = createWorkflowRuntimeRepository();
-    await insertEffectTaskRun({
-      id: "task-run-effect-queued-a",
-      runtimeStatus: "QUEUED",
-    });
-    await insertEffectTaskRun({
-      attempt: 2,
-      id: "task-run-effect-queued-b",
-      runtimeStatus: "QUEUED",
-    });
-    await insertEffectTaskRun({
-      id: "task-run-effect-running",
-      runtimeStatus: "RUNNING",
-    });
-
-    const result = await runRepositoryEffect(
-      repository.listQueuedTaskRunJobs({ limit: 10 }),
-    );
-
-    assert.deepEqual(result, [
-      {
-        attempt: 0,
-        itemIndex: 0,
-        jobId: "task-run~task-run-effect-queued-a~attempt~0~execute",
-        nodeExecutionId: "node-execution-task-run-effect-queued-a",
-        ownerUserId: "owner-user",
-        taskRunId: "task-run-effect-queued-a",
-        workflowId: "workflow-id",
-      },
-      {
-        attempt: 2,
-        itemIndex: 0,
-        jobId: "task-run~task-run-effect-queued-b~attempt~2~execute",
-        nodeExecutionId: "node-execution-task-run-effect-queued-b",
-        ownerUserId: "owner-user",
-        taskRunId: "task-run-effect-queued-b",
-        workflowId: "workflow-id",
-      },
-    ]);
-  });
-
   test("approves Pending Review Task Runs with post-commit wake-up work", async () => {
     const repository = createWorkflowRuntimeRepository();
     await insertEffectTaskRun({

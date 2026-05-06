@@ -63,7 +63,7 @@ describe("WorkflowRuntimePostCommitWork", () => {
         taskStatusEvents: [taskStatusEvent("event-1")],
         wakeUpJobs: [wakeUpJob("wake-1")],
       }),
-      { batchMethodsFail: true, calls },
+      { calls },
     );
 
     assert.deepEqual(calls, [
@@ -187,7 +187,6 @@ function runDeliver(work: PostCommitWork, options: LayerOptions) {
 
 type LayerOptions = {
   readonly attempts?: WorkflowRuntimePostCommitDeliveryTelemetry[];
-  readonly batchMethodsFail?: boolean;
   readonly calls?: string[];
   readonly exhausted?: WorkflowRuntimePostCommitDeliveryTelemetry[];
   readonly failures?: Map<string, number>;
@@ -198,7 +197,6 @@ type LayerOptions = {
 
 function makeLayer({
   attempts = [],
-  batchMethodsFail = false,
   calls = [],
   exhausted = [],
   failures = new Map(),
@@ -213,27 +211,11 @@ function makeLayer({
               try: () => record(`execution:${job.jobId}`, calls, failures),
               catch: (cause) => cause,
             }),
-          enqueueExecutionJobs: ([job]) =>
-            batchMethodsFail
-              ? Promise.reject(new Error("batch execution enqueue called"))
-              : record(
-                  `${job ? `execution:${job.jobId}` : "execution:missing"}`,
-                  calls,
-                  failures,
-                ),
           enqueueWakeUpJob: (job) =>
             Effect.tryPromise({
               try: () => record(`wake-up:${job.jobId}`, calls, failures),
               catch: (cause) => cause,
             }),
-          enqueueWakeUpJobs: ([job]) =>
-            batchMethodsFail
-              ? Promise.reject(new Error("batch wake-up enqueue called"))
-              : record(
-                  `${job ? `wake-up:${job.jobId}` : "wake-up:missing"}`,
-                  calls,
-                  failures,
-                ),
         }),
         Layer.succeed(WorkflowRuntimeEventPublisher, {
           publishTaskStatusEvent: (_workflowId, event) =>
@@ -246,16 +228,6 @@ function makeLayer({
                 ),
               catch: (cause) => cause,
             }),
-          publishTaskStatusEvents: (_workflowId, [event]) =>
-            batchMethodsFail
-              ? Promise.reject(new Error("batch event publish called"))
-              : record(
-                  event
-                    ? `event:${event.taskRunId}:${event.status}`
-                    : "event:missing",
-                  calls,
-                  failures,
-                ),
         }),
         Layer.succeed(WorkflowRuntimeTelemetry, {
           config: WorkflowRuntimeTelemetry.fromEnv({}),

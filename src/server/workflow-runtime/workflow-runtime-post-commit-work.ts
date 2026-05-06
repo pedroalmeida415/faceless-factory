@@ -190,54 +190,28 @@ function deliverItemOnce(
   item: PostCommitWorkItem,
   dependencies: DeliveryDependencies,
 ) {
-  const delivery = (() => {
+  return (() => {
     switch (item.kind) {
       case "execution-job":
-        return dependencies.queue.enqueueExecutionJob?.(item.value);
+        return dependencies.queue.enqueueExecutionJob(item.value);
       case "wake-up-call-job":
-        return dependencies.queue.enqueueWakeUpJob?.(item.value);
+        return dependencies.queue.enqueueWakeUpJob(item.value);
       case "task-status-event":
-        return dependencies.eventPublisher.publishTaskStatusEvent?.(
+        return dependencies.eventPublisher.publishTaskStatusEvent(
           work.workflowId,
           item.value,
         );
     }
-  })();
-
-  if (delivery) {
-    return delivery.pipe(
-      Effect.mapError(
-        (cause): PostCommitWorkDeliveryError => ({
-          _tag: "PostCommitWorkDeliveryError",
-          cause,
-          item,
-          work,
-        }),
-      ),
-    );
-  }
-
-  return Effect.tryPromise({
-    try: () => {
-      switch (item.kind) {
-        case "execution-job":
-          return dependencies.queue.enqueueExecutionJobs([item.value]);
-        case "wake-up-call-job":
-          return dependencies.queue.enqueueWakeUpJobs([item.value]);
-        case "task-status-event":
-          return dependencies.eventPublisher.publishTaskStatusEvents(
-            work.workflowId,
-            [item.value],
-          );
-      }
-    },
-    catch: (cause): PostCommitWorkDeliveryError => ({
-      _tag: "PostCommitWorkDeliveryError",
-      cause,
-      item,
-      work,
-    }),
-  });
+  })().pipe(
+    Effect.mapError(
+      (cause): PostCommitWorkDeliveryError => ({
+        _tag: "PostCommitWorkDeliveryError",
+        cause,
+        item,
+        work,
+      }),
+    ),
+  );
 }
 
 function telemetryDetails(error: PostCommitWorkDeliveryError, attempt: number) {

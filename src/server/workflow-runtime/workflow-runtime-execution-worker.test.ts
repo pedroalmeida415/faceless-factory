@@ -87,7 +87,7 @@ describe("WorkflowRuntimeExecutionWorker", () => {
 
     assert.deepEqual(sideEffects, ["publish:task-run-1:RUNNING", "provider"]);
     assert.deepEqual(eventPublisher.published, [
-      { events: [runningEvent], workflowId: "workflow-1" },
+      { event: runningEvent, workflowId: "workflow-1" },
     ]);
     assert.deepEqual(providerExecutor.commands, [
       {
@@ -317,24 +317,22 @@ class FakeProviderExecutor {
 
 class FakeEventPublisher implements WorkflowRuntimeEventPublisherForWorker {
   readonly published: {
-    readonly events: readonly TaskStatusEvent[];
+    readonly event: TaskStatusEvent;
     readonly workflowId: string;
   }[] = [];
 
   constructor(private readonly sideEffects?: string[]) {}
 
-  publishTaskStatusEvents(
+  publishTaskStatusEvent(
     workflowId: string,
-    events: Parameters<
-      WorkflowRuntimeEventPublisherForWorker["publishTaskStatusEvents"]
+    event: Parameters<
+      WorkflowRuntimeEventPublisherForWorker["publishTaskStatusEvent"]
     >[1],
   ) {
-    for (const event of events) {
-      this.sideEffects?.push(`publish:${event.taskRunId}:${event.status}`);
-    }
-    this.published.push({ events, workflowId });
+    this.sideEffects?.push(`publish:${event.taskRunId}:${event.status}`);
+    this.published.push({ event, workflowId });
 
-    return Promise.resolve();
+    return Effect.void;
   }
 }
 

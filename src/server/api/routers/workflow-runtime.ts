@@ -20,9 +20,9 @@ import {
   type WorkflowRuntimeCommandOutcome,
 } from "~/server/workflow-runtime/workflow-runtime-command-outcome";
 import {
+  type WorkflowRuntimeCommandError,
   WorkflowRuntimeCommands,
   type WorkflowRuntimeCommandsService,
-  type WorkflowRuntimeOrchestratorError,
 } from "~/server/workflow-runtime/workflow-runtime-commands";
 import {
   createWorkflowRuntimeSqlLayer,
@@ -98,7 +98,7 @@ export const workflowRuntimeRouter = createTRPCRouter({
         workflowId: project.id,
       });
       if (!planning.ok) {
-        throw orchestratorErrorToTRPCError({
+        throw commandErrorToTRPCError({
           ...planning.error,
           committed: false,
         });
@@ -319,13 +319,13 @@ async function runWorkflowRuntimeCommand<T>(
     commands: WorkflowRuntimeCommandsService,
   ) => Effect.Effect<
     WorkflowRuntimeCommandOutcome<T>,
-    WorkflowRuntimeOrchestratorError
+    WorkflowRuntimeCommandError
   >,
 ) {
   return getWorkflowRuntimeManagedRuntime()
     .runPromise(Effect.flatMap(WorkflowRuntimeCommands, build))
     .catch((error: unknown) => {
-      throw orchestratorErrorToTRPCError(toOrchestratorError(error));
+      throw commandErrorToTRPCError(toCommandError(error));
     });
 }
 
@@ -335,7 +335,7 @@ function unwrapWorkflowRuntimeOutcome<T>(
   return toWorkflowRuntimeTransportOutcome(outcome);
 }
 
-function orchestratorErrorToTRPCError(error: WorkflowRuntimeOrchestratorError) {
+function commandErrorToTRPCError(error: WorkflowRuntimeCommandError) {
   if (error._tag === "WorkflowRunPlannerError") {
     return new TRPCError({ code: "BAD_REQUEST", message: error.message });
   }
@@ -353,8 +353,8 @@ function orchestratorErrorToTRPCError(error: WorkflowRuntimeOrchestratorError) {
   });
 }
 
-function toOrchestratorError(error: unknown): WorkflowRuntimeOrchestratorError {
-  if (isOrchestratorError(error)) {
+function toCommandError(error: unknown): WorkflowRuntimeCommandError {
+  if (isCommandError(error)) {
     return error;
   }
 
@@ -366,9 +366,7 @@ function toOrchestratorError(error: unknown): WorkflowRuntimeOrchestratorError {
   };
 }
 
-function isOrchestratorError(
-  error: unknown,
-): error is WorkflowRuntimeOrchestratorError {
+function isCommandError(error: unknown): error is WorkflowRuntimeCommandError {
   return (
     typeof error === "object" &&
     error !== null &&

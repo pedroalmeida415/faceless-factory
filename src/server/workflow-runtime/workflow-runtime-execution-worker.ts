@@ -80,10 +80,10 @@ export type WorkflowRuntimeSettlementQueueForWorker = {
 };
 
 export type WorkflowRuntimeEventPublisherForWorker = {
-  readonly publishTaskStatusEvents: (
+  readonly publishTaskStatusEvent: (
     workflowId: string,
-    events: readonly TaskStatusEvent[],
-  ) => Promise<void>;
+    event: TaskStatusEvent,
+  ) => Effect.Effect<void, unknown>;
 };
 
 type WorkflowRuntimeExecutionWorkerValue = {
@@ -119,10 +119,9 @@ export function createWorkflowRuntimeExecutionWorker(input: {
         return ignored<WorkflowRuntimeExecutionWorkerValue>("STALE_TASK_RUN");
       }
 
-      yield* promiseInfrastructureEffect(() =>
-        input.eventPublisher.publishTaskStatusEvents(job.workflowId, [
-          claim.event,
-        ]),
+      yield* input.eventPublisher.publishTaskStatusEvent(
+        job.workflowId,
+        claim.event,
       );
 
       const providerResult = yield* input.providerExecutor.execute({

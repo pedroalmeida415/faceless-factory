@@ -59,7 +59,6 @@ import {
   WorkflowRuntimeIdGenerator,
   WorkflowRuntimeRepository,
 } from "~/server/workflow-runtime/workflow-runtime-commands";
-import { createWorkflowRuntimeOrchestrator } from "~/server/workflow-runtime/workflow-runtime-orchestrator";
 import {
   type PostCommitWork,
   WorkflowRuntimePostCommitWork,
@@ -1032,11 +1031,13 @@ describe("Workflow runtime state-machine contract", () => {
       prompt: "frozen prompt, not live graph",
       taskRunId: "task-run-provider",
     });
-    await executor.execute({
-      inputSnapshot: snapshot,
-      ownerUserId: "owner-user",
-      workflowId: "workflow-id",
-    });
+    await Effect.runPromise(
+      executor.execute({
+        inputSnapshot: snapshot,
+        ownerUserId: "owner-user",
+        workflowId: "workflow-id",
+      }),
+    );
     assert.deepEqual(
       vertexAi.llmCalls.map((call) => call.request),
       [snapshot.providerInput.request],
@@ -1239,20 +1240,49 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
       typeof buildWorkflowRuntimeWakeUpJobPayload
     >[] = [];
     const publishedEvents: ReturnType<typeof eventContract>[] = [];
-    const orchestrator = createWorkflowRuntimeOrchestrator({
-      eventPublisher: {
-        publishTaskStatusEvents: async (_workflowId, events) => {
-          publishedEvents.push(...events.map(eventContract));
-        },
-      },
-      queue: {
-        enqueueExecutionJobs: async () => undefined,
-        enqueueWakeUpJobs: async (jobs) => {
-          wakeUpJobs.push(...jobs);
-        },
-      },
-      repository,
-    });
+    const layer = WorkflowRuntimeCommands.Live.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(WorkflowRuntimeRepository, repository),
+          Layer.succeed(WorkflowRuntimeIdGenerator, {
+            createNodeExecutionId: nextId("node-execution"),
+            createTaskRunId: nextId("task-run"),
+          }),
+          Layer.succeed(WorkflowRuntimePostCommitWork, {
+            deliver: (work) =>
+              Effect.sync(() => {
+                publishedEvents.push(
+                  ...work.taskStatusEvents.map(eventContract),
+                );
+                wakeUpJobs.push(...work.wakeUpJobs);
+              }),
+          }),
+        ),
+      ),
+    );
+    const runCancel = (taskRunId: string) =>
+      Effect.runPromise(
+        Effect.flatMap(WorkflowRuntimeCommands, (commands) =>
+          commands.cancelTaskRun({
+            attempt: 0,
+            ownerUserId: "owner-user",
+            taskRunId,
+            workflowId: "workflow-id",
+          }),
+        ).pipe(
+          Effect.match({
+            onFailure: (error) => ({ error, ok: false as const }),
+            onSuccess: (outcome) => ({
+              ok: true as const,
+              value:
+                outcome.status === "committed"
+                  ? outcome.value
+                  : { decided: false as const },
+            }),
+          }),
+          Effect.provide(layer),
+        ),
+      );
     await insertUser(db, { creditBalance: 100 });
     await insertTaskRun(db, {
       creditCost: 12,
@@ -1285,30 +1315,10 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
       });
     }
 
-    const waiting = await orchestrator.cancelTaskRun({
-      attempt: 0,
-      ownerUserId: "owner-user",
-      taskRunId: "cancel-command-waiting",
-      workflowId: "workflow-id",
-    });
-    const queued = await orchestrator.cancelTaskRun({
-      attempt: 0,
-      ownerUserId: "owner-user",
-      taskRunId: "cancel-command-queued",
-      workflowId: "workflow-id",
-    });
-    const running = await orchestrator.cancelTaskRun({
-      attempt: 0,
-      ownerUserId: "owner-user",
-      taskRunId: "cancel-command-running",
-      workflowId: "workflow-id",
-    });
-    const pendingReview = await orchestrator.cancelTaskRun({
-      attempt: 0,
-      ownerUserId: "owner-user",
-      taskRunId: "cancel-command-review",
-      workflowId: "workflow-id",
-    });
+    const waiting = await runCancel("cancel-command-waiting");
+    const queued = await runCancel("cancel-command-queued");
+    const running = await runCancel("cancel-command-running");
+    const pendingReview = await runCancel("cancel-command-review");
     const terminalResults = [];
     for (const status of [
       "approved",
@@ -1317,14 +1327,7 @@ describe("Workflow runtime exhaustive state-machine contract", () => {
       "failed",
       "upstream_failed",
     ] as const) {
-      terminalResults.push(
-        await orchestrator.cancelTaskRun({
-          attempt: 0,
-          ownerUserId: "owner-user",
-          taskRunId: `cancel-command-${status}`,
-          workflowId: "workflow-id",
-        }),
-      );
+      terminalResults.push(await runCancel(`cancel-command-${status}`));
     }
 
     assert.equal(waiting.ok, true);
