@@ -207,9 +207,9 @@ _Avoid_: Node cost, aggregate node badge
 - The **Workflow Event Stream** is backed by Redis Pub/Sub so worker processes can publish events consumed by web server subscriptions.
 - **Task Status Events** are published only after the database transaction that produced them commits.
 - Execution jobs are enqueued only after the database transaction that marks task runs `QUEUED` commits.
-- **Post-Commit Work** is recorded durably in the same transaction that creates the work intent.
-- **Post-Commit Work** is retried until delivery succeeds; user commands remain successful once the runtime transaction commits.
-- Execution jobs, Wake-Up Calls, and **Task Status Events** are delivered from durable **Post-Commit Work** instead of ad hoc sweepers.
+- **Post-Commit Work** is delivered after commit on a best-effort basis during the MVP.
+- User commands remain successful once the runtime transaction commits, even if **Post-Commit Work** delivery fails.
+- If best-effort **Post-Commit Work** delivery is missed, the user can cancel affected active attempts and run the leaf node again to re-plan the upstream cascade from durable state.
 - Orchestrator queue events use deterministic job ids and idempotent handlers; queue deduplication is a safety net, not the source of truth.
 - BullMQ custom `jobId` values must not contain `:` because BullMQ reserves colon-delimited ids for repeatable-job internals. Workflow runtime queue job ids use `~` as the structural delimiter.
 - The orchestrator owns durable task-run state transitions and downstream wake-up decisions.

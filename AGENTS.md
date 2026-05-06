@@ -20,7 +20,7 @@ Brevity is a priority after correctness, domain completeness, and architectural 
 * **Directness**: Every line of code must justify its existence. If it does not directly contribute to the feature requirements, logic, or type safety, remove it.
 * **Standard over Custom**: Prioritize native language features and established library patterns over writing custom boilerplate code.
 * **Complexity Reduction:** Aim for the lowest reasonable cyclomatic complexity in the touched domain without hiding essential invariants behind indirection.
-* **Declarative Where It Adds Leverage:** Use Effect for domain workflows, runtime orchestration, dependency injection, and typed error pipelines. Use ordinary language constructs when they are clearer for local, synchronous transforms.
+* **Effect-First Architecture:** Effect is the default composition toolkit for robust software in this repo: control flow, data modeling, domain workflows, runtime orchestration, dependency injection, external I/O, async control flow, streams, sinks, fibers, semaphores, scheduling, batching, retries, concurrency, observability, resource lifecycles, and typed error pipelines. Plain TypeScript is acceptable only for small local transforms where Effect's data types or operators would add no leverage.
 * **Brevity Does Not Mean Collocation:** Do not collapse unrelated concerns into one file to reduce file count. Separate durable domain logic, UI components, stores, schemas, and runtime orchestration when they change for different reasons.
 * **Minimal Means Complete:** The smallest acceptable implementation is the smallest implementation that preserves the domain invariants, data lifecycle, and intended architecture. A smaller implementation that omits those things is incomplete, not minimal.
 
@@ -167,7 +167,7 @@ You view code as transient and malleable; you are not afraid to ruthlessly refac
 * **Next.js 15 (App Router):** Deep understanding of Server Components (RSC) vs. Client Components. Strict enforcement of data-fetching patterns, caching, and Server Actions where appropriate.
 * **TypeScript:** Relentless pursuit of type safety. No `any`. Avoid `as` assertions unless mathematically provable. Leverage discriminated unions, generics, and strict null checks.
 * **React-Flow & Zustand:** You understand the performance implications of large DAGs (Directed Acyclic Graphs). Use Zustand for externalized node state management to prevent unnecessary React re-renders. Utilize custom nodes efficiently, applying `memo` and shallow equality checks.
-* **Effect-TS:** You are a master of functional programming paradigms using `Effect`. Use Effect for complex domain logic, pipeline orchestration, dependency injection, truly reusable code implemented as services, and comprehensive, type-safe error tracking (handling expected and unexpected failures without throwing native exceptions).
+* **Effect-TS:** Effect is the default runtime, control-flow, service, observability, and error model for everything we build. Prefer Effect operators, `Stream`/`Sink`, `Fiber`, `Semaphore`, `Schedule`, batching, `Layer` services, `Context`, structured data types, and pipelines over raw language/runtime primitives when they improve reliability, locality, testability, or typed failure handling. Do not introduce raw Promise chains, ad hoc `async` orchestration, or `try/catch` domain logic when the same behavior can be expressed as an Effect program with typed errors and managed services. Before implementing or changing non-trivial Effect code, inspect the local Effect submodule under `vendor/effect` for matching APIs, examples, and implementation patterns; do not rely on memory when local source can answer the question.
 * **BullMQ & Redis:** Expert at distributed job queue architecture. Pipeline executions must be modeled as robust, resilient background jobs with retries, backoff strategies, and granular progress reporting.
 * **BullMQ Job IDs:** Never use `:` in BullMQ custom `jobId` values. Use existing job-id builders and `~` as the structural delimiter so deterministic dedupe remains BullMQ-compatible.
 * **Local Runtime Inspection:** Inspect local Postgres with `rtk docker exec faceless-factory-postgres-1 psql -U postgres -d faceless-factory -c "<sql>"`. Inspect local Redis/BullMQ state with `rtk docker exec faceless-factory-redis-1 redis-cli <command>`, for example `keys '*workflow-runtime*'` or `lrange bull:workflow-runtime:wait 0 -1`.
@@ -215,7 +215,7 @@ These rules are strict and non-negotiable:
 
 * **Rule of Reuse:** Always search for and leverage existing utility functions, UI components (Shadcn), and Effect pipelines before writing new ones. DRY is a mandate, not a suggestion.
 * **Context Preservation:** Maintain all type definitions and comments unless they are explicitly invalidated by the new architecture.
-* **Error Handling (Strict):** Do not use `try/catch` blocks for domain logic; use `Effect` to model errors as values. Framework control-flow exceptions are allowed only where the framework requires them. All tRPC endpoints must expose predictable typed error shapes or codes. All external seams (APIs, DB, Redis) must have explicit failure states and timeouts.
+* **Error Handling (Strict):** Do not use `try/catch` blocks for domain, runtime, orchestration, worker, persistence, queue, or integration logic; use `Effect` to model errors as values. Framework control-flow exceptions are allowed only where the framework requires them, and thin UI event handlers may use `async` only to call an already-modeled Effect/tRPC seam. All tRPC endpoints must expose predictable typed error shapes or codes. All external seams (APIs, DB, Redis) must have explicit failure states and timeouts.
 * **Security & Data Integrity:** Sanitize all user inputs (using Zod or standard tRPC routers). Never log raw PII, secrets, or sensitive payload data. Ensure background jobs cannot be hijacked by malicious pipeline graph configurations.
 * **Ruthless Refactoring:** If the surrounding context of a touched file is an anti-pattern that directly affects the in-scope change, refactor it to standard immediately and document the architectural shift in your output. If it is unrelated, leave it alone unless broader cleanup is explicitly in scope.
 * **Distributed Tracing:** All background jobs (BullMQ) and node executions must emit standard observability events. The agent must ensure that every complex Effect pipeline includes appropriate logging of input/output data (stripped of sensitive info) for every node execution.
@@ -268,9 +268,11 @@ Note: Git passthrough works for ALL subcommands, even those not explicitly liste
 
 ## Local Effect Source
 
-The Effect v3 repository is cloned to `~/.local/share/effect-solutions/effect` for reference.
-Use this to explore APIs, find usage examples, and understand implementation
-details when the documentation isn't enough.
+The Effect repository is tracked as a git submodule at `vendor/effect` from `git@github.com:Effect-TS/effect.git`. Treat this submodule as the canonical local reference for Effect APIs, implementation details, and usage examples.
+
+Agents must read `vendor/effect` before implementing or modifying non-trivial Effect code, especially code involving `Effect`, `Layer`, `Context`, `Scope`, `Stream`, `Schedule`, `Runtime`, `Exit`, `Cause`, `Fiber`, resource lifecycles, typed errors, concurrency, retries, or service dependency injection. Prefer `Glob`, `Grep`, and targeted `Read` calls against `vendor/effect/packages/**` to find real examples and source definitions before designing local abstractions.
+
+Do not invent Effect patterns from memory when the submodule can verify the API shape or idiom. If local project code and `vendor/effect` disagree, inspect both and choose the pattern that matches the installed package version or explicitly report the version mismatch.
 
 ## Agent skills
 
