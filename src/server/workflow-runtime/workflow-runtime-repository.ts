@@ -14,6 +14,12 @@ import {
   isTaskRunInputSnapshot,
   type TaskRunInputSnapshot,
 } from "~/lib/workflow-runtime/execution/task-run-input-snapshot";
+import {
+  recordDirectTaskRunFailure,
+  type TaskRunGatekeeperState,
+  type TaskRunGatekeeperTaskRun,
+  wakeUpTaskRunChildren,
+} from "~/lib/workflow-runtime/gatekeeper/task-run-gatekeeper";
 import type { WorkflowRunPlan } from "~/lib/workflow-runtime/planning/workflow-run-planner";
 import {
   buildTaskStatusEvent,
@@ -175,6 +181,7 @@ type CommitWorkflowRunPlanResult = {
 };
 
 export type RepositoryCommittedOutcome<T> = {
+  readonly durableStateChanged?: boolean;
   readonly postCommitWork: PostCommitWork;
   readonly value: T;
 };
@@ -1159,14 +1166,18 @@ function wakeUpTaskRunChildrenEffect(
   return repositoryTransaction(
     "wakeUpTaskRunChildren",
     Effect.gen(function* () {
-      const value = yield* runWakeUpTaskRunChildrenPersistenceEffect(command);
-      return committedOutcome(value, {
-        executionJobs: value.executionJobs,
-        source: "handle-wake-up-call",
-        taskStatusEvents: value.taskStatusEvents,
-        wakeUpJobs: [],
-        workflowId: command.workflowId,
-      });
+      const { durableStateChanged, ...value } =
+        yield* runWakeUpTaskRunChildrenPersistenceEffect(command);
+      return {
+        durableStateChanged,
+        ...committedOutcome(value, {
+          executionJobs: value.executionJobs,
+          source: "handle-wake-up-call",
+          taskStatusEvents: value.taskStatusEvents,
+          wakeUpJobs: [],
+          workflowId: command.workflowId,
+        }),
+      };
     }),
   );
 }
@@ -1445,197 +1456,369 @@ function insertGeneratedAssetEffect(input: {
 }
 
 function runWakeUpTaskRunChildrenPersistenceEffect(
-  command: WakeUpTaskRunChildrenRepositoryCommand,
+  command: WakeUpTaskRunChildrenRepositoryCommand & {
+    readonly workflowId: string;
+  },
+) {
+  return Effect.gen(function* () {
+    if (!(yield* wakeUpParentExistsEffect(command))) {
+      return { executionJobs: [], parentFound: false, taskStatusEvents: [] };
+    }
+    const initialState = yield* loadWakeUpGatekeeperStateEffect(command);
+
+    const gatekeeperResult = wakeUpTaskRunChildren(initialState, {
+      settledParentTaskRunId: command.settledParentTaskRunId,
+    });
+    const debitAdjustedResult = yield* applyWakeUpTaskRunDebitsEffect(
+      command,
+      gatekeeperResult,
+    );
+    const durableStateChanged = yield* persistWakeUpGatekeeperResultEffect(
+      initialState,
+      debitAdjustedResult.state,
+    );
+
+    return {
+      durableStateChanged,
+      executionJobs: buildWakeUpExecutionJobs(
+        command,
+        debitAdjustedResult.state,
+        debitAdjustedResult.executionJobs.map((job) => job.taskRunId),
+      ),
+      parentFound: true,
+      taskStatusEvents: debitAdjustedResult.taskStatusEvents,
+    };
+  });
+}
+
+function wakeUpParentExistsEffect(
+  command: WakeUpTaskRunChildrenRepositoryCommand & {
+    readonly workflowId: string;
+  },
 ) {
   return Effect.gen(function* () {
     const db = yield* PgDrizzle.PgDrizzle;
-    const parentRows = yield* db
-      .select({
-        itemIndex: schema.taskRuns.itemIndex,
-        nodeExecutionId: schema.taskRuns.nodeExecutionId,
-        ownerUserId: schema.taskRuns.ownerUserId,
-        runtimeStatus: schema.taskRuns.runtimeStatus,
-        taskRunId: schema.taskRuns.id,
-        workflowId: schema.taskRuns.workflowId,
-      })
+    const rows = yield* db
+      .select({ id: schema.taskRuns.id })
       .from(schema.taskRuns)
       .where(sql`${schema.taskRuns.id} = ${command.settledParentTaskRunId}
         and ${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
+        and ${schema.taskRuns.workflowId} = ${command.workflowId}
         and ${schema.taskRuns.runtimeStatus} is not null`)
       .limit(1);
-    const parent = parentRows[0];
-    if (!parent) {
-      return { executionJobs: [], parentFound: false, taskStatusEvents: [] };
-    }
+    return rows.length > 0;
+  });
+}
 
-    if (
-      parent.runtimeStatus !== "APPROVED" &&
-      parent.runtimeStatus !== "FAILED" &&
-      parent.runtimeStatus !== "CANCELLED" &&
-      parent.runtimeStatus !== "UPSTREAM_FAILED"
-    ) {
-      return { executionJobs: [], parentFound: true, taskStatusEvents: [] };
-    }
-
-    const children = yield* db
+function loadWakeUpGatekeeperStateEffect(
+  command: WakeUpTaskRunChildrenRepositoryCommand & {
+    readonly workflowId: string;
+  },
+) {
+  return Effect.gen(function* () {
+    const db = yield* PgDrizzle.PgDrizzle;
+    const balance = yield* lockUserAndReadBalanceEffect(command.ownerUserId);
+    const taskRunRows = yield* db
       .select({
         attempt: schema.taskRuns.attempt,
         creditCost: schema.taskRuns.creditCost,
+        failureReason: schema.taskRuns.failureReason,
         inputSnapshot: schema.taskRuns.inputSnapshot,
         itemIndex: schema.taskRuns.itemIndex,
         nodeId: schema.taskRuns.nodeId,
         nodeExecutionId: schema.taskRuns.nodeExecutionId,
-        ownerUserId: schema.taskRuns.ownerUserId,
+        runtimeStatus: schema.taskRuns.runtimeStatus,
         taskRunId: schema.taskRuns.id,
-        workflowId: schema.taskRuns.workflowId,
+      })
+      .from(schema.taskRuns)
+      .where(sql`${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
+        and ${schema.taskRuns.workflowId} = ${command.workflowId}
+        and ${schema.taskRuns.runtimeStatus} is not null`)
+      .orderBy(
+        schema.taskRuns.nodeExecutionId,
+        schema.taskRuns.itemIndex,
+        schema.taskRuns.attempt,
+        schema.taskRuns.id,
+      )
+      .for("update");
+    const assetRows = yield* db
+      .select({
+        assetCdnUrl: schema.assets.cdnUrl,
+        assetCreatedAt: schema.assets.createdAt,
+        assetExternalUri: schema.assets.externalUri,
+        assetFileName: schema.assets.fileName,
+        assetId: schema.assets.id,
+        assetKind: schema.assets.kind,
+        assetMimeType: schema.assets.mimeType,
+        assetModel: schema.assets.model,
+        assetSizeBytes: schema.assets.sizeBytes,
+        assetStorageKey: schema.assets.storageKey,
+        assetText: schema.assets.textContent,
+        taskRunId: schema.assets.taskRunId,
+      })
+      .from(schema.assets)
+      .innerJoin(
+        schema.taskRuns,
+        sql`${schema.taskRuns.id} = ${schema.assets.taskRunId}`,
+      )
+      .where(sql`${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
+        and ${schema.taskRuns.workflowId} = ${command.workflowId}`)
+      .orderBy(schema.assets.id);
+    const assetsByTaskRunId = new Map(
+      assetRows.map((row) => [row.taskRunId, row]),
+    );
+    const taskRunsById = new Map<string, TaskRunGatekeeperTaskRun>();
+    for (const row of taskRunRows) {
+      if (taskRunsById.has(row.taskRunId)) {
+        continue;
+      }
+      const assetRow = assetsByTaskRunId.get(row.taskRunId);
+      const asset = assetRow ? buildWorkflowAssetFromRow(assetRow) : null;
+      const output = assetRow ? buildRenderableOutputFromRow(assetRow) : null;
+      taskRunsById.set(row.taskRunId, {
+        attempt: requireNumber(row.attempt),
+        creditCost: requireNumber(row.creditCost),
+        ...(asset ? { asset } : {}),
+        ...(row.failureReason
+          ? {
+              failureReason: taskRunFailureReasonFromDatabase(
+                row.failureReason,
+              ),
+            }
+          : {}),
+        id: row.taskRunId,
+        inputSnapshot:
+          optionalTaskRunInputSnapshot(row.inputSnapshot) ?? undefined,
+        itemIndex: requireNumber(row.itemIndex),
+        nodeExecutionId: row.nodeExecutionId,
+        nodeId: row.nodeId,
+        ...(output ? { output } : {}),
+        status: requireTaskRunRuntimeStatus(row.runtimeStatus),
+      });
+    }
+
+    const dependencies = yield* db
+      .select({
+        childTaskRunId: schema.taskDependencies.childTaskRunId,
+        requiredParentItemIndex:
+          schema.taskDependencies.requiredParentItemIndex,
+        requiredParentNodeExecutionId:
+          schema.taskDependencies.requiredParentNodeExecutionId,
+        requiredParentNodeId: schema.taskDependencies.requiredParentNodeId,
+        resolvedParentTaskRunId:
+          schema.taskDependencies.resolvedParentTaskRunId,
+        sourceHandle: schema.taskDependencies.sourceHandle,
+        targetHandle: schema.taskDependencies.targetHandle,
+        targetNodeId: schema.taskDependencies.targetNodeId,
       })
       .from(schema.taskDependencies)
       .innerJoin(
         schema.taskRuns,
         sql`${schema.taskRuns.id} = ${schema.taskDependencies.childTaskRunId}`,
       )
-      .where(sql`${schema.taskDependencies.requiredParentNodeExecutionId} = ${parent.nodeExecutionId}
-        and ${schema.taskDependencies.requiredParentItemIndex} = ${parent.itemIndex}
-        and ${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-        and ${schema.taskRuns.workflowId} = ${parent.workflowId}
-        and ${schema.taskRuns.runtimeStatus} = 'WAITING_UPSTREAM'`)
-      .orderBy(schema.taskRuns.id);
+      .where(sql`${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
+        and ${schema.taskRuns.workflowId} = ${command.workflowId}
+        and ${schema.taskRuns.runtimeStatus} is not null`)
+      .orderBy(schema.taskDependencies.id);
 
-    const executionJobs: WorkflowRuntimeExecutionJobPayload[] = [];
-    const taskStatusEvents: TaskStatusEvent[] = [];
-
-    for (const child of children) {
-      if (parent.runtimeStatus === "APPROVED") {
-        yield* db
-          .update(schema.taskDependencies)
-          .set({
-            resolvedAt: new Date(),
-            resolvedParentTaskRunId: parent.taskRunId,
-          })
-          .where(sql`${schema.taskDependencies.childTaskRunId} = ${child.taskRunId}
-            and ${schema.taskDependencies.requiredParentNodeExecutionId} = ${parent.nodeExecutionId}
-            and ${schema.taskDependencies.requiredParentItemIndex} = ${parent.itemIndex}`);
-        if (!(yield* childDependenciesResolvedEffect(child.taskRunId))) {
-          continue;
-        }
-        const debit = yield* debitTaskRunCreditsEffect({
-          amount: child.creditCost,
-          ownerUserId: child.ownerUserId,
-          taskRunId: child.taskRunId,
-          workflowId: child.workflowId,
-        });
-        const nextStatus = debit.debited ? "QUEUED" : "FAILED";
-        const inputSnapshot = requireTaskRunInputSnapshot(child.inputSnapshot);
-        const queuedSnapshot = debit.debited
-          ? buildRepositoryInputSnapshot({
-              attempt: requireNumber(child.attempt),
-              documentRevision: inputSnapshot.documentRevision,
-              itemIndex: requireNumber(child.itemIndex),
-              nodeExecutionId: child.nodeExecutionId,
-              nodeId: child.nodeId,
-              resolvedParents: yield* loadResolvedParentSnapshotsEffect(
-                child.taskRunId,
-              ),
-              targetNodeConfig: inputSnapshot.targetNodeConfig,
-              taskRunId: child.taskRunId,
-              workflowDefinition: inputSnapshot.workflowDefinition,
-            })
-          : null;
-        yield* db
-          .update(schema.taskRuns)
-          .set({
-            failedAt: nextStatus === "FAILED" ? new Date() : null,
-            failureReason:
-              nextStatus === "FAILED" ? "INSUFFICIENT_CREDITS" : null,
-            inputSnapshot: queuedSnapshot,
-            queuedAt: nextStatus === "QUEUED" ? new Date() : null,
-            runtimeStatus: nextStatus,
-            updatedAt: new Date(),
-          })
-          .where(sql`${schema.taskRuns.id} = ${child.taskRunId}
-            and ${schema.taskRuns.runtimeStatus} = 'WAITING_UPSTREAM'`);
-        if (nextStatus === "QUEUED") {
-          executionJobs.push(
-            buildWorkflowRuntimeExecutionJobPayload({
-              attempt: requireNumber(child.attempt),
-              itemIndex: requireNumber(child.itemIndex),
-              nodeExecutionId: child.nodeExecutionId,
-              ownerUserId: child.ownerUserId,
-              taskRunId: child.taskRunId,
-              workflowId: child.workflowId,
-            }),
-          );
-        }
-        taskStatusEvents.push(
-          buildTaskStatusEvent({
-            attempt: requireNumber(child.attempt),
-            ...(nextStatus === "FAILED"
-              ? { failureReason: "INSUFFICIENT_CREDITS" as const }
-              : {}),
-            itemIndex: requireNumber(child.itemIndex),
-            nodeExecutionId: child.nodeExecutionId,
-            status: nextStatus,
-            taskRunId: child.taskRunId,
-          }),
-        );
-        if (nextStatus === "FAILED") {
-          taskStatusEvents.push(
-            ...(yield* failWaitingDescendantsForParentEffect({
-              ownerUserId: child.ownerUserId,
-              parentNodeExecutionId: child.nodeExecutionId,
-              parentTaskRunId: child.taskRunId,
-              workflowId: child.workflowId,
-            })),
-          );
-        }
-      } else {
-        yield* db
-          .update(schema.taskRuns)
-          .set({
-            error: `Upstream Task Run ${parent.taskRunId} did not approve.`,
-            failedAt: new Date(),
-            failureReason: "UPSTREAM_FAILED",
-            runtimeStatus: "UPSTREAM_FAILED",
-            updatedAt: new Date(),
-          })
-          .where(sql`${schema.taskRuns.id} = ${child.taskRunId}
-            and ${schema.taskRuns.runtimeStatus} = 'WAITING_UPSTREAM'`);
-        taskStatusEvents.push(
-          buildTaskStatusEvent({
-            attempt: requireNumber(child.attempt),
-            failureReason: "UPSTREAM_FAILED",
-            itemIndex: requireNumber(child.itemIndex),
-            nodeExecutionId: child.nodeExecutionId,
-            status: "UPSTREAM_FAILED",
-            taskRunId: child.taskRunId,
-          }),
-        );
-        taskStatusEvents.push(
-          ...(yield* failWaitingDescendantsForParentEffect({
-            ownerUserId: child.ownerUserId,
-            parentNodeExecutionId: child.nodeExecutionId,
-            parentTaskRunId: child.taskRunId,
-            workflowId: child.workflowId,
-          })),
-        );
-      }
-    }
-
-    return { executionJobs, parentFound: true, taskStatusEvents };
+    return {
+      creditBalance: balance,
+      dependencies: dependencies.map((dependency) => ({
+        childTaskRunId: dependency.childTaskRunId,
+        requiredParentItemIndex: requireNumber(
+          dependency.requiredParentItemIndex,
+        ),
+        requiredParentNodeExecutionId: dependency.requiredParentNodeExecutionId,
+        requiredParentNodeId: dependency.requiredParentNodeId,
+        resolvedParentTaskRunId: dependency.resolvedParentTaskRunId,
+        sourceHandle: dependency.sourceHandle,
+        targetHandle: dependency.targetHandle,
+        targetNodeId: dependency.targetNodeId,
+      })),
+      taskRuns: Array.from(taskRunsById.values()),
+    } satisfies TaskRunGatekeeperState;
   });
 }
 
-function childDependenciesResolvedEffect(childTaskRunId: string) {
+function applyWakeUpTaskRunDebitsEffect(
+  command: WakeUpTaskRunChildrenRepositoryCommand & {
+    readonly workflowId: string;
+  },
+  gatekeeperResult: ReturnType<typeof wakeUpTaskRunChildren>,
+) {
+  return Effect.gen(function* () {
+    let nextResult = gatekeeperResult;
+    const failedDebitTaskRunIds = new Set<string>();
+    for (const job of gatekeeperResult.executionJobs) {
+      const taskRun = requireGatekeeperTaskRun(nextResult.state, job.taskRunId);
+      const debit = yield* debitTaskRunCreditsEffect({
+        amount: taskRun.creditCost,
+        ownerUserId: command.ownerUserId,
+        taskRunId: taskRun.id,
+        workflowId: command.workflowId,
+      });
+      if (debit.debited) {
+        continue;
+      }
+      failedDebitTaskRunIds.add(taskRun.id);
+      const failureResult = recordDirectTaskRunFailure(nextResult.state, {
+        failureReason: { type: "INSUFFICIENT_CREDITS" },
+        taskRunId: taskRun.id,
+      });
+      nextResult = {
+        executionJobs: nextResult.executionJobs.filter(
+          (candidate) => candidate.taskRunId !== taskRun.id,
+        ),
+        state: failureResult.state,
+        taskStatusEvents: [
+          ...nextResult.taskStatusEvents.filter(
+            (event) => !failedDebitTaskRunIds.has(event.taskRunId),
+          ),
+          ...failureResult.taskStatusEvents,
+        ],
+      };
+    }
+    return nextResult;
+  });
+}
+
+function persistWakeUpGatekeeperResultEffect(
+  initialState: TaskRunGatekeeperState,
+  nextState: TaskRunGatekeeperState,
+) {
   return Effect.gen(function* () {
     const db = yield* PgDrizzle.PgDrizzle;
-    const unresolved = yield* db
-      .select({ id: schema.taskDependencies.id })
-      .from(schema.taskDependencies)
-      .where(sql`${schema.taskDependencies.childTaskRunId} = ${childTaskRunId}
-        and ${schema.taskDependencies.resolvedParentTaskRunId} is null`)
-      .limit(1);
-    return unresolved.length === 0;
+    const initialTaskRuns = new Map(
+      initialState.taskRuns.map((taskRun) => [taskRun.id, taskRun]),
+    );
+    let durableStateChanged = false;
+
+    for (const dependency of nextState.dependencies) {
+      const initialDependency = initialState.dependencies.find(
+        (candidate) =>
+          candidate.childTaskRunId === dependency.childTaskRunId &&
+          candidate.requiredParentNodeExecutionId ===
+            dependency.requiredParentNodeExecutionId &&
+          candidate.requiredParentItemIndex ===
+            dependency.requiredParentItemIndex &&
+          candidate.sourceHandle === dependency.sourceHandle &&
+          candidate.targetHandle === dependency.targetHandle,
+      );
+      if (
+        !initialDependency ||
+        initialDependency.resolvedParentTaskRunId ===
+          dependency.resolvedParentTaskRunId
+      ) {
+        continue;
+      }
+      const [updated] = yield* db
+        .update(schema.taskDependencies)
+        .set({
+          resolvedAt: new Date(),
+          resolvedParentTaskRunId: dependency.resolvedParentTaskRunId,
+        })
+        .where(sql`${schema.taskDependencies.childTaskRunId} = ${dependency.childTaskRunId}
+          and ${schema.taskDependencies.requiredParentNodeExecutionId} = ${dependency.requiredParentNodeExecutionId}
+          and ${schema.taskDependencies.requiredParentItemIndex} = ${dependency.requiredParentItemIndex}
+          and ${schema.taskDependencies.sourceHandle} is not distinct from ${dependency.sourceHandle}
+          and ${schema.taskDependencies.targetHandle} is not distinct from ${dependency.targetHandle}
+          and ${schema.taskDependencies.resolvedParentTaskRunId} is null`)
+        .returning({ id: schema.taskDependencies.id });
+      durableStateChanged = durableStateChanged || Boolean(updated);
+    }
+
+    for (const taskRun of nextState.taskRuns) {
+      const initialTaskRun = initialTaskRuns.get(taskRun.id);
+      if (
+        !initialTaskRun ||
+        !gatekeeperTaskRunChanged(initialTaskRun, taskRun)
+      ) {
+        continue;
+      }
+      const [updated] = yield* db
+        .update(schema.taskRuns)
+        .set({
+          error:
+            taskRun.status === "UPSTREAM_FAILED"
+              ? `Upstream Task Run ${taskRun.failureReason?.type === "UPSTREAM_FAILED" ? taskRun.failureReason.failedParentTaskRunId : "unknown"} did not approve.`
+              : null,
+          failedAt:
+            taskRun.status === "FAILED" || taskRun.status === "UPSTREAM_FAILED"
+              ? new Date()
+              : null,
+          failureReason: taskRun.failureReason?.type ?? null,
+          inputSnapshot: taskRun.inputSnapshot ?? null,
+          queuedAt: taskRun.status === "QUEUED" ? new Date() : null,
+          runtimeStatus: taskRun.status,
+          updatedAt: new Date(),
+        })
+        .where(sql`${schema.taskRuns.id} = ${taskRun.id}
+          and ${schema.taskRuns.runtimeStatus} = ${initialTaskRun.status}`)
+        .returning({ id: schema.taskRuns.id });
+      durableStateChanged = durableStateChanged || Boolean(updated);
+    }
+
+    return durableStateChanged;
   });
+}
+
+function buildWakeUpExecutionJobs(
+  command: WakeUpTaskRunChildrenRepositoryCommand & {
+    readonly workflowId: string;
+  },
+  state: TaskRunGatekeeperState,
+  taskRunIds: readonly string[],
+): readonly WorkflowRuntimeExecutionJobPayload[] {
+  return taskRunIds.map((taskRunId) => {
+    const taskRun = requireGatekeeperTaskRun(state, taskRunId);
+    return buildWorkflowRuntimeExecutionJobPayload({
+      attempt: taskRun.attempt,
+      itemIndex: taskRun.itemIndex,
+      nodeExecutionId: taskRun.nodeExecutionId,
+      ownerUserId: command.ownerUserId,
+      taskRunId: taskRun.id,
+      workflowId: command.workflowId,
+    });
+  });
+}
+
+function requireGatekeeperTaskRun(
+  state: TaskRunGatekeeperState,
+  taskRunId: string,
+): TaskRunGatekeeperTaskRun {
+  const taskRun = state.taskRuns.find(
+    (candidate) => candidate.id === taskRunId,
+  );
+  if (!taskRun) {
+    throw new TypeError(`Missing gatekeeper Task Run ${taskRunId}`);
+  }
+  return taskRun;
+}
+
+function gatekeeperTaskRunChanged(
+  left: TaskRunGatekeeperTaskRun,
+  right: TaskRunGatekeeperTaskRun,
+): boolean {
+  return (
+    left.status !== right.status ||
+    JSON.stringify(left.failureReason ?? null) !==
+      JSON.stringify(right.failureReason ?? null) ||
+    JSON.stringify(left.inputSnapshot ?? null) !==
+      JSON.stringify(right.inputSnapshot ?? null)
+  );
+}
+
+function taskRunFailureReasonFromDatabase(value: string): TaskRunFailureReason {
+  if (value === "UPSTREAM_FAILED") {
+    return { failedParentTaskRunId: "unknown", type: "UPSTREAM_FAILED" };
+  }
+  if (value === "INSUFFICIENT_CREDITS") {
+    return { type: "INSUFFICIENT_CREDITS" };
+  }
+  if (value === "PROVIDER_FAILED") {
+    return { message: "Provider failed.", type: "PROVIDER_FAILED" };
+  }
+  return { message: "Execution failed.", type: "EXECUTION_FAILED" };
 }
 
 function resolveApprovedDependenciesForChildEffect(childTaskRunId: string) {
@@ -1672,77 +1855,6 @@ function resolveApprovedDependenciesForChildEffect(childTaskRunId: string) {
         })
         .where(sql`${schema.taskDependencies.id} = ${dependency.id}`);
     }
-  });
-}
-
-function failWaitingDescendantsForParentEffect(input: {
-  readonly ownerUserId: string;
-  readonly parentNodeExecutionId: string;
-  readonly parentTaskRunId: string;
-  readonly workflowId: string;
-}) {
-  return Effect.gen(function* () {
-    const db = yield* PgDrizzle.PgDrizzle;
-    const events: TaskStatusEvent[] = [];
-    const pendingParents = [
-      {
-        nodeExecutionId: input.parentNodeExecutionId,
-        taskRunId: input.parentTaskRunId,
-      },
-    ];
-
-    for (const parent of pendingParents) {
-      const children = yield* db
-        .select({
-          attempt: schema.taskRuns.attempt,
-          itemIndex: schema.taskRuns.itemIndex,
-          nodeExecutionId: schema.taskRuns.nodeExecutionId,
-          taskRunId: schema.taskRuns.id,
-        })
-        .from(schema.taskDependencies)
-        .innerJoin(
-          schema.taskRuns,
-          sql`${schema.taskRuns.id} = ${schema.taskDependencies.childTaskRunId}`,
-        )
-        .where(sql`${schema.taskDependencies.requiredParentNodeExecutionId} = ${parent.nodeExecutionId}
-          and ${schema.taskRuns.ownerUserId} = ${input.ownerUserId}
-          and ${schema.taskRuns.workflowId} = ${input.workflowId}
-          and ${schema.taskRuns.runtimeStatus} = 'WAITING_UPSTREAM'`)
-        .orderBy(schema.taskRuns.id);
-
-      for (const child of children) {
-        const [updated] = yield* db
-          .update(schema.taskRuns)
-          .set({
-            error: `Upstream Task Run ${parent.taskRunId} did not approve.`,
-            failedAt: new Date(),
-            failureReason: "UPSTREAM_FAILED",
-            runtimeStatus: "UPSTREAM_FAILED",
-            updatedAt: new Date(),
-          })
-          .where(sql`${schema.taskRuns.id} = ${child.taskRunId}
-            and ${schema.taskRuns.runtimeStatus} = 'WAITING_UPSTREAM'`)
-          .returning({ id: schema.taskRuns.id });
-        if (!updated) {
-          continue;
-        }
-        events.push(
-          buildTaskStatusEvent({
-            attempt: requireNumber(child.attempt),
-            failureReason: "UPSTREAM_FAILED",
-            itemIndex: requireNumber(child.itemIndex),
-            nodeExecutionId: child.nodeExecutionId,
-            status: "UPSTREAM_FAILED",
-            taskRunId: child.taskRunId,
-          }),
-        );
-        pendingParents.push({
-          nodeExecutionId: child.nodeExecutionId,
-          taskRunId: child.taskRunId,
-        });
-      }
-    }
-    return events;
   });
 }
 

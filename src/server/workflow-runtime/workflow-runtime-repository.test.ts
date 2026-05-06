@@ -1228,6 +1228,84 @@ describe("WorkflowRuntimeRepository", () => {
       ],
     );
   });
+
+  test("Wake-Up Calls propagate upstream failure from the latest parent attempt through the Effect transaction", async () => {
+    const repository = createWorkflowRuntimeRepository();
+    await insertEffectTaskRun({
+      attempt: 0,
+      id: "task-run-effect-stale-approved-parent",
+      nodeExecutionId: "node-execution-effect-stale-parent",
+      runtimeStatus: "APPROVED",
+    });
+    await insertEffectTaskRun({
+      attempt: 1,
+      id: "task-run-effect-latest-failed-parent",
+      nodeExecutionId: "node-execution-effect-stale-parent",
+      runtimeStatus: "FAILED",
+    });
+    await insertEffectTaskRun({
+      id: "task-run-effect-upstream-failed-child",
+      inputSnapshot: inputSnapshot("task-run-effect-upstream-failed-child", 0, {
+        nodeExecutionId: "node-execution-effect-upstream-failed-child",
+      }),
+      nodeExecutionId: "node-execution-effect-upstream-failed-child",
+      runtimeStatus: "WAITING_UPSTREAM",
+    });
+    await insertEffectTaskDependency({
+      childTaskRunId: "task-run-effect-upstream-failed-child",
+      parentNodeExecutionId: "node-execution-effect-stale-parent",
+    });
+
+    const result = await runRepositoryEffect(
+      repository.wakeUpTaskRunChildren({
+        ownerUserId: "owner-user",
+        settledParentTaskRunId: "task-run-effect-stale-approved-parent",
+        workflowId: "workflow-id",
+      }),
+    );
+
+    assert.deepEqual(result.value, {
+      executionJobs: [],
+      parentFound: true,
+      taskStatusEvents: [
+        {
+          attempt: 0,
+          failureReason: "UPSTREAM_FAILED",
+          itemIndex: 0,
+          nodeExecutionId: "node-execution-effect-upstream-failed-child",
+          status: "UPSTREAM_FAILED",
+          taskRunId: "task-run-effect-upstream-failed-child",
+        },
+      ],
+    });
+    assert.equal(result.durableStateChanged, true);
+    assert.deepEqual(result.postCommitWork, {
+      executionJobs: [],
+      source: "handle-wake-up-call",
+      taskStatusEvents: result.value.taskStatusEvents,
+      wakeUpJobs: [],
+      workflowId: "workflow-id",
+    });
+    assert.deepEqual(
+      (
+        await runRepositoryEffect(
+          repository.getRuntimeTaskRunsForNodeExecution({
+            nodeExecutionId: "node-execution-effect-upstream-failed-child",
+            ownerUserId: "owner-user",
+          }),
+        )
+      ).map((taskRun) => ({
+        id: taskRun.taskRunId,
+        status: taskRun.runtimeStatus,
+      })),
+      [
+        {
+          id: "task-run-effect-upstream-failed-child",
+          status: "UPSTREAM_FAILED",
+        },
+      ],
+    );
+  });
 });
 
 type WorkflowRunPlanInput = Partial<

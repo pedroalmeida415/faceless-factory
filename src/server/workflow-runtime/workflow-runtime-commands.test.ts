@@ -85,6 +85,27 @@ describe("WorkflowRuntimeCommands", () => {
     });
   });
 
+  test("maps duplicate Wake-Up Calls with no durable child changes to ignored outcomes", async () => {
+    const runtime = makeRuntime({
+      wakeUpTaskRunChildren: () => Effect.succeed(emptyWakeUpOutcome()),
+    });
+
+    const outcome = await runtime.runPromise(
+      Effect.flatMap(WorkflowRuntimeCommands, (commands) =>
+        commands.handleWakeUpCall({
+          ownerUserId: "owner-1",
+          settledParentTaskRunId: "parent-task-run-1",
+          workflowId: "workflow-1",
+        }),
+      ),
+    );
+
+    assert.deepEqual(outcome, {
+      reason: "STALE_TASK_RUN",
+      status: "ignored",
+    });
+  });
+
   test("keeps committed outcomes when Post-Commit Work delivery fails", async () => {
     const runtime = makeRuntime(
       {
@@ -147,6 +168,74 @@ describe("WorkflowRuntimeCommands", () => {
     );
 
     assert.equal(outcome.status, "committed");
+  });
+
+  test("delivers committed Wake-Up Call Post-Commit Work through the command seam", async () => {
+    const delivered: PostCommitWork[] = [];
+    const executionJob = {
+      attempt: 0,
+      itemIndex: 0,
+      jobId: "task-run~child-task-run-1~attempt~0~execute",
+      nodeExecutionId: "child-node-execution-1",
+      ownerUserId: "owner-1",
+      taskRunId: "child-task-run-1",
+      workflowId: "workflow-1",
+    };
+    const taskStatusEvent = {
+      attempt: 0,
+      itemIndex: 0,
+      nodeExecutionId: "child-node-execution-1",
+      status: "QUEUED" as const,
+      taskRunId: "child-task-run-1",
+    };
+    const runtime = makeRuntimeWithPostCommitWork(
+      {
+        wakeUpTaskRunChildren: () =>
+          Effect.succeed({
+            postCommitWork: {
+              executionJobs: [executionJob],
+              source: "handle-wake-up-call" as const,
+              taskStatusEvents: [taskStatusEvent],
+              wakeUpJobs: [],
+              workflowId: "workflow-1",
+            },
+            value: {
+              executionJobs: [executionJob],
+              parentFound: true,
+              taskStatusEvents: [taskStatusEvent],
+            },
+          }),
+      },
+      delivered,
+    );
+
+    const outcome = await runtime.runPromise(
+      Effect.flatMap(WorkflowRuntimeCommands, (commands) =>
+        commands.handleWakeUpCall({
+          ownerUserId: "owner-1",
+          settledParentTaskRunId: "parent-task-run-1",
+          workflowId: "workflow-1",
+        }),
+      ),
+    );
+
+    assert.deepEqual(outcome, {
+      status: "committed",
+      value: {
+        executionJobs: [executionJob],
+        parentFound: true,
+        taskStatusEvents: [taskStatusEvent],
+      },
+    });
+    assert.deepEqual(delivered, [
+      {
+        executionJobs: [executionJob],
+        source: "handle-wake-up-call",
+        taskStatusEvents: [taskStatusEvent],
+        wakeUpJobs: [],
+        workflowId: "workflow-1",
+      },
+    ]);
   });
 
   test("normalizes committed start run Post-Commit Work through the command seam", async () => {

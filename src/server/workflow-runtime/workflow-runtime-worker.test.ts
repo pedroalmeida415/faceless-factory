@@ -121,6 +121,19 @@ describe("WorkflowRuntimeWorker", () => {
     );
   });
 
+  test("rejects Wake-Up Call handling failures so BullMQ can retry", async () => {
+    const wakeUpError = new Error("database unavailable");
+    const processor = createWorkflowRuntimeProcessor({
+      executionWorker: new FakeExecutionWorker(),
+      orchestrator: new FakeOrchestrator({ wakeUpError }),
+    });
+
+    await assert.rejects(
+      processor(fakeJob("wake-up-task-run-children", wakeUpJob())),
+      wakeUpError,
+    );
+  });
+
   test("re-enqueues durable queued Task Runs idempotently", async () => {
     const repository = new FakeQueuedTaskRunRepository([
       executionJob("task-run-1", 0),
@@ -241,6 +254,7 @@ class FakeOrchestrator {
     private readonly outcomes: {
       readonly completionOutcome?: unknown;
       readonly failureOutcome?: unknown;
+      readonly wakeUpError?: Error;
       readonly wakeUpOutcome?: unknown;
     } = {},
   ) {}
@@ -269,6 +283,9 @@ class FakeOrchestrator {
 
   handleWakeUpCall(job: unknown) {
     this.wakeUps.push(job);
+    if (this.outcomes.wakeUpError) {
+      return Promise.reject(this.outcomes.wakeUpError);
+    }
 
     return Promise.resolve(
       this.outcomes.wakeUpOutcome ?? {

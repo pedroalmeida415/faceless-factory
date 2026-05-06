@@ -172,6 +172,9 @@ export class WorkflowRuntimeCommands extends Context.Tag(
             if (!outcome) {
               return ignored("WAKE_UP_PARENT_NOT_FOUND");
             }
+            if (isEmptyWakeUpOutcome(outcome) && !outcome.durableStateChanged) {
+              return ignored("STALE_TASK_RUN");
+            }
             yield* postCommit.deliver(outcome.postCommitWork);
             return committed(outcome.value);
           }),
@@ -304,5 +307,15 @@ function mapRepositoryErrors<T>(
         message,
       } as const;
     }),
+  );
+}
+
+function isEmptyWakeUpOutcome(
+  outcome: RepositoryCommittedOutcome<WakeUpTaskRunChildrenRepositoryResult>,
+) {
+  return (
+    outcome.value.parentFound &&
+    outcome.value.executionJobs.length === 0 &&
+    outcome.value.taskStatusEvents.length === 0
   );
 }
