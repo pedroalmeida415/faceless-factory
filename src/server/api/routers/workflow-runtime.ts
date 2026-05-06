@@ -1,10 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { type SQL, sql } from "drizzle-orm";
 import { z } from "zod";
-import {
-  deserializeStoredWorkflowGraphDocument,
-  type WorkflowGraphDocument,
-} from "~/lib/workflow/document";
 import { planWorkflowRun } from "~/lib/workflow-runtime/planning/workflow-run-planner";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { db } from "~/server/db";
@@ -49,22 +45,17 @@ const taskEventsInputSchema = z.object({
   projectId: z.string().min(1),
 });
 
-const workflowGraphDocumentSchema = z
-  .custom<WorkflowGraphDocument>(
-    (value) => Boolean(deserializeStoredWorkflowGraphDocument(value)),
-    "Invalid workflow graph document.",
-  )
-  .transform(
-    (value) =>
-      deserializeStoredWorkflowGraphDocument(value) as NonNullable<
-        ReturnType<typeof deserializeStoredWorkflowGraphDocument>
-      >,
-  );
-
 export const workflowRuntimeRouter = createTRPCRouter({
   executionCostProjection: protectedProcedure
-    .input(z.object({ document: workflowGraphDocumentSchema }))
-    .query(({ input }) => buildExecutionCostProjection(input.document)),
+    .input(z.object({ projectId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      const project = await getWorkflowProject({
+        ownerUserId: ctx.session.user.id,
+        projectId: input.projectId,
+      }).catch(throwTRPCError);
+
+      return buildExecutionCostProjection(project.document);
+    }),
 
   runCostPreview: protectedProcedure
     .input(runInputSchema)

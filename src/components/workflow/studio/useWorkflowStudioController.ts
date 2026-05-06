@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import { ClientRuntime } from "~/effect/client/runtime";
 import { WorkflowAssetService } from "~/lib/workflow/services/workflow-asset-service";
@@ -16,6 +16,9 @@ import { useWorkflowStudioStore } from "./store";
 export function useWorkflowStudioController() {
   const utils = api.useUtils();
   const projectId = useWorkflowStudioStore((state) => state.projectId);
+  const savedLocalDocumentVersion = useWorkflowStudioStore(
+    (state) => state.savedLocalDocumentVersion,
+  );
   const setListItems = useWorkflowStudioStore((state) => state.setListItems);
   const setPrompt = useWorkflowStudioStore((state) => state.setPrompt);
   const setPromptDisplayMode = useWorkflowStudioStore(
@@ -83,6 +86,18 @@ export function useWorkflowStudioController() {
     },
     [projectId, utils],
   );
+
+  useEffect(() => {
+    void savedLocalDocumentVersion;
+
+    if (!projectId) {
+      return;
+    }
+
+    void utils.workflowRuntime.executionCostProjection.invalidate({
+      projectId,
+    });
+  }, [projectId, savedLocalDocumentVersion, utils]);
 
   const runNode = useCallback(async (nodeId: string) => {
     await ClientRuntime.runPromise(
