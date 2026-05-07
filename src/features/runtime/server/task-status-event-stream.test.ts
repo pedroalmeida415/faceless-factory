@@ -1,12 +1,11 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { Effect, Metric, Stream } from "effect";
+import { Effect, Logger, Metric, Stream } from "effect";
 
 import type { TaskStatusEvent } from "~/features/runtime/events/task-status-events";
 import {
   createWorkflowEventPublisher,
   createWorkflowEventSubscriber,
-  parseTaskStatusEventPayload,
   parseTaskStatusEventPayloadEffect,
   workflowEventChannel,
   workflowEventStreamMetrics,
@@ -82,10 +81,14 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
     } as TaskStatusEvent;
 
     const publishExit = await Effect.runPromiseExit(
-      publisher.publishTaskStatusEvent("workflow-123", invalidEvent),
+      publisher
+        .publishTaskStatusEvent("workflow-123", invalidEvent)
+        .pipe(Effect.provide(silentTestLogger)),
     );
     const parseExit = await Effect.runPromiseExit(
-      parseTaskStatusEventPayloadEffect("not-json"),
+      parseTaskStatusEventPayloadEffect("not-json").pipe(
+        Effect.provide(silentTestLogger),
+      ),
     );
 
     assert.equal(publishExit._tag, "Failure");
@@ -102,7 +105,9 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
     const event = taskStatusEvent({ taskRunId: "task-run-publish-failure" });
 
     const exit = await Effect.runPromiseExit(
-      publisher.publishTaskStatusEvent(workflowId, event),
+      publisher
+        .publishTaskStatusEvent(workflowId, event)
+        .pipe(Effect.provide(silentTestLogger)),
     );
 
     assert.equal(exit._tag, "Failure");
@@ -125,7 +130,9 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
     const workflowId = "workflow-subscribe-failure-metric";
 
     const exit = await Effect.runPromiseExit(
-      subscriber.subscribeTaskStatusEvents(workflowId).pipe(Stream.runDrain),
+      subscriber
+        .subscribeTaskStatusEvents(workflowId)
+        .pipe(Stream.runDrain, Effect.provide(silentTestLogger)),
     );
 
     assert.equal(exit._tag, "Failure");
@@ -149,7 +156,11 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
     const exitPromise = Effect.runPromiseExit(
       subscriber
         .subscribeTaskStatusEvents(workflowId)
-        .pipe(Stream.take(1), Stream.runCollect),
+        .pipe(
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.provide(silentTestLogger),
+        ),
     );
 
     await redis.awaitSubscription();
@@ -195,16 +206,37 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
     assert.deepEqual(Array.from(await eventsPromise), [event]);
   });
 
-  test("parses incoming Task Status Event payloads through the runtime schema", () => {
+  test("parses incoming Task Status Event payloads through the runtime schema", async () => {
     const event = taskStatusEvent({ status: "APPROVED" });
 
-    assert.deepEqual(parseTaskStatusEventPayload(JSON.stringify(event)), event);
-    assert.throws(() =>
-      parseTaskStatusEventPayload(
-        JSON.stringify({ ...event, attempt: -1, status: "not-a-status" }),
+    assert.deepEqual(
+      await Effect.runPromise(
+        parseTaskStatusEventPayloadEffect(JSON.stringify(event)).pipe(
+          Effect.provide(silentTestLogger),
+        ),
       ),
+      event,
     );
-    assert.throws(() => parseTaskStatusEventPayload("not-json"));
+    assert.equal(
+      (
+        await Effect.runPromiseExit(
+          parseTaskStatusEventPayloadEffect(
+            JSON.stringify({ ...event, attempt: -1, status: "not-a-status" }),
+          ).pipe(Effect.provide(silentTestLogger)),
+        )
+      )._tag,
+      "Failure",
+    );
+    assert.equal(
+      (
+        await Effect.runPromiseExit(
+          parseTaskStatusEventPayloadEffect("not-json").pipe(
+            Effect.provide(silentTestLogger),
+          ),
+        )
+      )._tag,
+      "Failure",
+    );
   });
 });
 
@@ -223,6 +255,8 @@ function createFakePubSub(options: { readonly failPublish?: boolean } = {}) {
     },
   };
 }
+
+const silentTestLogger = Logger.replace(Logger.defaultLogger, Logger.none);
 
 async function metricCount(
   metric: typeof workflowEventStreamMetrics.parseFailures,

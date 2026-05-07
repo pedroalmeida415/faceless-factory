@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import * as PgDrizzle from "@effect/sql-drizzle/Pg";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 
@@ -18,7 +19,7 @@ import type {
   WorkflowAsset,
 } from "~/features/workflow/types";
 import { assets } from "~/server/database/schema";
-import { db } from "~/server/services/database";
+import { DatabaseService } from "~/server/services/database";
 
 const STORAGE_ROOT = path.join(process.cwd(), ".data", "workflow-assets");
 
@@ -187,7 +188,7 @@ function resolveAssetAbsolutePath(storagePath: string) {
   return absolutePath;
 }
 
-async function insertAssetRecord(params: {
+function insertAssetRecordEffect(params: {
   externalUri: string | null;
   fileName: string;
   id: string;
@@ -201,37 +202,57 @@ async function insertAssetRecord(params: {
   storageKey: string | null;
   storageProvider: string;
 }) {
-  await assertWorkflowProjectAccess({
-    ownerUserId: params.ownerUserId,
-    projectId: params.workflowId,
+  return Effect.gen(function* () {
+    yield* Effect.mapError(
+      assertWorkflowProjectAccess({
+        ownerUserId: params.ownerUserId,
+        projectId: params.workflowId,
+      }),
+      (cause) => toAssetWriteError("Failed to persist asset metadata.", cause),
+    );
+
+    const database = yield* DatabaseService;
+    const [asset] = yield* Effect.mapError(
+      database.run(
+        Effect.gen(function* () {
+          const db = yield* PgDrizzle.PgDrizzle;
+          return yield* db
+            .insert(assets)
+            .values({
+              createdAt: new Date(),
+              externalUri: params.externalUri,
+              fileName: params.fileName,
+              id: params.id,
+              kind: params.kind,
+              mimeType: params.mimeType,
+              model: params.model,
+              ownerUserId: params.ownerUserId,
+              workflowId: params.workflowId,
+              sizeBytes: params.sizeBytes,
+              source: params.source,
+              storageKey: params.storageKey,
+              storageProvider: params.storageProvider,
+            })
+            .returning();
+        }),
+      ),
+      (cause) =>
+        new WorkflowStorageError({
+          message: "Failed to persist asset metadata.",
+          cause,
+        }),
+    );
+
+    if (!asset) {
+      return yield* Effect.fail(
+        new WorkflowStorageError({
+          message: "Failed to persist asset metadata.",
+        }),
+      );
+    }
+
+    return toWorkflowAsset(asset);
   });
-
-  const [asset] = await db
-    .insert(assets)
-    .values({
-      createdAt: new Date(),
-      externalUri: params.externalUri,
-      fileName: params.fileName,
-      id: params.id,
-      kind: params.kind,
-      mimeType: params.mimeType,
-      model: params.model,
-      ownerUserId: params.ownerUserId,
-      workflowId: params.workflowId,
-      sizeBytes: params.sizeBytes,
-      source: params.source,
-      storageKey: params.storageKey,
-      storageProvider: params.storageProvider,
-    })
-    .returning();
-
-  if (!asset) {
-    throw new WorkflowStorageError({
-      message: "Failed to persist asset metadata.",
-    });
-  }
-
-  return toWorkflowAsset(asset);
 }
 
 function listWorkflowAssetsEffect(params: {
@@ -239,35 +260,38 @@ function listWorkflowAssetsEffect(params: {
   workflowId: string;
 }) {
   return Effect.gen(function* () {
-    yield* Effect.tryPromise({
-      try: () =>
-        assertWorkflowProjectAccess({
-          ownerUserId: params.ownerUserId,
-          projectId: params.workflowId,
-        }),
-      catch: (cause) =>
-        toAssetWriteError("Failed to load project assets.", cause),
-    });
+    yield* Effect.mapError(
+      assertWorkflowProjectAccess({
+        ownerUserId: params.ownerUserId,
+        projectId: params.workflowId,
+      }),
+      (cause) => toAssetWriteError("Failed to load project assets.", cause),
+    );
 
-    const projectAssets = yield* Effect.tryPromise({
-      try: () =>
-        db
-          .select()
-          .from(assets)
-          .where(
-            and(
-              eq(assets.ownerUserId, params.ownerUserId),
-              eq(assets.workflowId, params.workflowId),
-              isNull(assets.deletedAt),
-            ),
-          )
-          .orderBy(desc(assets.createdAt)),
-      catch: (cause) =>
+    const database = yield* DatabaseService;
+    const projectAssets = yield* Effect.mapError(
+      database.run(
+        Effect.gen(function* () {
+          const db = yield* PgDrizzle.PgDrizzle;
+          return yield* db
+            .select()
+            .from(assets)
+            .where(
+              and(
+                eq(assets.ownerUserId, params.ownerUserId),
+                eq(assets.workflowId, params.workflowId),
+                isNull(assets.deletedAt),
+              ),
+            )
+            .orderBy(desc(assets.createdAt));
+        }),
+      ),
+      (cause) =>
         new WorkflowStorageError({
           message: "Failed to load project assets.",
           cause,
         }),
-    });
+    );
 
     return projectAssets.map(toWorkflowAsset);
   });
@@ -284,15 +308,13 @@ function saveBufferAsAssetEffect({
   workflowId,
 }: SaveBufferAsAssetOptions) {
   return Effect.gen(function* () {
-    yield* Effect.tryPromise({
-      try: () =>
-        assertWorkflowProjectAccess({
-          ownerUserId,
-          projectId: workflowId,
-        }),
-      catch: (cause) =>
-        toAssetWriteError("Failed to persist asset metadata.", cause),
-    });
+    yield* Effect.mapError(
+      assertWorkflowProjectAccess({
+        ownerUserId,
+        projectId: workflowId,
+      }),
+      (cause) => toAssetWriteError("Failed to persist asset metadata.", cause),
+    );
 
     const extension = inferExtension(fileName, mimeType);
     const baseName = sanitizeBaseName(path.basename(fileName, extension));
@@ -329,24 +351,19 @@ function saveBufferAsAssetEffect({
         }),
     });
 
-    return yield* Effect.tryPromise({
-      try: () =>
-        insertAssetRecord({
-          externalUri: null,
-          fileName: `${baseName}${extension}`,
-          id: randomUUID(),
-          kind,
-          mimeType,
-          model,
-          ownerUserId,
-          workflowId,
-          sizeBytes: buffer.byteLength,
-          source,
-          storageKey,
-          storageProvider: "local",
-        }),
-      catch: (cause) =>
-        toAssetWriteError("Failed to persist asset metadata.", cause),
+    return yield* insertAssetRecordEffect({
+      externalUri: null,
+      fileName: `${baseName}${extension}`,
+      id: randomUUID(),
+      kind,
+      mimeType,
+      model,
+      ownerUserId,
+      workflowId,
+      sizeBytes: buffer.byteLength,
+      source,
+      storageKey,
+      storageProvider: "local",
     });
   });
 }
@@ -439,24 +456,19 @@ function saveExternalAssetEffect({
   source,
   url,
 }: SaveExternalAssetOptions) {
-  return Effect.tryPromise({
-    try: () =>
-      insertAssetRecord({
-        externalUri: url,
-        fileName,
-        id: randomUUID(),
-        kind,
-        mimeType,
-        model,
-        ownerUserId,
-        workflowId,
-        sizeBytes: 0,
-        source,
-        storageKey: null,
-        storageProvider: "external",
-      }),
-    catch: (cause) =>
-      toAssetWriteError("Failed to persist external asset metadata.", cause),
+  return insertAssetRecordEffect({
+    externalUri: url,
+    fileName,
+    id: randomUUID(),
+    kind,
+    mimeType,
+    model,
+    ownerUserId,
+    workflowId,
+    sizeBytes: 0,
+    source,
+    storageKey: null,
+    storageProvider: "external",
   });
 }
 
@@ -493,25 +505,30 @@ function readStoredAssetEffect(asset: Pick<WorkflowAsset, "storagePath">) {
 
 function readAssetByIdEffect(params: { assetId: string; userId: string }) {
   return Effect.gen(function* () {
-    const [asset] = yield* Effect.tryPromise({
-      try: () =>
-        db
-          .select()
-          .from(assets)
-          .where(
-            and(
-              isNull(assets.deletedAt),
-              eq(assets.id, params.assetId),
-              eq(assets.ownerUserId, params.userId),
-            ),
-          )
-          .limit(1),
-      catch: (cause) =>
+    const database = yield* DatabaseService;
+    const [asset] = yield* Effect.mapError(
+      database.run(
+        Effect.gen(function* () {
+          const db = yield* PgDrizzle.PgDrizzle;
+          return yield* db
+            .select()
+            .from(assets)
+            .where(
+              and(
+                isNull(assets.deletedAt),
+                eq(assets.id, params.assetId),
+                eq(assets.ownerUserId, params.userId),
+              ),
+            )
+            .limit(1);
+        }),
+      ),
+      (cause) =>
         new WorkflowStorageError({
           message: "Failed to load asset metadata.",
           cause,
         }),
-    });
+    );
 
     if (!asset) {
       return yield* Effect.fail(
@@ -651,35 +668,67 @@ export class StorageService extends Context.Tag("StorageService")<
     >;
   }
 >() {
-  static readonly Live = Layer.succeed(this, {
-    listWorkflowAssets: listWorkflowAssetsEffect,
-    materializeProviderMediaInput: materializeProviderMediaInputEffect,
-    readAssetById: readAssetByIdEffect,
-    readStoredAsset: readStoredAssetEffect,
-    saveBufferAsAsset: saveBufferAsAssetEffect,
-    saveExternalAsset: saveExternalAssetEffect,
-    stageGeneratedBufferAsArtifact: stageGeneratedBufferAsArtifactEffect,
-    saveFormFileAsAsset: (options) =>
-      Effect.gen(function* () {
-        const buffer = yield* Effect.tryPromise({
-          try: async () => Buffer.from(await options.file.arrayBuffer()),
-          catch: (cause) =>
-            new WorkflowStorageError({
-              message: "Failed to read uploaded file.",
-              cause,
-            }),
-        });
+  static readonly Live = Layer.effect(
+    this,
+    Effect.map(DatabaseService, (database) => ({
+      listWorkflowAssets: (options) =>
+        Effect.provideService(
+          listWorkflowAssetsEffect(options),
+          DatabaseService,
+          database,
+        ),
+      materializeProviderMediaInput: (options) =>
+        Effect.provideService(
+          materializeProviderMediaInputEffect(options),
+          DatabaseService,
+          database,
+        ),
+      readAssetById: (options) =>
+        Effect.provideService(
+          readAssetByIdEffect(options),
+          DatabaseService,
+          database,
+        ),
+      readStoredAsset: readStoredAssetEffect,
+      saveBufferAsAsset: (options) =>
+        Effect.provideService(
+          saveBufferAsAssetEffect(options),
+          DatabaseService,
+          database,
+        ),
+      saveExternalAsset: (options) =>
+        Effect.provideService(
+          saveExternalAssetEffect(options),
+          DatabaseService,
+          database,
+        ),
+      stageGeneratedBufferAsArtifact: stageGeneratedBufferAsArtifactEffect,
+      saveFormFileAsAsset: (options) =>
+        Effect.provideService(
+          Effect.gen(function* () {
+            const buffer = yield* Effect.tryPromise({
+              try: async () => Buffer.from(await options.file.arrayBuffer()),
+              catch: (cause) =>
+                new WorkflowStorageError({
+                  message: "Failed to read uploaded file.",
+                  cause,
+                }),
+            });
 
-        return yield* saveBufferAsAssetEffect({
-          buffer,
-          fileName: options.file.name,
-          kind: options.kind,
-          mimeType: options.file.type || guessMimeType(options.file.name),
-          model: options.model,
-          ownerUserId: options.ownerUserId,
-          workflowId: options.workflowId,
-          source: options.source,
-        });
-      }),
-  });
+            return yield* saveBufferAsAssetEffect({
+              buffer,
+              fileName: options.file.name,
+              kind: options.kind,
+              mimeType: options.file.type || guessMimeType(options.file.name),
+              model: options.model,
+              ownerUserId: options.ownerUserId,
+              workflowId: options.workflowId,
+              source: options.source,
+            });
+          }),
+          DatabaseService,
+          database,
+        ),
+    })),
+  );
 }

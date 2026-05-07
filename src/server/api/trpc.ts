@@ -12,14 +12,13 @@ import superjson from "superjson";
 import { ZodError } from "zod";
 
 import { auth } from "~/features/auth/server/config";
-import { db } from "~/server/services/database";
 
 /**
  * 1. CONTEXT
  *
  * This section defines the "contexts" that are available in the backend API.
  *
- * These allow you to access things when processing a request, like the database, the session, etc.
+ * These allow you to access caller metadata when processing a request, like headers and session.
  *
  * This helper generates the "internals" for a tRPC context. The API handler and RSC clients each
  * wrap this and provides the required context.
@@ -31,7 +30,6 @@ export const createTRPCContext = async (opts: { headers: Headers }) => {
     headers: opts.headers,
   });
   return {
-    db,
     session,
     ...opts,
   };

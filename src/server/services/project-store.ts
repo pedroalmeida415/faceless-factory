@@ -7,6 +7,7 @@ import {
 } from "~/features/workflow/errors";
 import type { WorkflowProject } from "~/features/workflow/project";
 import { getWorkflowProject } from "~/features/workflow/server/projects";
+import type { DatabaseService } from "~/server/services/database";
 
 type ProjectStoreError =
   | WorkflowAuthorizationError
@@ -30,14 +31,11 @@ export class ProjectStoreService extends Context.Tag("ProjectStoreService")<
     readonly getProject: (params: {
       ownerUserId: string;
       projectId: string;
-    }) => Effect.Effect<WorkflowProject, ProjectStoreError>;
+    }) => Effect.Effect<WorkflowProject, ProjectStoreError, DatabaseService>;
   }
 >() {
   static readonly Live = Layer.succeed(this, {
     getProject: (params) =>
-      Effect.tryPromise({
-        try: () => getWorkflowProject(params),
-        catch: toProjectStoreError,
-      }),
+      Effect.mapError(getWorkflowProject(params), toProjectStoreError),
   });
 }

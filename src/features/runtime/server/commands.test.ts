@@ -165,6 +165,7 @@ describe("RuntimeCommands", () => {
         publishTaskStatusEvent: () =>
           Effect.fail(new Error("redis unavailable")),
       },
+      quietTelemetryLayer,
     );
 
     const outcome = await Effect.runPromise(
@@ -365,6 +366,7 @@ function makeRuntime(
       event: unknown,
     ) => Effect.Effect<void, unknown>;
   }> = {},
+  telemetryLayer: Layer.Layer<TelemetryService> = TelemetryService.Local,
 ) {
   const repository: Repository = {
     approveTaskRun: () => staleTaskRunTransition(),
@@ -397,7 +399,7 @@ function makeRuntime(
                 publishTaskStatusEvent: () => Effect.void,
                 ...eventPublisherOverrides,
               }),
-              TelemetryService.Local,
+              telemetryLayer,
             ),
           ),
         ),
@@ -405,6 +407,16 @@ function makeRuntime(
     ),
   );
 }
+
+const quietTelemetryLayer = Layer.succeed(TelemetryService, {
+  config: {
+    enabled: false,
+    exporterEndpoint: null,
+    serviceName: "faceless-factory-server-test",
+  },
+  postCommitDeliveryAttemptFailed: () => Effect.void,
+  postCommitDeliveryExhausted: () => Effect.void,
+});
 
 function makeRuntimeWithPostCommitWork(
   repositoryOverrides: Partial<Repository>,

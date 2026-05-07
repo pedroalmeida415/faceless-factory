@@ -1,6 +1,6 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { Effect } from "effect";
+import { Effect, Logger } from "effect";
 
 import {
   buildRuntimeCompletionSettlementJobPayload,
@@ -195,7 +195,13 @@ describe("WorkflowQueueAdapter", () => {
       workflowId: "workflow-1",
     });
 
-    const exit = await Effect.runPromiseExit(adapter.enqueueExecutionJob(job));
+    const exit = await Effect.runPromiseExit(
+      adapter
+        .enqueueExecutionJob(job)
+        .pipe(
+          Effect.provide(Logger.replace(Logger.defaultLogger, Logger.none)),
+        ),
+    );
 
     assert.equal(exit._tag, "Failure");
     assert.match(String(exit.cause), /WorkflowQueuePublishError/);

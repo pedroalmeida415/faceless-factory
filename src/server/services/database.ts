@@ -319,6 +319,29 @@ create table credit_ledger_entries (
   created_at timestamp not null default now()
 );
 
+create table subscription (
+  id text primary key,
+  plan text not null,
+  reference_id text not null references "user"(id) on delete cascade,
+  stripe_customer_id text,
+  stripe_subscription_id text,
+  status text not null default 'incomplete',
+  period_start timestamp,
+  period_end timestamp,
+  cancel_at_period_end boolean default false,
+  cancel_at timestamp,
+  canceled_at timestamp,
+  ended_at timestamp,
+  seats bigint,
+  trial_start timestamp,
+  trial_end timestamp,
+  billing_interval text,
+  stripe_schedule_id text
+);
+
+create index subscription_reference_status_idx on subscription (reference_id, status);
+create index subscription_stripe_subscription_id_idx on subscription (stripe_subscription_id);
+
 create table assets (
   id text primary key,
   owner_user_id text not null references "user"(id) on delete cascade,

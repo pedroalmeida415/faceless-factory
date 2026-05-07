@@ -40,12 +40,19 @@ const RuntimePostCommitWorkLive = RuntimePostCommitWork.Live.pipe(
   Layer.provide(Layer.mergeAll(RuntimeDependenciesLive, TelemetryService.Live)),
 );
 
+const StorageServiceLive = StorageService.Live.pipe(
+  Layer.provide(DatabaseServiceLive),
+);
+const CreditsServiceLive = CreditsService.Live.pipe(
+  Layer.provide(DatabaseServiceLive),
+);
+
 export const ServerRuntime = ManagedRuntime.make(
   Layer.mergeAll(
-    CreditsService.Live,
+    CreditsServiceLive,
     ProjectStoreService.Live,
-    StorageService.Live,
-    VertexAiService.Live.pipe(Layer.provide(StorageService.Live)),
+    StorageServiceLive,
+    VertexAiService.Live.pipe(Layer.provide(StorageServiceLive)),
     DatabaseServiceLive,
     RuntimeDependenciesLive,
     TelemetryService.Live,

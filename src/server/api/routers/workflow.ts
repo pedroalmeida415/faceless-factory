@@ -11,7 +11,6 @@ import { toTRPCError } from "~/server/api/errors";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { ServerRuntime } from "~/server/effect";
 import { CreditsService } from "~/server/services/credits";
-import { DatabaseServiceLive } from "~/server/services/database";
 import { StorageService } from "~/server/services/storage";
 
 const workflowAssetSchema = z.object({
@@ -82,11 +81,11 @@ export const workflowRouter = createTRPCRouter({
         const lockedNodeIds = [
           ...new Set(
             (
-              await Effect.runPromise(
+              await ServerRuntime.runPromise(
                 getTaskRunProjectionForWorkflow({
                   ownerUserId: ctx.session.user.id,
                   workflowId: input.projectId,
-                }).pipe(Effect.provide(DatabaseServiceLive)),
+                }),
               )
             ).flatMap((slot) =>
               activeRuntimeTaskStatuses.has(slot.status) ? [slot.nodeId] : [],
@@ -94,13 +93,15 @@ export const workflowRouter = createTRPCRouter({
           ),
         ];
 
-        return await saveWorkflowProjectDocument({
-          document: input.document,
-          documentRevision: input.documentRevision,
-          lockedNodeIds,
-          ownerUserId: ctx.session.user.id,
-          projectId: input.projectId,
-        });
+        return await ServerRuntime.runPromise(
+          saveWorkflowProjectDocument({
+            document: input.document,
+            documentRevision: input.documentRevision,
+            lockedNodeIds,
+            ownerUserId: ctx.session.user.id,
+            projectId: input.projectId,
+          }),
+        );
       } catch (error) {
         throw toTRPCError(error);
       }

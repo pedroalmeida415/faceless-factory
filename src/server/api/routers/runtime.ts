@@ -1,5 +1,6 @@
+import * as PgDrizzle from "@effect/sql-drizzle/Pg";
 import { TRPCError } from "@trpc/server";
-import { type SQL, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Effect } from "effect";
 import { z } from "zod";
 import { planWorkflowRun } from "~/features/runtime/planning/workflow-run-planner";
@@ -24,11 +25,10 @@ import {
   getWorkflowProject,
 } from "~/features/workflow/server/projects";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
+import { taskRuns, user } from "~/server/database/schema";
 import { ServerRuntime } from "~/server/effect";
 import { createRedisSubscriber } from "~/server/redis";
-import { DatabaseServiceLive, db } from "~/server/services/database";
-
-type QueryRow = Record<string, unknown>;
+import { DatabaseService } from "~/server/services/database";
 
 const runTaskSlotTargetSchema = z.object({
   itemIndex: z.number().int().nonnegative(),
@@ -58,10 +58,12 @@ export const runtimeRouter = createTRPCRouter({
   executionCostProjection: protectedProcedure
     .input(z.object({ projectId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
-      const project = await getWorkflowProject({
-        ownerUserId: ctx.session.user.id,
-        projectId: input.projectId,
-      }).catch(throwTRPCError);
+      const project = await ServerRuntime.runPromise(
+        getWorkflowProject({
+          ownerUserId: ctx.session.user.id,
+          projectId: input.projectId,
+        }),
+      ).catch(throwTRPCError);
 
       return buildExecutionCostProjection(project.document);
     }),
@@ -70,15 +72,17 @@ export const runtimeRouter = createTRPCRouter({
     .input(runInputSchema)
     .query(async ({ ctx, input }) => {
       const ownerUserId = ctx.session.user.id;
-      const project = await getWorkflowProject({
-        ownerUserId,
-        projectId: input.projectId,
-      }).catch(throwTRPCError);
-      const planningState = await Effect.runPromise(
+      const project = await ServerRuntime.runPromise(
+        getWorkflowProject({
+          ownerUserId,
+          projectId: input.projectId,
+        }),
+      ).catch(throwTRPCError);
+      const planningState = await ServerRuntime.runPromise(
         getPlanningStateForWorkflow({
           ownerUserId,
           workflowId: project.id,
-        }).pipe(Effect.provide(DatabaseServiceLive)),
+        }),
       ).catch(throwTRPCError);
       const planning = planWorkflowRun({
         ...planningState,
@@ -101,7 +105,9 @@ export const runtimeRouter = createTRPCRouter({
         });
       }
 
-      const currentCreditBalance = await getCurrentCreditBalance(ownerUserId);
+      const currentCreditBalance = await ServerRuntime.runPromise(
+        getCurrentCreditBalance(ownerUserId),
+      ).catch(throwTRPCError);
 
       return {
         ...planning.value.runCostPreview,
@@ -118,15 +124,17 @@ export const runtimeRouter = createTRPCRouter({
     .input(runInputSchema)
     .mutation(async ({ ctx, input }) => {
       const ownerUserId = ctx.session.user.id;
-      const project = await getWorkflowProject({
-        ownerUserId,
-        projectId: input.projectId,
-      }).catch(throwTRPCError);
-      const planningState = await Effect.runPromise(
+      const project = await ServerRuntime.runPromise(
+        getWorkflowProject({
+          ownerUserId,
+          projectId: input.projectId,
+        }),
+      ).catch(throwTRPCError);
+      const planningState = await ServerRuntime.runPromise(
         getPlanningStateForWorkflow({
           ownerUserId,
           workflowId: project.id,
-        }).pipe(Effect.provide(DatabaseServiceLive)),
+        }),
       ).catch(throwTRPCError);
       const result = await runRuntimeCommand((commands) =>
         commands.startWorkflowRun({
@@ -169,10 +177,12 @@ export const runtimeRouter = createTRPCRouter({
   taskEvents: protectedProcedure
     .input(taskEventsInputSchema)
     .subscription(async function* ({ ctx, input, signal }) {
-      await assertWorkflowProjectAccess({
-        ownerUserId: ctx.session.user.id,
-        projectId: input.projectId,
-      }).catch(throwTRPCError);
+      await ServerRuntime.runPromise(
+        assertWorkflowProjectAccess({
+          ownerUserId: ctx.session.user.id,
+          projectId: input.projectId,
+        }),
+      ).catch(throwTRPCError);
 
       const subscriber = await createRedisSubscriber().catch(throwTRPCError);
       const events: string[] = [];
@@ -222,16 +232,18 @@ export const runtimeRouter = createTRPCRouter({
     .input(taskEventsInputSchema)
     .query(async ({ ctx, input }) => {
       const ownerUserId = ctx.session.user.id;
-      await assertWorkflowProjectAccess({
-        ownerUserId,
-        projectId: input.projectId,
-      }).catch(throwTRPCError);
+      await ServerRuntime.runPromise(
+        assertWorkflowProjectAccess({
+          ownerUserId,
+          projectId: input.projectId,
+        }),
+      ).catch(throwTRPCError);
 
-      return Effect.runPromise(
+      return ServerRuntime.runPromise(
         getTaskRunProjectionForWorkflow({
           ownerUserId,
           workflowId: input.projectId,
-        }).pipe(Effect.provide(DatabaseServiceLive)),
+        }),
       ).catch(throwTRPCError);
     }),
 });
@@ -241,16 +253,20 @@ async function decideTaskRun(
   input: z.infer<typeof taskRunDecisionInputSchema>,
   decision: "approve" | "cancel" | "reject",
 ) {
-  await assertWorkflowProjectAccess({
-    ownerUserId,
-    projectId: input.projectId,
-  }).catch(throwTRPCError);
-  await assertTaskRunBelongsToProject(db, {
-    attempt: input.attempt,
-    ownerUserId,
-    taskRunId: input.taskRunId,
-    workflowId: input.projectId,
-  }).catch(throwTRPCError);
+  await ServerRuntime.runPromise(
+    assertWorkflowProjectAccess({
+      ownerUserId,
+      projectId: input.projectId,
+    }),
+  ).catch(throwTRPCError);
+  await ServerRuntime.runPromise(
+    assertTaskRunBelongsToProject({
+      attempt: input.attempt,
+      ownerUserId,
+      taskRunId: input.taskRunId,
+      workflowId: input.projectId,
+    }),
+  ).catch(throwTRPCError);
 
   const command = {
     attempt: input.attempt,
@@ -276,33 +292,41 @@ async function decideTaskRun(
   );
 }
 
-async function assertTaskRunBelongsToProject(
-  dbLike: { readonly execute: (query: SQL) => Promise<unknown> },
-  input: {
-    readonly attempt: number;
-    readonly ownerUserId: string;
-    readonly taskRunId: string;
-    readonly workflowId: string;
-  },
-) {
-  const rows = rowsFromResult(
-    await dbLike.execute(sql`
-      select id
-      from task_runs
-      where id = ${input.taskRunId}
-        and owner_user_id = ${input.ownerUserId}
-        and workflow_id = ${input.workflowId}
-        and attempt = ${input.attempt}
-      limit 1
-    `),
-  );
+function assertTaskRunBelongsToProject(input: {
+  readonly attempt: number;
+  readonly ownerUserId: string;
+  readonly taskRunId: string;
+  readonly workflowId: string;
+}) {
+  return Effect.gen(function* () {
+    const database = yield* DatabaseService;
+    const rows = yield* database.run(
+      Effect.gen(function* () {
+        const db = yield* PgDrizzle.PgDrizzle;
+        return yield* db
+          .select({ id: taskRuns.id })
+          .from(taskRuns)
+          .where(
+            and(
+              eq(taskRuns.id, input.taskRunId),
+              eq(taskRuns.ownerUserId, input.ownerUserId),
+              eq(taskRuns.workflowId, input.workflowId),
+              eq(taskRuns.attempt, input.attempt),
+            ),
+          )
+          .limit(1);
+      }),
+    );
 
-  if (!rows[0]) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "Task Run was not found for this workflow.",
-    });
-  }
+    if (!rows[0]) {
+      return yield* Effect.fail(
+        new TRPCError({
+          code: "NOT_FOUND",
+          message: "Task Run was not found for this workflow.",
+        }),
+      );
+    }
+  });
 }
 
 async function runRuntimeCommand<T>(
@@ -361,24 +385,31 @@ function isCommandError(error: unknown): error is RuntimeCommandError {
   );
 }
 
-async function getCurrentCreditBalance(ownerUserId: string) {
-  const rows = rowsFromResult(
-    await db.execute(sql`
-      select credit_balance as "creditBalance"
-      from "user"
-      where id = ${ownerUserId}
-      limit 1
-    `),
-  );
-  const balance = rows[0]?.creditBalance;
-  if (typeof balance === "number") {
-    return balance;
-  }
-  if (typeof balance === "string" && /^-?\d+$/.test(balance)) {
-    return Number(balance);
-  }
+function getCurrentCreditBalance(ownerUserId: string) {
+  return Effect.gen(function* () {
+    const database = yield* DatabaseService;
+    const rows = yield* database.run(
+      Effect.gen(function* () {
+        const db = yield* PgDrizzle.PgDrizzle;
+        return yield* db
+          .select({ creditBalance: user.creditBalance })
+          .from(user)
+          .where(eq(user.id, ownerUserId))
+          .limit(1);
+      }),
+    );
+    const balance = rows[0]?.creditBalance;
+    if (typeof balance === "number") {
+      return balance;
+    }
+    if (typeof balance === "string" && /^-?\d+$/.test(balance)) {
+      return Number(balance);
+    }
 
-  throw new TRPCError({ code: "NOT_FOUND", message: "User was not found." });
+    return yield* Effect.fail(
+      new TRPCError({ code: "NOT_FOUND", message: "User was not found." }),
+    );
+  });
 }
 
 function throwTRPCError(error: unknown): never {
@@ -392,20 +423,4 @@ function throwTRPCError(error: unknown): never {
     message:
       error instanceof Error ? error.message : "Workflow runtime failed.",
   });
-}
-
-function rowsFromResult(result: unknown): readonly QueryRow[] {
-  if (Array.isArray(result)) {
-    return result.filter(isQueryRow);
-  }
-
-  if (isQueryRow(result) && Array.isArray(result.rows)) {
-    return result.rows.filter(isQueryRow);
-  }
-
-  return [];
-}
-
-function isQueryRow(value: unknown): value is QueryRow {
-  return typeof value === "object" && value !== null;
 }

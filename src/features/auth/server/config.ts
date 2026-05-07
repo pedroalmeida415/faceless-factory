@@ -9,6 +9,7 @@ import {
   handleSuccessfulTopUpPayment,
   syncSubscriptionCredits,
 } from "~/features/billing/server/service";
+import { ServerRuntime } from "~/server/effect";
 import { db } from "~/server/services/database";
 import { stripeClient } from "~/server/services/stripe";
 
@@ -42,7 +43,9 @@ export const auth = betterAuth({
           return;
         }
 
-        await handleSuccessfulTopUpPayment(event.data.object);
+        await ServerRuntime.runPromise(
+          handleSuccessfulTopUpPayment(event.data.object),
+        );
       },
       stripeClient,
       stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
@@ -51,13 +54,13 @@ export const auth = betterAuth({
           referenceId === user.id,
         enabled: true,
         onSubscriptionComplete: async ({ subscription }) => {
-          await syncSubscriptionCredits(subscription);
+          await ServerRuntime.runPromise(syncSubscriptionCredits(subscription));
         },
         onSubscriptionCreated: async ({ subscription }) => {
-          await syncSubscriptionCredits(subscription);
+          await ServerRuntime.runPromise(syncSubscriptionCredits(subscription));
         },
         onSubscriptionUpdate: async ({ subscription }) => {
-          await syncSubscriptionCredits(subscription);
+          await ServerRuntime.runPromise(syncSubscriptionCredits(subscription));
         },
         plans: BILLING_PLANS.map((plan) => ({
           annualDiscountLookupKey: plan.annualPriceLookupKey,
