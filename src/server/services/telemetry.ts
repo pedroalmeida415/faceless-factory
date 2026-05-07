@@ -115,14 +115,16 @@ export class TelemetryService extends Context.Tag("TelemetryService")<
     serviceName: "faceless-factory-server",
   });
 
+  static readonly enabledByEnv = env.RUNTIME_OTEL_ENABLED === "true";
+
   static readonly Live = TelemetryService.layerFromConfig({
     enabled:
-      env.RUNTIME_OTEL_ENABLED === "true" &&
+      TelemetryService.enabledByEnv &&
       Boolean(env.OTEL_EXPORTER_OTLP_ENDPOINT) &&
       env.NODE_ENV !== "test" &&
       env.CI !== "true",
     exporterEndpoint:
-      env.RUNTIME_OTEL_ENABLED === "true" &&
+      TelemetryService.enabledByEnv &&
       Boolean(env.OTEL_EXPORTER_OTLP_ENDPOINT) &&
       env.NODE_ENV !== "test" &&
       env.CI !== "true"

@@ -25,7 +25,10 @@ import { VertexAiService } from "~/server/services/vertex";
 
 const RuntimeDependenciesLive = Layer.mergeAll(
   RuntimeRepositoryLive.pipe(Layer.provide(DatabaseServiceLive)),
-  Layer.succeed(QueueService, createWorkflowQueueAdapter(getWorkflowQueue())),
+  Layer.effect(
+    QueueService,
+    Effect.sync(() => createWorkflowQueueAdapter(getWorkflowQueue())),
+  ),
   Layer.effect(
     EventPublisherService,
     Effect.tryPromise({

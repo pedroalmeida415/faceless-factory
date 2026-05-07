@@ -1,17 +1,28 @@
 import { Worker, type WorkerOptions } from "bullmq";
+import { Effect } from "effect";
 import { sanitizeRuntimeProcessorOutcome } from "~/features/runtime/server/command-outcome";
 import type {
   EventPublisherServiceForCommands,
   HandleWakeUpCallCommand,
   QueueServiceForCommands,
 } from "~/features/runtime/server/command-types";
+import {
+  EventPublisherService,
+  RuntimeCommands,
+} from "~/features/runtime/server/commands";
 import type {
   RuntimeExecutionWorkerRepository,
   RuntimeProviderExecutor,
   RuntimeSettlementQueueForWorker,
 } from "~/features/runtime/server/execution-worker";
 import { createRuntimeExecutionWorker } from "~/features/runtime/server/execution-worker";
+import { createRuntimeProviderExecutor } from "~/features/runtime/server/provider-executor";
+import { createRuntimeRepositoryFromDatabase } from "~/features/runtime/server/repository";
+import { ServerRuntime } from "~/server/effect";
+import { DatabaseService } from "~/server/services/database";
 import {
+  createWorkflowQueueAdapter,
+  getWorkflowQueue,
   parseRuntimeJob,
   RUNTIME_COMPLETION_SETTLEMENT_JOB_NAME,
   RUNTIME_EXECUTION_JOB_NAME,
@@ -28,6 +39,7 @@ import {
   RUNTIME_QUEUE_WORKER_CONCURRENCY,
   workflowQueueConnection,
 } from "~/server/services/queue-config";
+import { VertexAiService } from "~/server/services/vertex";
 
 export const runtimeWorkerOptions: Omit<WorkerOptions, "connection"> = {
   concurrency: RUNTIME_QUEUE_WORKER_CONCURRENCY,
@@ -129,4 +141,76 @@ export function createRuntimeWorker(input: {
       ...runtimeWorkerOptions,
     },
   );
+}
+
+async function startRuntimeWorker() {
+  const worker = await ServerRuntime.runPromise(
+    Effect.gen(function* () {
+      const commands = yield* RuntimeCommands;
+      const database = yield* DatabaseService;
+      const eventPublisher = yield* EventPublisherService;
+      const vertexAi = yield* VertexAiService;
+
+      return createRuntimeWorker({
+        eventPublisher,
+        orchestrator: {
+          handleWakeUpCall: (command) =>
+            ServerRuntime.runPromise(commands.handleWakeUpCall(command)),
+          settleWorkerCompletion: (job) =>
+            ServerRuntime.runPromise(commands.settleWorkerCompletion(job)),
+          settleWorkerFailure: (job) =>
+            ServerRuntime.runPromise(commands.settleWorkerFailure(job)),
+        },
+        providerExecutor: createRuntimeProviderExecutor({ vertexAi }),
+        queue: createWorkflowQueueAdapter(getWorkflowQueue()),
+        repository: createRuntimeRepositoryFromDatabase(database),
+      });
+    }),
+  );
+
+  worker.on("completed", (job) => {
+    console.info(`Runtime job ${job.id} completed.`);
+  });
+
+  worker.on("failed", (job, error) => {
+    console.error(`Runtime job ${job?.id ?? "unknown"} failed`, error);
+  });
+
+  worker.on("error", (error) => {
+    console.error("Runtime worker error", error);
+  });
+
+  await worker.waitUntilReady();
+  console.info("Runtime worker ready", {
+    concurrency: RUNTIME_QUEUE_WORKER_CONCURRENCY,
+    queue: RUNTIME_QUEUE_NAME,
+  });
+
+  let shuttingDown = false;
+  const shutdown = async (signal: NodeJS.Signals) => {
+    if (shuttingDown) {
+      return;
+    }
+
+    shuttingDown = true;
+    console.info("Runtime worker shutting down", { signal });
+    await worker.close();
+    await ServerRuntime.dispose();
+  };
+
+  process.once("SIGINT", (signal) => {
+    void shutdown(signal).finally(() => process.exit(0));
+  });
+  process.once("SIGTERM", (signal) => {
+    void shutdown(signal).finally(() => process.exit(0));
+  });
+
+  return worker;
+}
+
+if (import.meta.main) {
+  startRuntimeWorker().catch((cause: unknown) => {
+    console.error("Runtime worker failed to start", cause);
+    process.exit(1);
+  });
 }
