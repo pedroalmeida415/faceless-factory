@@ -157,7 +157,7 @@ const createTrpcClient = () =>
       return [
         loggerLink({
           enabled: (op) =>
-            env.NODE_ENV === "development" ||
+            env.NEXT_PUBLIC_NODE_ENV === "development" ||
             (op.direction === "down" && op.result instanceof Error),
           logger: (props) => {
             logTrpcOperation(props);
@@ -239,6 +239,6 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
 
 function getBaseUrl() {
   if (typeof window !== "undefined") return window.location.origin;
-  if (env.VERCEL_URL) return `https://${env.VERCEL_URL}`;
-  return `http://localhost:${env.PORT ?? 3000}`;
+  // if (env.NEXT_PUBLIC_VERCEL_URL) return `https://${env.NEXT_PUBLIC_VERCEL_URL}`;
+  return `http://localhost:${env.NEXT_PUBLIC_PORT ?? 3000}`;
 }

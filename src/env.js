@@ -40,7 +40,10 @@ export const env = createEnv({
    * `NEXT_PUBLIC_`.
    */
   client: {
-    // NEXT_PUBLIC_CLIENTVAR: z.string(),
+    NEXT_PUBLIC_NODE_ENV: z
+      .enum(["development", "test", "production"])
+      .default("development"),
+    NEXT_PUBLIC_PORT: z.string().optional(),
   },
 
   /**
@@ -69,6 +72,8 @@ export const env = createEnv({
     VERCEL_URL: process.env.VERCEL_URL,
     RUNTIME_OTEL_ENABLED: process.env.RUNTIME_OTEL_ENABLED,
     NODE_ENV: process.env.NODE_ENV,
+    NEXT_PUBLIC_NODE_ENV: process.env.NODE_ENV,
+    NEXT_PUBLIC_PORT: process.env.PORT,
   },
   /**
    * Run `build` or `dev` with `SKIP_ENV_VALIDATION` to skip env validation. This is especially
