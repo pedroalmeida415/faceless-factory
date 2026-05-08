@@ -32,118 +32,6 @@ const getQueryClient = () => {
   return clientQueryClientSingleton;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function summarizeWorkflowDocument(value: unknown) {
-  if (!isRecord(value)) {
-    return null;
-  }
-
-  const { edges, nodes, version } = value;
-  if (!Array.isArray(nodes) || !Array.isArray(edges)) {
-    return null;
-  }
-
-  const assetCount = nodes.reduce((total, node) => {
-    if (!isRecord(node)) {
-      return total;
-    }
-
-    const assets = Array.isArray(node.assets) ? node.assets.length : 0;
-    const outputs = Array.isArray(node.outputs) ? node.outputs.length : 0;
-
-    return total + assets + outputs;
-  }, 0);
-
-  return {
-    assetCount,
-    edgeCount: edges.length,
-    nodeCount: nodes.length,
-    version,
-  };
-}
-
-function summarizeTrpcValue(value: unknown): unknown {
-  const workflowDocumentSummary = summarizeWorkflowDocument(value);
-  if (workflowDocumentSummary) {
-    return workflowDocumentSummary;
-  }
-
-  if (value instanceof Error) {
-    return {
-      message: value.message,
-      name: value.name,
-    };
-  }
-
-  if (typeof File !== "undefined" && value instanceof File) {
-    return {
-      lastModified: value.lastModified,
-      name: value.name,
-      size: value.size,
-      type: value.type,
-    };
-  }
-
-  if (typeof FormData !== "undefined" && value instanceof FormData) {
-    return Object.fromEntries(
-      Array.from(value.entries()).map(([key, entryValue]) => [
-        key,
-        summarizeTrpcValue(entryValue),
-      ]),
-    );
-  }
-
-  if (Array.isArray(value)) {
-    return {
-      length: value.length,
-      type: "array",
-    };
-  }
-
-  if (typeof value === "string") {
-    return `[string:${value.length}]`;
-  }
-
-  if (isRecord(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entryValue]) => [
-        key,
-        summarizeTrpcValue(entryValue),
-      ]),
-    );
-  }
-
-  return value;
-}
-
-function logTrpcOperation(props: {
-  direction: "up" | "down";
-  elapsedMs?: number;
-  id: number;
-  input: unknown;
-  path: string;
-  result?: unknown;
-  type: "query" | "mutation" | "subscription";
-}) {
-  const prefix = `[trpc] ${props.direction === "up" ? ">>" : "<<"} ${props.type} #${props.id} ${props.path}`;
-  const payload =
-    props.direction === "up"
-      ? { input: summarizeTrpcValue(props.input) }
-      : {
-          elapsedMs: props.elapsedMs,
-          input: summarizeTrpcValue(props.input),
-          result: summarizeTrpcValue(props.result),
-        };
-
-  const isError = props.direction === "down" && props.result instanceof Error;
-
-  (isError ? console.error : console.log)(prefix, payload);
-}
-
-// Necessary factory wrapper. DO NOT CHANGE.
 const createTrpcClient = () =>
   api.createClient({
     links: (() => {
@@ -159,9 +47,6 @@ const createTrpcClient = () =>
           enabled: (op) =>
             env.NEXT_PUBLIC_NODE_ENV === "development" ||
             (op.direction === "down" && op.result instanceof Error),
-          logger: (props) => {
-            logTrpcOperation(props);
-          },
         }),
         splitLink({
           condition: (op) => op.type === "subscription",
@@ -194,7 +79,6 @@ const createTrpcClient = () =>
 
 let clientTrpcClientSingleton: ReturnType<typeof createTrpcClient> | undefined;
 
-// Necessary factory wrapper. DO NOT CHANGE.
 export const getTrpcClient = () => {
   if (typeof window === "undefined") {
     return createTrpcClient();
