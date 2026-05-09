@@ -1,10 +1,10 @@
 import { Effect } from "effect";
 import type {
-  TaskRunFailureReason,
-  TaskRunSettlementFailureSource,
-} from "~/features/runtime/domain/task-run-state";
+  TaskFailureReason,
+  TaskSettlementFailureSource,
+} from "~/features/runtime/domain/task-state";
 import type { TaskStatusEvent } from "~/features/runtime/events/task-status-events";
-import type { ExecutableTaskRunInputSnapshot } from "~/features/runtime/execution/task-run-input-snapshot";
+import type { ExecutableTaskInputSnapshot } from "~/features/runtime/execution/task-input-snapshot";
 import {
   committed,
   ignored,
@@ -20,17 +20,16 @@ import {
   type RuntimeGeneratedPrimaryAssetPayload,
 } from "~/server/services/queue";
 
-export type ClaimQueuedTaskRunForExecutionCommand = {
-  readonly attempt: number;
+export type ClaimQueuedTaskForExecutionCommand = {
   readonly ownerUserId: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
 };
 
-export type ClaimQueuedTaskRunForExecutionResult =
+export type ClaimQueuedTaskForExecutionResult =
   | {
       readonly claimed: true;
       readonly event: TaskStatusEvent;
-      readonly inputSnapshot: ExecutableTaskRunInputSnapshot;
+      readonly inputSnapshot: ExecutableTaskInputSnapshot;
     }
   | { readonly claimed: false };
 
@@ -42,10 +41,10 @@ export type ProviderExecutionCompletion = {
 
 export type ProviderExecutionFailure = {
   readonly failureReason: Exclude<
-    TaskRunFailureReason,
+    TaskFailureReason,
     { readonly type: "UPSTREAM_FAILED" }
   >;
-  readonly failureSource: TaskRunSettlementFailureSource;
+  readonly failureSource: TaskSettlementFailureSource;
   readonly providerCostCredits?: number;
 };
 
@@ -55,17 +54,17 @@ export type ProviderExecutionResult =
 
 export type RuntimeProviderExecutor = {
   readonly execute: (command: {
-    readonly inputSnapshot: ExecutableTaskRunInputSnapshot;
+    readonly inputSnapshot: ExecutableTaskInputSnapshot;
     readonly ownerUserId: string;
     readonly workflowId: string;
   }) => Effect.Effect<ProviderExecutionResult, never>;
 };
 
 export type RuntimeExecutionWorkerRepository = {
-  readonly claimQueuedTaskRun: (
-    command: ClaimQueuedTaskRunForExecutionCommand,
+  readonly claimQueuedTask: (
+    command: ClaimQueuedTaskForExecutionCommand,
   ) => Effect.Effect<
-    ClaimQueuedTaskRunForExecutionResult,
+    ClaimQueuedTaskForExecutionResult,
     RuntimeRepositoryFailure
   >;
 };
@@ -104,13 +103,12 @@ export function createRuntimeExecutionWorker(input: {
   const executeEffect = (job: RuntimeExecutionJobPayload) =>
     Effect.gen(function* () {
       const claim = yield* input.repository
-        .claimQueuedTaskRun({
-          attempt: job.attempt,
+        .claimQueuedTask({
           ownerUserId: job.ownerUserId,
-          taskRunId: job.taskRunId,
+          taskId: job.taskId,
         })
         .pipe(
-          Effect.catchIf(isStaleTaskRunTransition, () =>
+          Effect.catchIf(isStaleTaskTransition, () =>
             Effect.succeed({ claimed: false as const }),
           ),
         );
@@ -131,12 +129,11 @@ export function createRuntimeExecutionWorker(input: {
       });
       if (!providerResult.ok) {
         const settlement = buildRuntimeFailureSettlementJobPayload({
-          attempt: job.attempt,
           failureReason: providerResult.error.failureReason,
           failureSource: providerResult.error.failureSource,
           providerCostCredits: providerResult.error.providerCostCredits,
           ownerUserId: job.ownerUserId,
-          taskRunId: job.taskRunId,
+          taskId: job.taskId,
           workflowId: job.workflowId,
         });
         yield* input.settlementQueue.enqueueFailureSettlement(settlement);
@@ -145,12 +142,11 @@ export function createRuntimeExecutionWorker(input: {
       }
 
       const settlement = buildRuntimeCompletionSettlementJobPayload({
-        attempt: job.attempt,
         providerCostCredits: providerResult.value.providerCostCredits,
         generatedAsset: providerResult.value.generatedAsset,
         ownerUserId: job.ownerUserId,
         reviewRequired: providerResult.value.reviewRequired,
-        taskRunId: job.taskRunId,
+        taskId: job.taskId,
         workflowId: job.workflowId,
       });
       yield* input.settlementQueue.enqueueCompletionSettlement(settlement);
@@ -167,12 +163,12 @@ export function createRuntimeExecutionWorker(input: {
   };
 }
 
-function isStaleTaskRunTransition(error: unknown) {
+function isStaleTaskTransition(error: unknown) {
   return (
     typeof error === "object" &&
     error !== null &&
     "_tag" in error &&
-    error._tag === "StaleTaskRunTransition"
+    error._tag === "StaleTaskTransition"
   );
 }
 

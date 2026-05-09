@@ -144,12 +144,12 @@ describe("RuntimePostCommitWork", () => {
       {
         attempt: 3,
         cause: "forced event:event-1:APPROVED failure",
-        itemIndex: 0,
+        branchIndex: 0,
         kind: "task-status-event",
-        nodeExecutionId: "node-execution-event-1",
+        nodeRunId: "node-execution-event-1",
         source: "start-workflow-run",
         status: "APPROVED",
-        taskRunId: "event-1",
+        taskId: "event-1",
         workflowId: "workflow-1",
       },
     ]);
@@ -167,7 +167,7 @@ describe("RuntimePostCommitWork", () => {
         kind: "task-status-event",
         source: "settle-worker-completion",
         status: event.status,
-        taskRunId: event.taskRunId,
+        taskId: event.taskId,
         workflowId: "workflow-real-telemetry",
       },
     );
@@ -177,7 +177,7 @@ describe("RuntimePostCommitWork", () => {
         kind: "task-status-event",
         source: "settle-worker-completion",
         status: event.status,
-        taskRunId: event.taskRunId,
+        taskId: event.taskId,
         workflowId: "workflow-real-telemetry",
       },
     );
@@ -193,7 +193,7 @@ describe("RuntimePostCommitWork", () => {
         makeLayer({
           failures,
           retrySchedule: Schedule.recurs(1),
-          telemetryLayer: TelemetryService.Local,
+          telemetryLayer: TelemetryService.Test,
         }),
       ),
       Effect.provide(
@@ -221,12 +221,12 @@ describe("RuntimePostCommitWork", () => {
           {
             attempt: 1,
             cause: "forced event:event-real-telemetry:PENDING_REVIEW failure",
-            itemIndex: 0,
+            branchIndex: 0,
             kind: "task-status-event",
-            nodeExecutionId: "node-execution-event-real-telemetry",
+            nodeRunId: "node-execution-event-real-telemetry",
             source: "settle-worker-completion",
             status: "PENDING_REVIEW",
-            taskRunId: "event-real-telemetry",
+            taskId: "event-real-telemetry",
             workflowId: "workflow-real-telemetry",
           },
         ],
@@ -238,12 +238,12 @@ describe("RuntimePostCommitWork", () => {
           {
             attempt: 2,
             cause: "forced event:event-real-telemetry:PENDING_REVIEW failure",
-            itemIndex: 0,
+            branchIndex: 0,
             kind: "task-status-event",
-            nodeExecutionId: "node-execution-event-real-telemetry",
+            nodeRunId: "node-execution-event-real-telemetry",
             source: "settle-worker-completion",
             status: "PENDING_REVIEW",
-            taskRunId: "event-real-telemetry",
+            taskId: "event-real-telemetry",
             workflowId: "workflow-real-telemetry",
           },
         ],
@@ -255,12 +255,12 @@ describe("RuntimePostCommitWork", () => {
           {
             attempt: 2,
             cause: "forced event:event-real-telemetry:PENDING_REVIEW failure",
-            itemIndex: 0,
+            branchIndex: 0,
             kind: "task-status-event",
-            nodeExecutionId: "node-execution-event-real-telemetry",
+            nodeRunId: "node-execution-event-real-telemetry",
             source: "settle-worker-completion",
             status: "PENDING_REVIEW",
-            taskRunId: "event-real-telemetry",
+            taskId: "event-real-telemetry",
             workflowId: "workflow-real-telemetry",
           },
         ],
@@ -346,7 +346,7 @@ function makeLayer({
             Effect.tryPromise({
               try: () =>
                 record(
-                  `event:${event.taskRunId}:${event.status}`,
+                  `event:${event.taskId}:${event.status}`,
                   calls,
                   failures,
                 ),
@@ -380,7 +380,7 @@ function tagPostCommitMetric(
     readonly kind: RuntimePostCommitDeliveryTelemetry["kind"];
     readonly source: string;
     readonly status?: string;
-    readonly taskRunId?: string;
+    readonly taskId?: string;
     readonly workflowId: string;
   },
 ) {
@@ -388,7 +388,7 @@ function tagPostCommitMetric(
     Metric.tagged("work_kind", tags.kind),
     Metric.tagged("source", tags.source),
     Metric.tagged("workflow_id", tags.workflowId),
-    Metric.tagged("task_run_id", tags.taskRunId ?? "none"),
+    Metric.tagged("task_id", tags.taskId ?? "none"),
     Metric.tagged("status", tags.status ?? "none"),
   );
 }
@@ -428,12 +428,11 @@ function work(input: Partial<PostCommitWork>): PostCommitWork {
 
 function executionJob(jobId: string): RuntimeExecutionJobPayload {
   return {
-    attempt: 0,
-    itemIndex: 0,
+    branchIndex: 0,
     jobId,
-    nodeExecutionId: `node-execution-${jobId}`,
+    nodeRunId: `node-execution-${jobId}`,
     ownerUserId: "owner-1",
-    taskRunId: jobId,
+    taskId: jobId,
     workflowId: "workflow-1",
   };
 }
@@ -442,20 +441,19 @@ function wakeUpJob(jobId: string): RuntimeWakeUpJobPayload {
   return {
     jobId,
     ownerUserId: "owner-1",
-    parentTaskRunId: jobId,
+    parentTaskId: jobId,
     workflowId: "workflow-1",
   };
 }
 
 function taskStatusEvent(
-  taskRunId: string,
+  taskId: string,
   status: TaskStatusEvent["status"] = "APPROVED",
 ): TaskStatusEvent {
   return {
-    attempt: 0,
-    itemIndex: 0,
-    nodeExecutionId: `node-execution-${taskRunId}`,
+    branchIndex: 0,
+    nodeRunId: `node-execution-${taskId}`,
     status,
-    taskRunId,
+    taskId,
   };
 }

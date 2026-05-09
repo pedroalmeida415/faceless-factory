@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { hasActiveTaskRunProjection } from "~/features/runtime/task-run-studio-projection";
+import { hasActiveTaskProjection } from "~/features/runtime/task-studio-projection";
 import { WorkflowClientService } from "~/features/workflow/client/workflow-client";
 import { WorkflowPersistenceService } from "~/features/workflow/client/workflow-persistence-service";
 import { WorkflowStudioStoreService } from "~/features/workflow/client/workflow-studio-store-service";
@@ -70,7 +70,7 @@ export const WorkflowExecutionService = {
         yield* WorkflowClientService.getTaskProjection(projectId);
       yield* workflowStudioStore.applyRuntimeTaskProjection(initialProjection);
 
-      if (!hasActiveTaskRunProjection(initialProjection)) {
+      if (!hasActiveTaskProjection(initialProjection)) {
         yield* workflowStudioStore.clearExecutionStreaming();
         return;
       }
@@ -97,7 +97,7 @@ export const WorkflowExecutionService = {
             ),
           )
             .then((projection) => {
-              if (!hasActiveTaskRunProjection(projection) && !settled) {
+              if (!hasActiveTaskProjection(projection) && !settled) {
                 settled = true;
                 subscription.unsubscribe();
                 void Effect.runPromise(

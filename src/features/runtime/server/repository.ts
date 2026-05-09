@@ -4,34 +4,34 @@ import { inArray, sql } from "drizzle-orm";
 import { type Context, Effect, Layer } from "effect";
 import { projectGeneratedAssetToTaskOutput } from "~/features/runtime/assets/generated-asset-projection";
 import type {
-  TaskRunFailureReason,
-  TaskRunSettlementFailureSource,
-} from "~/features/runtime/domain/task-run-state";
+  TaskFailureReason,
+  TaskSettlementFailureSource,
+} from "~/features/runtime/domain/task-state";
 import {
   buildTaskStatusEvent,
   type TaskStatusEvent,
 } from "~/features/runtime/events/task-status-events";
 import {
-  buildTaskRunInputSnapshot,
-  type ExecutableTaskRunInputSnapshot,
-  isTaskRunInputSnapshot,
-  type TaskRunInputSnapshot,
-} from "~/features/runtime/execution/task-run-input-snapshot";
+  buildTaskInputSnapshot,
+  type ExecutableTaskInputSnapshot,
+  isTaskInputSnapshot,
+  type TaskInputSnapshot,
+} from "~/features/runtime/execution/task-input-snapshot";
 import {
-  recordDirectTaskRunFailure,
-  type TaskRunGatekeeperState,
-  type TaskRunGatekeeperTaskRun,
-  wakeUpTaskRunChildren,
-} from "~/features/runtime/gatekeeper/task-run-gatekeeper";
+  recordDirectTaskFailure,
+  type TaskGatekeeperState,
+  type TaskGatekeeperTask,
+  wakeUpTaskChildren,
+} from "~/features/runtime/gatekeeper/task-gatekeeper";
 import type { WorkflowRunPlan } from "~/features/runtime/planning/workflow-run-planner";
 import { RuntimeRepository as RuntimeRepositoryTag } from "~/features/runtime/server/commands";
 import type {
   PostCommitWork,
   PostCommitWorkSource,
 } from "~/features/runtime/server/post-commit-work";
-import { buildTaskRunCreditLedgerSourceKey } from "~/features/runtime/server/task-run-credit-ledger";
+import { buildTaskCreditLedgerSourceKey } from "~/features/runtime/server/task-credit-ledger";
 import type { WorkflowAsset } from "~/features/workflow/types";
-import type { taskRuns } from "~/server/database/schema";
+import type { tasks } from "~/server/database/schema";
 import * as schema from "~/server/database/schema";
 import { DatabaseService } from "~/server/services/database";
 import {
@@ -43,31 +43,29 @@ import {
 } from "~/server/services/queue";
 import { promoteStagedGeneratedArtifact } from "~/server/services/storage";
 
-type ClaimQueuedTaskRunCommand = {
-  readonly taskRunId: string;
+type ClaimQueuedTaskCommand = {
+  readonly taskId: string;
   readonly ownerUserId: string;
-  readonly attempt: number;
 };
 
-type ClaimQueuedTaskRunResult =
+type ClaimQueuedTaskResult =
   | {
       readonly claimed: true;
       readonly event: TaskStatusEvent;
-      readonly inputSnapshot: ExecutableTaskRunInputSnapshot;
+      readonly inputSnapshot: ExecutableTaskInputSnapshot;
     }
   | { readonly claimed: false };
 
-type SettleTaskRunCompletionCommand = {
-  readonly attempt: number;
+type SettleTaskCompletionCommand = {
   readonly providerCostCredits: number;
   readonly generatedAsset: RuntimeGeneratedPrimaryAssetPayload;
   readonly ownerUserId: string;
   readonly reviewRequired: boolean;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 };
 
-type SettleTaskRunCompletionResult =
+type SettleTaskCompletionResult =
   | {
       readonly settled: true;
       readonly event: TaskStatusEvent;
@@ -75,20 +73,19 @@ type SettleTaskRunCompletionResult =
     }
   | { readonly settled: false };
 
-type SettleTaskRunFailureCommand = {
-  readonly attempt: number;
+type SettleTaskFailureCommand = {
   readonly failureReason: Exclude<
-    TaskRunFailureReason,
+    TaskFailureReason,
     { readonly type: "UPSTREAM_FAILED" }
   >;
-  readonly failureSource: TaskRunSettlementFailureSource;
+  readonly failureSource: TaskSettlementFailureSource;
   readonly providerCostCredits?: number;
   readonly ownerUserId: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 };
 
-type SettleTaskRunFailureResult =
+type SettleTaskFailureResult =
   | {
       readonly settled: true;
       readonly event: TaskStatusEvent;
@@ -96,14 +93,13 @@ type SettleTaskRunFailureResult =
     }
   | { readonly settled: false };
 
-type DecideTaskRunReviewCommand = {
-  readonly attempt: number;
+type DecideTaskReviewCommand = {
   readonly ownerUserId: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
 };
 
-type RejectTaskRunAndCreateRegenerationCommand = DecideTaskRunReviewCommand & {
-  readonly newTaskRunId: string;
+type RejectTaskAndCreateRegenerationCommand = DecideTaskReviewCommand & {
+  readonly newTaskId: string;
 };
 
 type ReviewDecisionResult =
@@ -114,7 +110,7 @@ type ReviewDecisionResult =
     }
   | { readonly decided: false };
 
-type RejectTaskRunResult =
+type RejectTaskResult =
   | {
       readonly executionJob: RuntimeExecutionJobPayload | null;
       readonly rejected: true;
@@ -122,11 +118,11 @@ type RejectTaskRunResult =
     }
   | { readonly rejected: false };
 
-type CancelTaskRunBlockedReason =
+type CancelTaskBlockedReason =
   | "PENDING_REVIEW_REQUIRES_REVIEW_DECISION"
   | "RUNNING_TASK_RUN_CANCELLATION_BLOCKED";
 
-type CancelTaskRunResult =
+type CancelTaskResult =
   | {
       readonly decided: true;
       readonly event: TaskStatusEvent;
@@ -137,7 +133,7 @@ type CancelTaskRunResult =
       readonly blocked: true;
       readonly decided: false;
       readonly message: string;
-      readonly reason: CancelTaskRunBlockedReason;
+      readonly reason: CancelTaskBlockedReason;
     };
 
 type CreditLedgerForUser = {
@@ -151,22 +147,22 @@ type CreditLedgerForUser = {
 };
 
 type TaskDependencyForChild = {
-  readonly childTaskRunId: string;
-  readonly requiredParentItemIndex: number;
-  readonly requiredParentNodeExecutionId: string;
+  readonly childTaskId: string;
+  readonly requiredParentBranchIndex: number;
+  readonly requiredParentNodeRunId: string;
   readonly requiredParentNodeId: string;
-  readonly resolvedParentTaskRunId: string | null;
+  readonly resolvedParentTaskId: string | null;
   readonly sourceHandle: string | null;
   readonly targetHandle: string | null;
   readonly targetNodeId: string;
 };
 
-export type WakeUpTaskRunChildrenRepositoryCommand = {
+export type WakeUpTaskChildrenRepositoryCommand = {
   readonly ownerUserId: string;
-  readonly settledParentTaskRunId: string;
+  readonly settledParentTaskId: string;
 };
 
-export type WakeUpTaskRunChildrenRepositoryResult = {
+export type WakeUpTaskChildrenRepositoryResult = {
   readonly executionJobs: readonly RuntimeExecutionJobPayload[];
   readonly parentFound: boolean;
   readonly taskStatusEvents: readonly TaskStatusEvent[];
@@ -184,21 +180,20 @@ export type RepositoryCommittedOutcome<T> = {
   readonly value: T;
 };
 
-export type StaleTaskRunTransition = {
-  readonly _tag: "StaleTaskRunTransition";
-  readonly attempt: number;
+export type StaleTaskTransition = {
+  readonly _tag: "StaleTaskTransition";
   readonly operation: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
 };
 
 export type WakeUpParentNotFound = {
   readonly _tag: "WakeUpParentNotFound";
   readonly ownerUserId: string;
-  readonly settledParentTaskRunId: string;
+  readonly settledParentTaskId: string;
 };
 
 export type RuntimeRepositoryFailure =
-  | StaleTaskRunTransition
+  | StaleTaskTransition
   | WakeUpParentNotFound
   | {
       readonly _tag: "RuntimeRepositoryFailure";
@@ -206,31 +201,30 @@ export type RuntimeRepositoryFailure =
       readonly operation: string;
     };
 
-type CommittedPlanTaskRun = Omit<
-  WorkflowRunPlan["taskRunsToCreate"][number],
+type CommittedPlanTask = Omit<
+  WorkflowRunPlan["tasksToCreate"][number],
   "failureReason" | "status"
 > & {
   readonly failureReason?: "EXECUTION_FAILED" | "INSUFFICIENT_CREDITS";
   readonly status: "FAILED" | "QUEUED" | "WAITING_UPSTREAM";
 };
 
-type RuntimeTaskRunRow = {
-  readonly attempt: number;
-  readonly inputSnapshot: TaskRunInputSnapshot | null;
-  readonly itemIndex: number;
-  readonly nodeExecutionId: string;
+type RuntimeTaskRow = {
+  readonly inputSnapshot: TaskInputSnapshot | null;
+  readonly branchIndex: number;
+  readonly nodeRunId: string;
   readonly ownerUserId: string;
   readonly runtimeStatus: NonNullable<
-    (typeof taskRuns.$inferSelect)["runtimeStatus"]
+    (typeof tasks.$inferSelect)["runtimeStatus"]
   >;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 };
 
-type ResolvedParentTaskRunSnapshot =
-  TaskRunInputSnapshot["resolvedParentTaskRuns"][number];
+type ResolvedParentTaskSnapshot =
+  TaskInputSnapshot["resolvedParentTasks"][number];
 
-type NodeExecutionIdentity = {
+type NodeRunIdentity = {
   readonly id: string;
   readonly ownerUserId: string;
   readonly workflowId: string;
@@ -239,8 +233,8 @@ type NodeExecutionIdentity = {
 type RuntimeRepositorySqlServices = SqlClient.SqlClient | PgDrizzle.PgDrizzle;
 
 type RuntimeRepository<R> = {
-  readonly approveTaskRun: (
-    command: DecideTaskRunReviewCommand & { workflowId: string },
+  readonly approveTask: (
+    command: DecideTaskReviewCommand & { workflowId: string },
   ) => Effect.Effect<
     RepositoryCommittedOutcome<
       Extract<ReviewDecisionResult, { decided: true }>
@@ -248,16 +242,16 @@ type RuntimeRepository<R> = {
     RuntimeRepositoryFailure,
     R
   >;
-  readonly cancelTaskRun: (
-    command: DecideTaskRunReviewCommand & { workflowId: string },
+  readonly cancelTask: (
+    command: DecideTaskReviewCommand & { workflowId: string },
   ) => Effect.Effect<
-    RepositoryCommittedOutcome<CancelTaskRunResult>,
+    RepositoryCommittedOutcome<CancelTaskResult>,
     RuntimeRepositoryFailure,
     R
   >;
-  readonly claimQueuedTaskRun: (
-    command: ClaimQueuedTaskRunCommand,
-  ) => Effect.Effect<ClaimQueuedTaskRunResult, RuntimeRepositoryFailure, R>;
+  readonly claimQueuedTask: (
+    command: ClaimQueuedTaskCommand,
+  ) => Effect.Effect<ClaimQueuedTaskResult, RuntimeRepositoryFailure, R>;
   readonly commitWorkflowRunPlan: (
     plan: WorkflowRunPlan,
   ) => Effect.Effect<
@@ -268,48 +262,42 @@ type RuntimeRepository<R> = {
   readonly getCreditLedgerForUser: (command: {
     readonly ownerUserId: string;
   }) => Effect.Effect<CreditLedgerForUser, RuntimeRepositoryFailure, R>;
-  readonly getRuntimeTaskRunsForNodeExecution: (command: {
-    readonly nodeExecutionId: string;
+  readonly getRuntimeTasksForNodeRun: (command: {
+    readonly nodeRunId: string;
     readonly ownerUserId: string;
-  }) => Effect.Effect<
-    readonly RuntimeTaskRunRow[],
-    RuntimeRepositoryFailure,
-    R
-  >;
+  }) => Effect.Effect<readonly RuntimeTaskRow[], RuntimeRepositoryFailure, R>;
   readonly getTaskDependenciesForChild: (command: {
-    readonly childTaskRunId: string;
+    readonly childTaskId: string;
   }) => Effect.Effect<
     readonly TaskDependencyForChild[],
     RuntimeRepositoryFailure,
     R
   >;
-  readonly rejectTaskRunAndCreateRegeneration: (
-    command: RejectTaskRunAndCreateRegenerationCommand & { workflowId: string },
+  readonly rejectTaskAndCreateRegeneration: (
+    command: RejectTaskAndCreateRegenerationCommand & { workflowId: string },
   ) => Effect.Effect<
-    RepositoryCommittedOutcome<
-      Extract<RejectTaskRunResult, { rejected: true }>
-    >,
+    RepositoryCommittedOutcome<Extract<RejectTaskResult, { rejected: true }>>,
     RuntimeRepositoryFailure,
     R
   >;
-  readonly settleTaskRunCompletion: (
-    command: SettleTaskRunCompletionCommand,
+  readonly settleTaskCompletion: (
+    command: SettleTaskCompletionCommand,
   ) => Effect.Effect<
-    RepositoryCommittedOutcome<SettleTaskRunCompletionResult>,
+    RepositoryCommittedOutcome<SettleTaskCompletionResult>,
     RuntimeRepositoryFailure,
     R
   >;
-  readonly settleTaskRunFailure: (
-    command: SettleTaskRunFailureCommand,
+  readonly settleTaskFailure: (
+    command: SettleTaskFailureCommand,
   ) => Effect.Effect<
-    RepositoryCommittedOutcome<SettleTaskRunFailureResult>,
+    RepositoryCommittedOutcome<SettleTaskFailureResult>,
     RuntimeRepositoryFailure,
     R
   >;
-  readonly wakeUpTaskRunChildren: (
-    command: WakeUpTaskRunChildrenRepositoryCommand & { workflowId: string },
+  readonly wakeUpTaskChildren: (
+    command: WakeUpTaskChildrenRepositoryCommand & { workflowId: string },
   ) => Effect.Effect<
-    RepositoryCommittedOutcome<WakeUpTaskRunChildrenRepositoryResult>,
+    RepositoryCommittedOutcome<WakeUpTaskChildrenRepositoryResult>,
     RuntimeRepositoryFailure,
     R
   >;
@@ -332,6 +320,11 @@ export const RuntimeRepositoryLive = Layer.effect(
   Effect.map(DatabaseService, createRuntimeRepositoryFromDatabase),
 );
 
+export const RuntimeRepositoryTest = Layer.effect(
+  RuntimeRepositoryTag,
+  Effect.map(DatabaseService, createRuntimeRepositoryFromDatabase),
+);
+
 function buildRuntimeRepository<R>(
   provideSql: <A>(
     effect: Effect.Effect<
@@ -344,119 +337,109 @@ function buildRuntimeRepository<R>(
   return {
     commitWorkflowRunPlan: (plan: WorkflowRunPlan) =>
       provideSql(commitWorkflowRunPlanEffect(plan)),
-    claimQueuedTaskRun: (command: ClaimQueuedTaskRunCommand) =>
-      provideSql(claimQueuedTaskRunEffect(command)),
-    settleTaskRunCompletion: (command: SettleTaskRunCompletionCommand) =>
-      provideSql(settleTaskRunCompletionEffect(command)).pipe(
+    claimQueuedTask: (command: ClaimQueuedTaskCommand) =>
+      provideSql(claimQueuedTaskEffect(command)),
+    settleTaskCompletion: (command: SettleTaskCompletionCommand) =>
+      provideSql(settleTaskCompletionEffect(command)).pipe(
         Effect.flatMap((outcome) =>
           outcome.value.settled
             ? Effect.succeed({
                 postCommitWork: outcome.postCommitWork,
                 value: outcome.value,
               })
-            : staleTaskRunTransition(command, "settleTaskRunCompletion"),
+            : staleTaskTransition(command, "settleTaskCompletion"),
         ),
       ),
-    settleTaskRunFailure: (command: SettleTaskRunFailureCommand) =>
-      provideSql(settleTaskRunFailureEffect(command)).pipe(
+    settleTaskFailure: (command: SettleTaskFailureCommand) =>
+      provideSql(settleTaskFailureEffect(command)).pipe(
         Effect.flatMap((outcome) =>
           outcome.value.settled
             ? Effect.succeed({
                 postCommitWork: outcome.postCommitWork,
                 value: outcome.value,
               })
-            : staleTaskRunTransition(command, "settleTaskRunFailure"),
+            : staleTaskTransition(command, "settleTaskFailure"),
         ),
       ),
-    approveTaskRun: (
-      command: DecideTaskRunReviewCommand & { workflowId: string },
-    ) =>
-      provideSql(approveTaskRunEffect(command)).pipe(
+    approveTask: (command: DecideTaskReviewCommand & { workflowId: string }) =>
+      provideSql(approveTaskEffect(command)).pipe(
         Effect.flatMap((outcome) =>
           outcome.value.decided
             ? Effect.succeed({
                 postCommitWork: outcome.postCommitWork,
                 value: outcome.value,
               })
-            : staleTaskRunTransition(command, "approveTaskRun"),
+            : staleTaskTransition(command, "approveTask"),
         ),
       ),
-    cancelTaskRun: (
-      command: DecideTaskRunReviewCommand & { workflowId: string },
-    ) =>
-      provideSql(cancelTaskRunEffect(command)).pipe(
+    cancelTask: (command: DecideTaskReviewCommand & { workflowId: string }) =>
+      provideSql(cancelTaskEffect(command)).pipe(
         Effect.flatMap((value) =>
           "blocked" in value.value || value.value.decided
             ? Effect.succeed(value)
-            : staleTaskRunTransition(command, "cancelTaskRun"),
+            : staleTaskTransition(command, "cancelTask"),
         ),
       ),
-    rejectTaskRunAndCreateRegeneration: (
-      command: RejectTaskRunAndCreateRegenerationCommand & {
+    rejectTaskAndCreateRegeneration: (
+      command: RejectTaskAndCreateRegenerationCommand & {
         workflowId: string;
       },
     ) =>
-      provideSql(rejectTaskRunAndCreateRegenerationEffect(command)).pipe(
+      provideSql(rejectTaskAndCreateRegenerationEffect(command)).pipe(
         Effect.flatMap((outcome) =>
           outcome.value.rejected
             ? Effect.succeed({
                 postCommitWork: outcome.postCommitWork,
                 value: outcome.value,
               })
-            : staleTaskRunTransition(
-                command,
-                "rejectTaskRunAndCreateRegeneration",
-              ),
+            : staleTaskTransition(command, "rejectTaskAndCreateRegeneration"),
         ),
       ),
-    wakeUpTaskRunChildren: (
-      command: WakeUpTaskRunChildrenRepositoryCommand & { workflowId: string },
+    wakeUpTaskChildren: (
+      command: WakeUpTaskChildrenRepositoryCommand & { workflowId: string },
     ) =>
-      provideSql(wakeUpTaskRunChildrenEffect(command)).pipe(
+      provideSql(wakeUpTaskChildrenEffect(command)).pipe(
         Effect.flatMap((value) =>
           value.value.parentFound
             ? Effect.succeed(value)
             : Effect.fail({
                 _tag: "WakeUpParentNotFound",
                 ownerUserId: command.ownerUserId,
-                settledParentTaskRunId: command.settledParentTaskRunId,
+                settledParentTaskId: command.settledParentTaskId,
               } satisfies WakeUpParentNotFound),
         ),
       ),
-    getRuntimeTaskRunsForNodeExecution: (command: {
-      readonly nodeExecutionId: string;
+    getRuntimeTasksForNodeRun: (command: {
+      readonly nodeRunId: string;
       readonly ownerUserId: string;
-    }) => provideSql(getRuntimeTaskRunsForNodeExecutionEffect(command)),
-    getTaskDependenciesForChild: (command: {
-      readonly childTaskRunId: string;
-    }) => provideSql(getTaskDependenciesForChildEffect(command)),
+    }) => provideSql(getRuntimeTasksForNodeRunEffect(command)),
+    getTaskDependenciesForChild: (command: { readonly childTaskId: string }) =>
+      provideSql(getTaskDependenciesForChildEffect(command)),
     getCreditLedgerForUser: (command: { readonly ownerUserId: string }) =>
       provideSql(getCreditLedgerForUserEffect(command)),
   };
 }
 
-function claimQueuedTaskRunEffect(command: ClaimQueuedTaskRunCommand) {
+function claimQueuedTaskEffect(command: ClaimQueuedTaskCommand) {
   return repositoryTransaction(
-    "claimQueuedTaskRun",
+    "claimQueuedTask",
     Effect.gen(function* () {
       const db = yield* PgDrizzle.PgDrizzle;
       const [row] = yield* db
-        .update(schema.taskRuns)
+        .update(schema.tasks)
         .set({
           runtimeStatus: "RUNNING",
           startedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(sql`${schema.taskRuns.id} = ${command.taskRunId}
-          and ${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-          and ${schema.taskRuns.attempt} = ${command.attempt}
-          and ${schema.taskRuns.runtimeStatus} = 'QUEUED'`)
+        .where(sql`${schema.tasks.id} = ${command.taskId}
+          and ${schema.tasks.ownerUserId} = ${command.ownerUserId}
+          and ${schema.tasks.runtimeStatus} = 'QUEUED'`)
         .returning({
-          attempt: schema.taskRuns.attempt,
-          inputSnapshot: schema.taskRuns.inputSnapshot,
-          itemIndex: schema.taskRuns.itemIndex,
-          nodeExecutionId: schema.taskRuns.nodeExecutionId,
-          taskRunId: schema.taskRuns.id,
+          inputSnapshot: schema.tasks.inputSnapshot,
+          branchIndex: schema.tasks.branchIndex,
+          nodeRunId: schema.tasks.nodeRunId,
+          taskId: schema.tasks.id,
         });
 
       if (!row) {
@@ -466,13 +449,12 @@ function claimQueuedTaskRunEffect(command: ClaimQueuedTaskRunCommand) {
       return {
         claimed: true as const,
         event: buildTaskStatusEvent({
-          attempt: requireNumber(row.attempt),
-          itemIndex: requireNumber(row.itemIndex),
-          nodeExecutionId: row.nodeExecutionId,
+          branchIndex: requireNumber(row.branchIndex),
+          nodeRunId: row.nodeRunId,
           status: "RUNNING",
-          taskRunId: row.taskRunId,
+          taskId: row.taskId,
         }),
-        inputSnapshot: requireExecutableTaskRunInputSnapshot(row.inputSnapshot),
+        inputSnapshot: requireExecutableTaskInputSnapshot(row.inputSnapshot),
       };
     }),
   );
@@ -483,116 +465,107 @@ function commitWorkflowRunPlanEffect(plan: WorkflowRunPlan) {
     "commitWorkflowRunPlan",
     Effect.gen(function* () {
       const db = yield* PgDrizzle.PgDrizzle;
-      const nodeExecutionById = new Map<string, NodeExecutionIdentity>();
+      const nodeRunById = new Map<string, NodeRunIdentity>();
 
-      for (const nodeExecution of plan.nodeExecutionsToCreate) {
-        nodeExecutionById.set(nodeExecution.id, {
-          id: nodeExecution.id,
-          ownerUserId: nodeExecution.ownerId,
-          workflowId: nodeExecution.workflowId,
+      for (const nodeRun of plan.nodeRunsToCreate) {
+        nodeRunById.set(nodeRun.id, {
+          id: nodeRun.id,
+          ownerUserId: nodeRun.ownerId,
+          workflowId: nodeRun.workflowId,
         });
-        yield* db.insert(schema.nodeExecutions).values({
-          executionId: nodeExecution.id,
-          id: nodeExecution.id,
-          nodeId: nodeExecution.nodeId,
-          outputCount: countPlannedTaskRunsForNodeExecution(
-            plan,
-            nodeExecution.id,
-          ),
-          ownerUserId: nodeExecution.ownerId,
+        yield* db.insert(schema.nodeRuns).values({
+          executionId: nodeRun.id,
+          id: nodeRun.id,
+          nodeId: nodeRun.nodeId,
+          outputCount: countPlannedTasksForNodeRun(plan, nodeRun.id),
+          ownerUserId: nodeRun.ownerId,
           status: "pending",
           targetReason: "node_run",
-          workflowId: nodeExecution.workflowId,
+          workflowId: nodeRun.workflowId,
         });
       }
 
-      yield* loadMissingNodeExecutionIdentitiesEffect(plan, nodeExecutionById);
+      yield* loadMissingNodeRunIdentitiesEffect(plan, nodeRunById);
 
-      const committedTaskRuns: CommittedPlanTaskRun[] = [];
-      for (const taskRun of plan.taskRunsToCreate) {
-        const nodeExecution = requireNodeExecutionIdentity(
-          nodeExecutionById,
-          taskRun.nodeExecutionId,
-        );
-        const creditCost = taskRun.creditCost;
+      const committedTasks: CommittedPlanTask[] = [];
+      for (const task of plan.tasksToCreate) {
+        const nodeRun = requireNodeRunIdentity(nodeRunById, task.nodeRunId);
+        const creditCost = task.creditCost;
         const debit =
-          taskRun.status === "QUEUED"
-            ? yield* debitTaskRunCreditsEffect({
+          task.status === "QUEUED"
+            ? yield* debitTaskCreditsEffect({
                 amount: creditCost,
-                ownerUserId: nodeExecution.ownerUserId,
-                taskRunId: taskRun.id,
-                workflowId: nodeExecution.workflowId,
+                ownerUserId: nodeRun.ownerUserId,
+                taskId: task.id,
+                workflowId: nodeRun.workflowId,
               })
             : {
                 debited: false as const,
                 reason: "INSUFFICIENT_CREDITS" as const,
               };
         const hasDebitedCredits = debit.debited;
-        const committedTaskRun: CommittedPlanTaskRun =
-          taskRun.status !== "QUEUED" || hasDebitedCredits
-            ? taskRun
+        const committedTask: CommittedPlanTask =
+          task.status !== "QUEUED" || hasDebitedCredits
+            ? task
             : {
-                ...taskRun,
+                ...task,
                 failureReason: "INSUFFICIENT_CREDITS",
                 status: "FAILED",
               };
-        committedTaskRuns.push(committedTaskRun);
+        committedTasks.push(committedTask);
 
         const inputSnapshot =
-          committedTaskRun.status === "QUEUED" && hasDebitedCredits
+          committedTask.status === "QUEUED" && hasDebitedCredits
             ? buildRepositoryInputSnapshot({
-                attempt: taskRun.attempt,
-                itemIndex: taskRun.itemIndex,
-                nodeExecutionId: taskRun.nodeExecutionId,
-                nodeId: taskRun.nodeId,
+                branchIndex: task.branchIndex,
+                nodeRunId: task.nodeRunId,
+                nodeId: task.nodeId,
                 resolvedParents: [],
-                targetNodeConfig: taskRun.targetNodeConfig,
-                taskRunId: taskRun.id,
+                targetNodeConfig: task.targetNodeConfig,
+                taskId: task.id,
                 workflowDefinition: plan.workflowDefinition,
               })
-            : committedTaskRun.status === "WAITING_UPSTREAM"
-              ? (taskRun.inputSnapshot ??
+            : committedTask.status === "WAITING_UPSTREAM"
+              ? (task.inputSnapshot ??
                 buildRepositoryInputSnapshot({
-                  attempt: taskRun.attempt,
-                  itemIndex: taskRun.itemIndex,
-                  nodeExecutionId: taskRun.nodeExecutionId,
-                  nodeId: taskRun.nodeId,
+                  branchIndex: task.branchIndex,
+                  nodeRunId: task.nodeRunId,
+                  nodeId: task.nodeId,
                   resolvedParents: [],
-                  targetNodeConfig: taskRun.targetNodeConfig,
-                  taskRunId: taskRun.id,
+                  targetNodeConfig: task.targetNodeConfig,
+                  taskId: task.id,
                   workflowDefinition: plan.workflowDefinition,
                 }))
               : null;
 
-        yield* db.insert(schema.taskRuns).values({
-          attempt: taskRun.attempt,
+        yield* db.insert(schema.tasks).values({
           creditCost,
-          executionId: taskRun.nodeExecutionId,
-          failedAt: committedTaskRun.status === "FAILED" ? new Date() : null,
-          failureReason: committedTaskRun.failureReason,
-          id: taskRun.id,
+          executionId: task.nodeRunId,
+          failedAt: committedTask.status === "FAILED" ? new Date() : null,
+          failureReason: committedTask.failureReason,
+          id: task.id,
           inputSnapshot,
-          itemIndex: taskRun.itemIndex,
-          jobId: taskRun.id,
-          nodeExecutionId: taskRun.nodeExecutionId,
-          nodeId: taskRun.nodeId,
-          outputIndex: taskRun.itemIndex,
-          ownerUserId: nodeExecution.ownerUserId,
+          branchIndex: task.branchIndex,
+          jobId: task.id,
+          nodeRunId: task.nodeRunId,
+          nodeId: task.nodeId,
+          outputIndex: task.branchIndex,
+          ownerUserId: nodeRun.ownerUserId,
           queuedAt: hasDebitedCredits ? new Date() : null,
-          runtimeStatus: committedTaskRun.status,
+          runtimeStatus: committedTask.status,
           status: "queued",
           targetReason: "node_run",
-          version: taskRun.attempt,
-          workflowId: nodeExecution.workflowId,
+          version: 0,
+          workflowId: nodeRun.workflowId,
         });
       }
 
       for (const dependency of plan.taskDependenciesToCreate) {
         yield* db.insert(schema.taskDependencies).values({
-          childTaskRunId: dependency.childTaskRunId,
+          childTaskId: dependency.childTaskId,
           id: buildTaskDependencyId(dependency),
-          requiredParentItemIndex: dependency.parentItemIndex,
-          requiredParentNodeExecutionId: dependency.parentNodeExecutionId,
+          requiredParentBranchIndex: dependency.parentBranchIndex,
+          requiredParentNodeRunId: dependency.parentNodeRunId,
           requiredParentNodeId: dependency.parentNodeId,
           sourceHandle: dependency.sourceHandle ?? null,
           targetHandle: dependency.targetHandle ?? null,
@@ -600,67 +573,63 @@ function commitWorkflowRunPlanEffect(plan: WorkflowRunPlan) {
         });
       }
 
-      for (const taskRun of committedTaskRuns) {
-        if (taskRun.status !== "QUEUED") {
+      for (const task of committedTasks) {
+        if (task.status !== "QUEUED") {
           continue;
         }
-        yield* resolveApprovedDependenciesForChildEffect(taskRun.id);
+        yield* resolveApprovedDependenciesForChildEffect(task.id);
         const resolvedParents = yield* loadResolvedParentSnapshotsEffect(
-          taskRun.id,
+          task.id,
         );
         if (!resolvedParents.length) {
           continue;
         }
         yield* db
-          .update(schema.taskRuns)
+          .update(schema.tasks)
           .set({
             inputSnapshot: buildRepositoryInputSnapshot({
-              attempt: taskRun.attempt,
-              documentRevision: taskRun.inputSnapshot?.documentRevision,
-              itemIndex: taskRun.itemIndex,
-              nodeExecutionId: taskRun.nodeExecutionId,
-              nodeId: taskRun.nodeId,
+              documentRevision: task.inputSnapshot?.documentRevision,
+              branchIndex: task.branchIndex,
+              nodeRunId: task.nodeRunId,
+              nodeId: task.nodeId,
               resolvedParents,
-              targetNodeConfig: taskRun.targetNodeConfig,
-              taskRunId: taskRun.id,
+              targetNodeConfig: task.targetNodeConfig,
+              taskId: task.id,
               workflowDefinition: plan.workflowDefinition,
             }),
             updatedAt: new Date(),
           })
-          .where(sql`${schema.taskRuns.id} = ${taskRun.id}`);
+          .where(sql`${schema.tasks.id} = ${task.id}`);
       }
 
-      const value = buildCommittedPlanResult(
-        committedTaskRuns,
-        nodeExecutionById,
-      );
+      const value = buildCommittedPlanResult(committedTasks, nodeRunById);
       return committedOutcome(value, {
         executionJobs: value.executionJobs,
         source: "start-workflow-run",
         taskStatusEvents: value.taskStatusEvents,
         wakeUpJobs: value.wakeUpJobs,
-        workflowId: workflowIdFromNodeExecutions(nodeExecutionById),
+        workflowId: workflowIdFromNodeRuns(nodeRunById),
       });
     }),
   );
 }
 
-function loadMissingNodeExecutionIdentitiesEffect(
+function loadMissingNodeRunIdentitiesEffect(
   plan: WorkflowRunPlan,
-  nodeExecutionById: Map<string, NodeExecutionIdentity>,
+  nodeRunById: Map<string, NodeRunIdentity>,
 ) {
-  const missingNodeExecutionIds = Array.from(
+  const missingNodeRunIds = Array.from(
     new Set([
-      ...plan.nodeExecutionsToReuse.map((nodeExecution) => nodeExecution.id),
-      ...plan.taskRunsToCreate.map((taskRun) => taskRun.nodeExecutionId),
+      ...plan.nodeRunsToReuse.map((nodeRun) => nodeRun.id),
+      ...plan.tasksToCreate.map((task) => task.nodeRunId),
       ...plan.taskDependenciesToCreate.flatMap((dependency) => [
-        dependency.childNodeExecutionId,
-        dependency.parentNodeExecutionId,
+        dependency.childNodeRunId,
+        dependency.parentNodeRunId,
       ]),
     ]),
-  ).filter((nodeExecutionId) => !nodeExecutionById.has(nodeExecutionId));
+  ).filter((nodeRunId) => !nodeRunById.has(nodeRunId));
 
-  if (!missingNodeExecutionIds.length) {
+  if (!missingNodeRunIds.length) {
     return Effect.void;
   }
 
@@ -668,24 +637,22 @@ function loadMissingNodeExecutionIdentitiesEffect(
     const db = yield* PgDrizzle.PgDrizzle;
     const rows = yield* db
       .select({
-        id: schema.nodeExecutions.id,
-        ownerUserId: schema.nodeExecutions.ownerUserId,
-        workflowId: schema.nodeExecutions.workflowId,
+        id: schema.nodeRuns.id,
+        ownerUserId: schema.nodeRuns.ownerUserId,
+        workflowId: schema.nodeRuns.workflowId,
       })
-      .from(schema.nodeExecutions)
-      .where(inArray(schema.nodeExecutions.id, missingNodeExecutionIds));
+      .from(schema.nodeRuns)
+      .where(inArray(schema.nodeRuns.id, missingNodeRunIds));
 
     for (const row of rows) {
-      nodeExecutionById.set(row.id, row);
+      nodeRunById.set(row.id, row);
     }
   });
 }
 
-function settleTaskRunCompletionEffect(
-  command: SettleTaskRunCompletionCommand,
-) {
+function settleTaskCompletionEffect(command: SettleTaskCompletionCommand) {
   return repositoryTransaction(
-    "settleTaskRunCompletion",
+    "settleTaskCompletion",
     Effect.gen(function* () {
       const db = yield* PgDrizzle.PgDrizzle;
       const output = projectGeneratedAssetToTaskOutput([
@@ -699,26 +666,24 @@ function settleTaskRunCompletionEffect(
         ? "PENDING_REVIEW"
         : "APPROVED";
       const [row] = yield* db
-        .update(schema.taskRuns)
+        .update(schema.tasks)
         .set({
           assetIds: [command.generatedAsset.assetId],
           finishedAt: new Date(),
           runtimeStatus: finalStatus,
           updatedAt: new Date(),
         })
-        .where(sql`${schema.taskRuns.id} = ${command.taskRunId}
-        and ${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-        and ${schema.taskRuns.attempt} = ${command.attempt}
-        and ${schema.taskRuns.runtimeStatus} = 'RUNNING'`)
+        .where(sql`${schema.tasks.id} = ${command.taskId}
+        and ${schema.tasks.ownerUserId} = ${command.ownerUserId}
+        and ${schema.tasks.runtimeStatus} = 'RUNNING'`)
         .returning({
-          attempt: schema.taskRuns.attempt,
-          creditCost: schema.taskRuns.creditCost,
-          itemIndex: schema.taskRuns.itemIndex,
-          nodeExecutionId: schema.taskRuns.nodeExecutionId,
-          ownerUserId: schema.taskRuns.ownerUserId,
-          runtimeStatus: schema.taskRuns.runtimeStatus,
-          taskRunId: schema.taskRuns.id,
-          workflowId: schema.taskRuns.workflowId,
+          creditCost: schema.tasks.creditCost,
+          branchIndex: schema.tasks.branchIndex,
+          nodeRunId: schema.tasks.nodeRunId,
+          ownerUserId: schema.tasks.ownerUserId,
+          runtimeStatus: schema.tasks.runtimeStatus,
+          taskId: schema.tasks.id,
+          workflowId: schema.tasks.workflowId,
         });
 
       if (!row) {
@@ -743,16 +708,16 @@ function settleTaskRunCompletionEffect(
       yield* insertGeneratedAssetEffect({
         asset: command.generatedAsset,
         ownerUserId: row.ownerUserId,
-        taskRunId: row.taskRunId,
+        taskId: row.taskId,
         workflowId: row.workflowId,
       });
-      yield* adjustTaskRunCostCreditsEffect({
-        amount: taskRunCostAdjustmentCredits(
+      yield* adjustTaskCostCreditsEffect({
+        amount: taskCostAdjustmentCredits(
           row.creditCost,
           command.providerCostCredits,
         ),
         ownerUserId: row.ownerUserId,
-        taskRunId: row.taskRunId,
+        taskId: row.taskId,
         workflowId: row.workflowId,
       });
 
@@ -760,19 +725,18 @@ function settleTaskRunCompletionEffect(
         finalStatus === "APPROVED"
           ? buildRuntimeWakeUpJobPayload({
               ownerUserId: row.ownerUserId,
-              parentTaskRunId: row.taskRunId,
+              parentTaskId: row.taskId,
               workflowId: row.workflowId,
             })
           : null;
       const value = {
         settled: true as const,
         event: buildTaskStatusEvent({
-          attempt: requireNumber(row.attempt),
-          itemIndex: requireNumber(row.itemIndex),
-          nodeExecutionId: row.nodeExecutionId,
+          branchIndex: requireNumber(row.branchIndex),
+          nodeRunId: row.nodeRunId,
           output,
           status: finalStatus,
-          taskRunId: row.taskRunId,
+          taskId: row.taskId,
         }),
         wakeUpJob,
       };
@@ -787,9 +751,9 @@ function settleTaskRunCompletionEffect(
   );
 }
 
-function settleTaskRunFailureEffect(command: SettleTaskRunFailureCommand) {
+function settleTaskFailureEffect(command: SettleTaskFailureCommand) {
   return repositoryTransaction(
-    "settleTaskRunFailure",
+    "settleTaskFailure",
     Effect.gen(function* () {
       const db = yield* PgDrizzle.PgDrizzle;
       const failureMessage =
@@ -798,7 +762,7 @@ function settleTaskRunFailureEffect(command: SettleTaskRunFailureCommand) {
           : null;
       const failureReasonType = command.failureReason.type;
       const [row] = yield* db
-        .update(schema.taskRuns)
+        .update(schema.tasks)
         .set({
           error: failureMessage,
           failedAt: new Date(),
@@ -807,18 +771,16 @@ function settleTaskRunFailureEffect(command: SettleTaskRunFailureCommand) {
           runtimeStatus: "FAILED",
           updatedAt: new Date(),
         })
-        .where(sql`${schema.taskRuns.id} = ${command.taskRunId}
-        and ${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-        and ${schema.taskRuns.attempt} = ${command.attempt}
-        and ${schema.taskRuns.runtimeStatus} = 'RUNNING'`)
+        .where(sql`${schema.tasks.id} = ${command.taskId}
+        and ${schema.tasks.ownerUserId} = ${command.ownerUserId}
+        and ${schema.tasks.runtimeStatus} = 'RUNNING'`)
         .returning({
-          attempt: schema.taskRuns.attempt,
-          creditCost: schema.taskRuns.creditCost,
-          itemIndex: schema.taskRuns.itemIndex,
-          nodeExecutionId: schema.taskRuns.nodeExecutionId,
-          ownerUserId: schema.taskRuns.ownerUserId,
-          taskRunId: schema.taskRuns.id,
-          workflowId: schema.taskRuns.workflowId,
+          creditCost: schema.tasks.creditCost,
+          branchIndex: schema.tasks.branchIndex,
+          nodeRunId: schema.tasks.nodeRunId,
+          ownerUserId: schema.tasks.ownerUserId,
+          taskId: schema.tasks.id,
+          workflowId: schema.tasks.workflowId,
         });
 
       if (!row) {
@@ -828,38 +790,37 @@ function settleTaskRunFailureEffect(command: SettleTaskRunFailureCommand) {
         );
       }
 
-      if (command.failureSource.taskRunDebitRefundable) {
-        yield* refundTaskRunCreditsEffect({
+      if (command.failureSource.taskDebitRefundable) {
+        yield* refundTaskCreditsEffect({
           amount: row.creditCost,
           ownerUserId: row.ownerUserId,
-          taskRunId: row.taskRunId,
+          taskId: row.taskId,
           workflowId: row.workflowId,
         });
       }
-      yield* adjustTaskRunCostCreditsEffect({
-        amount: taskRunCostAdjustmentCredits(
+      yield* adjustTaskCostCreditsEffect({
+        amount: taskCostAdjustmentCredits(
           row.creditCost,
           command.providerCostCredits ?? row.creditCost,
         ),
         ownerUserId: row.ownerUserId,
-        taskRunId: row.taskRunId,
+        taskId: row.taskId,
         workflowId: row.workflowId,
       });
 
       const wakeUpJob = buildRuntimeWakeUpJobPayload({
         ownerUserId: row.ownerUserId,
-        parentTaskRunId: row.taskRunId,
+        parentTaskId: row.taskId,
         workflowId: row.workflowId,
       });
       const value = {
         settled: true as const,
         event: buildTaskStatusEvent({
-          attempt: requireNumber(row.attempt),
           failureReason: failureReasonType,
-          itemIndex: requireNumber(row.itemIndex),
-          nodeExecutionId: row.nodeExecutionId,
+          branchIndex: requireNumber(row.branchIndex),
+          nodeRunId: row.nodeRunId,
           status: "FAILED",
-          taskRunId: row.taskRunId,
+          taskId: row.taskId,
         }),
         wakeUpJob,
       };
@@ -874,31 +835,29 @@ function settleTaskRunFailureEffect(command: SettleTaskRunFailureCommand) {
   );
 }
 
-function approveTaskRunEffect(
-  command: DecideTaskRunReviewCommand & { readonly workflowId: string },
+function approveTaskEffect(
+  command: DecideTaskReviewCommand & { readonly workflowId: string },
 ) {
   return repositoryTransaction(
-    "approveTaskRun",
+    "approveTask",
     Effect.gen(function* () {
       const db = yield* PgDrizzle.PgDrizzle;
       const [row] = yield* db
-        .update(schema.taskRuns)
+        .update(schema.tasks)
         .set({
           finishedAt: new Date(),
           runtimeStatus: "APPROVED",
           updatedAt: new Date(),
         })
-        .where(sql`${schema.taskRuns.id} = ${command.taskRunId}
-          and ${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-          and ${schema.taskRuns.attempt} = ${command.attempt}
-          and ${schema.taskRuns.runtimeStatus} = 'PENDING_REVIEW'`)
+        .where(sql`${schema.tasks.id} = ${command.taskId}
+          and ${schema.tasks.ownerUserId} = ${command.ownerUserId}
+          and ${schema.tasks.runtimeStatus} = 'PENDING_REVIEW'`)
         .returning({
-          attempt: schema.taskRuns.attempt,
-          itemIndex: schema.taskRuns.itemIndex,
-          nodeExecutionId: schema.taskRuns.nodeExecutionId,
-          ownerUserId: schema.taskRuns.ownerUserId,
-          taskRunId: schema.taskRuns.id,
-          workflowId: schema.taskRuns.workflowId,
+          branchIndex: schema.tasks.branchIndex,
+          nodeRunId: schema.tasks.nodeRunId,
+          ownerUserId: schema.tasks.ownerUserId,
+          taskId: schema.tasks.id,
+          workflowId: schema.tasks.workflowId,
         });
       if (!row) {
         return committedOutcome(
@@ -908,17 +867,16 @@ function approveTaskRunEffect(
       }
       const wakeUpJob = buildRuntimeWakeUpJobPayload({
         ownerUserId: row.ownerUserId,
-        parentTaskRunId: row.taskRunId,
+        parentTaskId: row.taskId,
         workflowId: row.workflowId,
       });
       const value = {
         decided: true as const,
         event: buildTaskStatusEvent({
-          attempt: requireNumber(row.attempt),
-          itemIndex: requireNumber(row.itemIndex),
-          nodeExecutionId: row.nodeExecutionId,
+          branchIndex: requireNumber(row.branchIndex),
+          nodeRunId: row.nodeRunId,
           status: "APPROVED",
-          taskRunId: row.taskRunId,
+          taskId: row.taskId,
         }),
         wakeUpJob,
       };
@@ -933,69 +891,66 @@ function approveTaskRunEffect(
   );
 }
 
-function cancelTaskRunEffect(
-  command: DecideTaskRunReviewCommand & { readonly workflowId: string },
+function cancelTaskEffect(
+  command: DecideTaskReviewCommand & { readonly workflowId: string },
 ) {
   return repositoryTransaction(
-    "cancelTaskRun",
+    "cancelTask",
     Effect.gen(function* () {
       const db = yield* PgDrizzle.PgDrizzle;
       const [current] = yield* db
-        .select({ runtimeStatus: schema.taskRuns.runtimeStatus })
-        .from(schema.taskRuns)
-        .where(sql`${schema.taskRuns.id} = ${command.taskRunId}
-          and ${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-          and ${schema.taskRuns.attempt} = ${command.attempt}`)
+        .select({ runtimeStatus: schema.tasks.runtimeStatus })
+        .from(schema.tasks)
+        .where(sql`${schema.tasks.id} = ${command.taskId}
+          and ${schema.tasks.ownerUserId} = ${command.ownerUserId}
+`)
         .for("update")
         .limit(1);
       const [row] = yield* db
-        .update(schema.taskRuns)
+        .update(schema.tasks)
         .set({
           finishedAt: new Date(),
           runtimeStatus: "CANCELLED",
           updatedAt: new Date(),
         })
-        .where(sql`${schema.taskRuns.id} = ${command.taskRunId}
-          and ${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-          and ${schema.taskRuns.attempt} = ${command.attempt}
-          and ${schema.taskRuns.runtimeStatus} in ('WAITING_UPSTREAM', 'QUEUED')`)
+        .where(sql`${schema.tasks.id} = ${command.taskId}
+          and ${schema.tasks.ownerUserId} = ${command.ownerUserId}
+          and ${schema.tasks.runtimeStatus} in ('WAITING_UPSTREAM', 'QUEUED')`)
         .returning({
-          attempt: schema.taskRuns.attempt,
-          creditCost: schema.taskRuns.creditCost,
-          itemIndex: schema.taskRuns.itemIndex,
-          nodeExecutionId: schema.taskRuns.nodeExecutionId,
-          ownerUserId: schema.taskRuns.ownerUserId,
-          taskRunId: schema.taskRuns.id,
-          workflowId: schema.taskRuns.workflowId,
+          creditCost: schema.tasks.creditCost,
+          branchIndex: schema.tasks.branchIndex,
+          nodeRunId: schema.tasks.nodeRunId,
+          ownerUserId: schema.tasks.ownerUserId,
+          taskId: schema.tasks.id,
+          workflowId: schema.tasks.workflowId,
         });
       if (!row) {
-        const status = yield* loadTaskRunRuntimeStatusEffect(command);
+        const status = yield* loadTaskRuntimeStatusEffect(command);
         return committedOutcome(
           blockedCancelResult(status),
           emptyPostCommitWork("cancel-task-run", command.workflowId),
         );
       }
       if (current?.runtimeStatus === "QUEUED") {
-        yield* refundTaskRunCreditsEffect({
+        yield* refundTaskCreditsEffect({
           amount: row.creditCost,
           ownerUserId: row.ownerUserId,
-          taskRunId: row.taskRunId,
+          taskId: row.taskId,
           workflowId: row.workflowId,
         });
       }
       const wakeUpJob = buildRuntimeWakeUpJobPayload({
         ownerUserId: row.ownerUserId,
-        parentTaskRunId: row.taskRunId,
+        parentTaskId: row.taskId,
         workflowId: row.workflowId,
       });
       const value = {
         decided: true as const,
         event: buildTaskStatusEvent({
-          attempt: requireNumber(row.attempt),
-          itemIndex: requireNumber(row.itemIndex),
-          nodeExecutionId: row.nodeExecutionId,
+          branchIndex: requireNumber(row.branchIndex),
+          nodeRunId: row.nodeRunId,
           status: "CANCELLED",
-          taskRunId: row.taskRunId,
+          taskId: row.taskId,
         }),
         wakeUpJob,
       };
@@ -1010,38 +965,36 @@ function cancelTaskRunEffect(
   );
 }
 
-function rejectTaskRunAndCreateRegenerationEffect(
-  command: RejectTaskRunAndCreateRegenerationCommand & {
+function rejectTaskAndCreateRegenerationEffect(
+  command: RejectTaskAndCreateRegenerationCommand & {
     readonly workflowId: string;
   },
 ) {
   return repositoryTransaction(
-    "rejectTaskRunAndCreateRegeneration",
+    "rejectTaskAndCreateRegeneration",
     Effect.gen(function* () {
       const db = yield* PgDrizzle.PgDrizzle;
       const [rejected] = yield* db
-        .update(schema.taskRuns)
+        .update(schema.tasks)
         .set({
           finishedAt: new Date(),
           runtimeStatus: "REJECTED",
           updatedAt: new Date(),
         })
-        .where(sql`${schema.taskRuns.id} = ${command.taskRunId}
-          and ${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-          and ${schema.taskRuns.attempt} = ${command.attempt}
-          and ${schema.taskRuns.runtimeStatus} = 'PENDING_REVIEW'`)
+        .where(sql`${schema.tasks.id} = ${command.taskId}
+          and ${schema.tasks.ownerUserId} = ${command.ownerUserId}
+          and ${schema.tasks.runtimeStatus} = 'PENDING_REVIEW'`)
         .returning({
-          attempt: schema.taskRuns.attempt,
-          creditCost: schema.taskRuns.creditCost,
-          executionId: schema.taskRuns.executionId,
-          inputSnapshot: schema.taskRuns.inputSnapshot,
-          itemIndex: schema.taskRuns.itemIndex,
-          nodeExecutionId: schema.taskRuns.nodeExecutionId,
-          nodeId: schema.taskRuns.nodeId,
-          ownerUserId: schema.taskRuns.ownerUserId,
-          targetReason: schema.taskRuns.targetReason,
-          taskRunId: schema.taskRuns.id,
-          workflowId: schema.taskRuns.workflowId,
+          creditCost: schema.tasks.creditCost,
+          executionId: schema.tasks.executionId,
+          inputSnapshot: schema.tasks.inputSnapshot,
+          branchIndex: schema.tasks.branchIndex,
+          nodeRunId: schema.tasks.nodeRunId,
+          nodeId: schema.tasks.nodeId,
+          ownerUserId: schema.tasks.ownerUserId,
+          targetReason: schema.tasks.targetReason,
+          taskId: schema.tasks.id,
+          workflowId: schema.tasks.workflowId,
         });
       if (!rejected) {
         return committedOutcome(
@@ -1049,71 +1002,65 @@ function rejectTaskRunAndCreateRegenerationEffect(
           emptyPostCommitWork("reject-task-run", command.workflowId),
         );
       }
-      const inputSnapshot = requireTaskRunInputSnapshot(rejected.inputSnapshot);
-      const nextAttempt = requireNumber(rejected.attempt) + 1;
+      const inputSnapshot = requireTaskInputSnapshot(rejected.inputSnapshot);
       const newSnapshot = buildRepositoryInputSnapshot({
-        attempt: nextAttempt,
-        itemIndex: requireNumber(rejected.itemIndex),
-        nodeExecutionId: rejected.nodeExecutionId,
+        branchIndex: requireNumber(rejected.branchIndex),
+        nodeRunId: rejected.nodeRunId,
         nodeId: rejected.nodeId,
-        resolvedParents: inputSnapshot.resolvedParentTaskRuns,
+        resolvedParents: inputSnapshot.resolvedParentTasks,
         targetNodeConfig: inputSnapshot.targetNodeConfig,
-        taskRunId: command.newTaskRunId,
+        taskId: command.newTaskId,
         workflowDefinition: inputSnapshot.workflowDefinition,
       });
-      const debit = yield* debitTaskRunCreditsEffect({
+      const debit = yield* debitTaskCreditsEffect({
         amount: rejected.creditCost,
         ownerUserId: rejected.ownerUserId,
-        taskRunId: command.newTaskRunId,
+        taskId: command.newTaskId,
         workflowId: rejected.workflowId,
       });
       const newStatus = debit.debited ? "QUEUED" : "FAILED";
-      yield* db.insert(schema.taskRuns).values({
-        attempt: nextAttempt,
+      yield* db.insert(schema.tasks).values({
         creditCost: rejected.creditCost,
         executionId: rejected.executionId,
         failedAt: newStatus === "FAILED" ? new Date() : null,
         failureReason: newStatus === "FAILED" ? "INSUFFICIENT_CREDITS" : null,
-        id: command.newTaskRunId,
+        id: command.newTaskId,
         inputSnapshot: newStatus === "QUEUED" ? newSnapshot : null,
-        itemIndex: requireNumber(rejected.itemIndex),
-        jobId: command.newTaskRunId,
-        nodeExecutionId: rejected.nodeExecutionId,
+        branchIndex: requireNumber(rejected.branchIndex),
+        jobId: command.newTaskId,
+        nodeRunId: rejected.nodeRunId,
         nodeId: rejected.nodeId,
-        outputIndex: requireNumber(rejected.itemIndex),
+        outputIndex: requireNumber(rejected.branchIndex),
         ownerUserId: rejected.ownerUserId,
         queuedAt: newStatus === "QUEUED" ? new Date() : null,
         runtimeStatus: newStatus,
         status: "queued",
         targetReason: rejected.targetReason,
-        version: nextAttempt,
+        version: 0,
         workflowId: rejected.workflowId,
       });
       const rejectedEvent = buildTaskStatusEvent({
-        attempt: requireNumber(rejected.attempt),
-        itemIndex: requireNumber(rejected.itemIndex),
-        nodeExecutionId: rejected.nodeExecutionId,
+        branchIndex: requireNumber(rejected.branchIndex),
+        nodeRunId: rejected.nodeRunId,
         status: "REJECTED",
-        taskRunId: rejected.taskRunId,
+        taskId: rejected.taskId,
       });
       const newEvent = buildTaskStatusEvent({
-        attempt: nextAttempt,
         ...(newStatus === "FAILED"
           ? { failureReason: "INSUFFICIENT_CREDITS" as const }
           : {}),
-        itemIndex: requireNumber(rejected.itemIndex),
-        nodeExecutionId: rejected.nodeExecutionId,
+        branchIndex: requireNumber(rejected.branchIndex),
+        nodeRunId: rejected.nodeRunId,
         status: newStatus,
-        taskRunId: command.newTaskRunId,
+        taskId: command.newTaskId,
       });
       const executionJob =
         newStatus === "QUEUED"
           ? buildRuntimeExecutionJobPayload({
-              attempt: nextAttempt,
-              itemIndex: requireNumber(rejected.itemIndex),
-              nodeExecutionId: rejected.nodeExecutionId,
+              branchIndex: requireNumber(rejected.branchIndex),
+              nodeRunId: rejected.nodeRunId,
               ownerUserId: rejected.ownerUserId,
-              taskRunId: command.newTaskRunId,
+              taskId: command.newTaskId,
               workflowId: rejected.workflowId,
             })
           : null;
@@ -1133,16 +1080,16 @@ function rejectTaskRunAndCreateRegenerationEffect(
   );
 }
 
-function wakeUpTaskRunChildrenEffect(
-  command: WakeUpTaskRunChildrenRepositoryCommand & {
+function wakeUpTaskChildrenEffect(
+  command: WakeUpTaskChildrenRepositoryCommand & {
     readonly workflowId: string;
   },
 ) {
   return repositoryTransaction(
-    "wakeUpTaskRunChildren",
+    "wakeUpTaskChildren",
     Effect.gen(function* () {
       const { durableStateChanged, ...value } =
-        yield* runWakeUpTaskRunChildrenPersistenceEffect(command);
+        yield* runWakeUpTaskChildrenPersistenceEffect(command);
       return {
         durableStateChanged,
         ...committedOutcome(value, {
@@ -1176,60 +1123,50 @@ function repositoryTransaction<A, E, R>(
 }
 
 function buildCommittedPlanResult(
-  committedTaskRuns: readonly CommittedPlanTaskRun[],
-  nodeExecutionById: ReadonlyMap<string, NodeExecutionIdentity>,
+  committedTasks: readonly CommittedPlanTask[],
+  nodeRunById: ReadonlyMap<string, NodeRunIdentity>,
 ): CommitWorkflowRunPlanResult {
   return {
-    executionJobs: committedTaskRuns.flatMap((taskRun) => {
-      if (taskRun.status !== "QUEUED") {
+    executionJobs: committedTasks.flatMap((task) => {
+      if (task.status !== "QUEUED") {
         return [];
       }
-      const nodeExecution = requireNodeExecutionIdentity(
-        nodeExecutionById,
-        taskRun.nodeExecutionId,
-      );
+      const nodeRun = requireNodeRunIdentity(nodeRunById, task.nodeRunId);
       return buildRuntimeExecutionJobPayload({
-        attempt: taskRun.attempt,
-        itemIndex: taskRun.itemIndex,
-        nodeExecutionId: taskRun.nodeExecutionId,
-        ownerUserId: nodeExecution.ownerUserId,
-        taskRunId: taskRun.id,
-        workflowId: nodeExecution.workflowId,
+        branchIndex: task.branchIndex,
+        nodeRunId: task.nodeRunId,
+        ownerUserId: nodeRun.ownerUserId,
+        taskId: task.id,
+        workflowId: nodeRun.workflowId,
       });
     }),
-    taskStatusEvents: committedTaskRuns.map((taskRun) =>
+    taskStatusEvents: committedTasks.map((task) =>
       buildTaskStatusEvent({
-        attempt: taskRun.attempt,
-        ...(taskRun.failureReason
-          ? { failureReason: taskRun.failureReason }
-          : {}),
-        itemIndex: taskRun.itemIndex,
-        nodeExecutionId: taskRun.nodeExecutionId,
-        status: taskRun.status,
-        taskRunId: taskRun.id,
+        ...(task.failureReason ? { failureReason: task.failureReason } : {}),
+        branchIndex: task.branchIndex,
+        nodeRunId: task.nodeRunId,
+        status: task.status,
+        taskId: task.id,
       }),
     ),
-    wakeUpJobs: committedTaskRuns.flatMap((taskRun) => {
-      if (taskRun.status !== "FAILED") {
+    wakeUpJobs: committedTasks.flatMap((task) => {
+      if (task.status !== "FAILED") {
         return [];
       }
-      const nodeExecution = requireNodeExecutionIdentity(
-        nodeExecutionById,
-        taskRun.nodeExecutionId,
-      );
+      const nodeRun = requireNodeRunIdentity(nodeRunById, task.nodeRunId);
       return buildRuntimeWakeUpJobPayload({
-        ownerUserId: nodeExecution.ownerUserId,
-        parentTaskRunId: taskRun.id,
-        workflowId: nodeExecution.workflowId,
+        ownerUserId: nodeRun.ownerUserId,
+        parentTaskId: task.id,
+        workflowId: nodeRun.workflowId,
       });
     }),
   };
 }
 
-function debitTaskRunCreditsEffect(command: {
+function debitTaskCreditsEffect(command: {
   readonly amount: number;
   readonly ownerUserId: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 }) {
   return Effect.gen(function* () {
@@ -1238,9 +1175,9 @@ function debitTaskRunCreditsEffect(command: {
     }
     const db = yield* PgDrizzle.PgDrizzle;
     const balance = yield* lockUserAndReadBalanceEffect(command.ownerUserId);
-    const sourceKey = buildTaskRunCreditLedgerSourceKey({
+    const sourceKey = buildTaskCreditLedgerSourceKey({
       operation: "debit",
-      taskRunId: command.taskRunId,
+      taskId: command.taskId,
     });
     if (yield* hasLedgerEntryEffect(sourceKey)) {
       return { debited: true as const };
@@ -1269,7 +1206,7 @@ function debitTaskRunCreditsEffect(command: {
       executionId: command.workflowId,
       id: sourceKey,
       kind: "debit",
-      reason: "task_run_debit",
+      reason: "task_debit",
       sourceKey,
       userId: command.ownerUserId,
     });
@@ -1277,10 +1214,10 @@ function debitTaskRunCreditsEffect(command: {
   });
 }
 
-function refundTaskRunCreditsEffect(command: {
+function refundTaskCreditsEffect(command: {
   readonly amount: number;
   readonly ownerUserId: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 }) {
   return Effect.gen(function* () {
@@ -1288,9 +1225,9 @@ function refundTaskRunCreditsEffect(command: {
       return;
     }
     const db = yield* PgDrizzle.PgDrizzle;
-    const sourceKey = buildTaskRunCreditLedgerSourceKey({
+    const sourceKey = buildTaskCreditLedgerSourceKey({
       operation: "refund",
-      taskRunId: command.taskRunId,
+      taskId: command.taskId,
     });
     yield* lockUserAndReadBalanceEffect(command.ownerUserId);
     if (yield* hasLedgerEntryEffect(sourceKey)) {
@@ -1314,17 +1251,17 @@ function refundTaskRunCreditsEffect(command: {
       executionId: command.workflowId,
       id: sourceKey,
       kind: "refund",
-      reason: "task_run_refund",
+      reason: "task_refund",
       sourceKey,
       userId: command.ownerUserId,
     });
   });
 }
 
-function adjustTaskRunCostCreditsEffect(command: {
+function adjustTaskCostCreditsEffect(command: {
   readonly amount: number;
   readonly ownerUserId: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 }) {
   return Effect.gen(function* () {
@@ -1332,9 +1269,9 @@ function adjustTaskRunCostCreditsEffect(command: {
       return { adjusted: false as const, amount: 0 as const };
     }
     const db = yield* PgDrizzle.PgDrizzle;
-    const sourceKey = buildTaskRunCreditLedgerSourceKey({
+    const sourceKey = buildTaskCreditLedgerSourceKey({
       operation: "cost_adjustment",
-      taskRunId: command.taskRunId,
+      taskId: command.taskId,
     });
     const balance = yield* lockUserAndReadBalanceEffect(command.ownerUserId);
     if (yield* hasLedgerEntryEffect(sourceKey)) {
@@ -1362,7 +1299,7 @@ function adjustTaskRunCostCreditsEffect(command: {
       executionId: command.workflowId,
       id: sourceKey,
       kind: "debit",
-      reason: "task_run_cost_adjustment",
+      reason: "task_cost_adjustment",
       sourceKey,
       userId: command.ownerUserId,
     });
@@ -1404,7 +1341,7 @@ function hasLedgerEntryEffect(sourceKey: string) {
 function insertGeneratedAssetEffect(input: {
   readonly asset: RuntimeGeneratedPrimaryAssetPayload;
   readonly ownerUserId: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 }) {
   return Effect.gen(function* () {
@@ -1423,15 +1360,15 @@ function insertGeneratedAssetEffect(input: {
       source: "generated",
       storageKey: asset.storageKey ?? null,
       storageProvider: asset.storageProvider,
-      taskRunId: input.taskRunId,
+      taskId: input.taskId,
       textContent: "text" in asset ? asset.text : null,
       workflowId: input.workflowId,
     });
   });
 }
 
-function runWakeUpTaskRunChildrenPersistenceEffect(
-  command: WakeUpTaskRunChildrenRepositoryCommand & {
+function runWakeUpTaskChildrenPersistenceEffect(
+  command: WakeUpTaskChildrenRepositoryCommand & {
     readonly workflowId: string;
   },
 ) {
@@ -1441,10 +1378,10 @@ function runWakeUpTaskRunChildrenPersistenceEffect(
     }
     const initialState = yield* loadWakeUpGatekeeperStateEffect(command);
 
-    const gatekeeperResult = wakeUpTaskRunChildren(initialState, {
-      settledParentTaskRunId: command.settledParentTaskRunId,
+    const gatekeeperResult = wakeUpTaskChildren(initialState, {
+      settledParentTaskId: command.settledParentTaskId,
     });
-    const debitAdjustedResult = yield* applyWakeUpTaskRunDebitsEffect(
+    const debitAdjustedResult = yield* applyWakeUpTaskDebitsEffect(
       command,
       gatekeeperResult,
     );
@@ -1458,7 +1395,7 @@ function runWakeUpTaskRunChildrenPersistenceEffect(
       executionJobs: buildWakeUpExecutionJobs(
         command,
         debitAdjustedResult.state,
-        debitAdjustedResult.executionJobs.map((job) => job.taskRunId),
+        debitAdjustedResult.executionJobs.map((job) => job.taskId),
       ),
       parentFound: true,
       taskStatusEvents: debitAdjustedResult.taskStatusEvents,
@@ -1467,53 +1404,52 @@ function runWakeUpTaskRunChildrenPersistenceEffect(
 }
 
 function wakeUpParentExistsEffect(
-  command: WakeUpTaskRunChildrenRepositoryCommand & {
+  command: WakeUpTaskChildrenRepositoryCommand & {
     readonly workflowId: string;
   },
 ) {
   return Effect.gen(function* () {
     const db = yield* PgDrizzle.PgDrizzle;
     const rows = yield* db
-      .select({ id: schema.taskRuns.id })
-      .from(schema.taskRuns)
-      .where(sql`${schema.taskRuns.id} = ${command.settledParentTaskRunId}
-        and ${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-        and ${schema.taskRuns.workflowId} = ${command.workflowId}
-        and ${schema.taskRuns.runtimeStatus} is not null`)
+      .select({ id: schema.tasks.id })
+      .from(schema.tasks)
+      .where(sql`${schema.tasks.id} = ${command.settledParentTaskId}
+        and ${schema.tasks.ownerUserId} = ${command.ownerUserId}
+        and ${schema.tasks.workflowId} = ${command.workflowId}
+        and ${schema.tasks.runtimeStatus} is not null`)
       .limit(1);
     return rows.length > 0;
   });
 }
 
 function loadWakeUpGatekeeperStateEffect(
-  command: WakeUpTaskRunChildrenRepositoryCommand & {
+  command: WakeUpTaskChildrenRepositoryCommand & {
     readonly workflowId: string;
   },
 ) {
   return Effect.gen(function* () {
     const db = yield* PgDrizzle.PgDrizzle;
     const balance = yield* lockUserAndReadBalanceEffect(command.ownerUserId);
-    const taskRunRows = yield* db
+    const taskRows = yield* db
       .select({
-        attempt: schema.taskRuns.attempt,
-        creditCost: schema.taskRuns.creditCost,
-        failureReason: schema.taskRuns.failureReason,
-        inputSnapshot: schema.taskRuns.inputSnapshot,
-        itemIndex: schema.taskRuns.itemIndex,
-        nodeId: schema.taskRuns.nodeId,
-        nodeExecutionId: schema.taskRuns.nodeExecutionId,
-        runtimeStatus: schema.taskRuns.runtimeStatus,
-        taskRunId: schema.taskRuns.id,
+        creditCost: schema.tasks.creditCost,
+        failureReason: schema.tasks.failureReason,
+        inputSnapshot: schema.tasks.inputSnapshot,
+        branchIndex: schema.tasks.branchIndex,
+        nodeId: schema.tasks.nodeId,
+        nodeRunId: schema.tasks.nodeRunId,
+        runtimeStatus: schema.tasks.runtimeStatus,
+        taskId: schema.tasks.id,
       })
-      .from(schema.taskRuns)
-      .where(sql`${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-        and ${schema.taskRuns.workflowId} = ${command.workflowId}
-        and ${schema.taskRuns.runtimeStatus} is not null`)
+      .from(schema.tasks)
+      .where(sql`${schema.tasks.ownerUserId} = ${command.ownerUserId}
+        and ${schema.tasks.workflowId} = ${command.workflowId}
+        and ${schema.tasks.runtimeStatus} is not null`)
       .orderBy(
-        schema.taskRuns.nodeExecutionId,
-        schema.taskRuns.itemIndex,
-        schema.taskRuns.attempt,
-        schema.taskRuns.id,
+        schema.tasks.nodeRunId,
+        schema.tasks.branchIndex,
+        schema.tasks.createdAt,
+        schema.tasks.id,
       )
       .for("update");
     const assetRows = yield* db
@@ -1529,125 +1465,119 @@ function loadWakeUpGatekeeperStateEffect(
         assetSizeBytes: schema.assets.sizeBytes,
         assetStorageKey: schema.assets.storageKey,
         assetText: schema.assets.textContent,
-        taskRunId: schema.assets.taskRunId,
+        taskId: schema.assets.taskId,
       })
       .from(schema.assets)
       .innerJoin(
-        schema.taskRuns,
-        sql`${schema.taskRuns.id} = ${schema.assets.taskRunId}`,
+        schema.tasks,
+        sql`${schema.tasks.id} = ${schema.assets.taskId}`,
       )
-      .where(sql`${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-        and ${schema.taskRuns.workflowId} = ${command.workflowId}`)
+      .where(sql`${schema.tasks.ownerUserId} = ${command.ownerUserId}
+        and ${schema.tasks.workflowId} = ${command.workflowId}`)
       .orderBy(schema.assets.id);
-    const assetsByTaskRunId = new Map(
-      assetRows.map((row) => [row.taskRunId, row]),
-    );
-    const taskRunsById = new Map<string, TaskRunGatekeeperTaskRun>();
-    for (const row of taskRunRows) {
-      if (taskRunsById.has(row.taskRunId)) {
+    const assetsByTaskId = new Map(assetRows.map((row) => [row.taskId, row]));
+    const tasksById = new Map<string, TaskGatekeeperTask>();
+    for (const row of taskRows) {
+      if (tasksById.has(row.taskId)) {
         continue;
       }
-      const assetRow = assetsByTaskRunId.get(row.taskRunId);
+      const assetRow = assetsByTaskId.get(row.taskId);
       const asset = assetRow ? buildWorkflowAssetFromRow(assetRow) : null;
       const output = assetRow ? buildRenderableOutputFromRow(assetRow) : null;
-      taskRunsById.set(row.taskRunId, {
-        attempt: requireNumber(row.attempt),
+      tasksById.set(row.taskId, {
         creditCost: requireNumber(row.creditCost),
         ...(asset ? { asset } : {}),
         ...(row.failureReason
           ? {
-              failureReason: taskRunFailureReasonFromDatabase(
-                row.failureReason,
-              ),
+              failureReason: taskFailureReasonFromDatabase(row.failureReason),
             }
           : {}),
-        id: row.taskRunId,
+        id: row.taskId,
         inputSnapshot:
-          optionalTaskRunInputSnapshot(row.inputSnapshot) ?? undefined,
-        itemIndex: requireNumber(row.itemIndex),
-        nodeExecutionId: row.nodeExecutionId,
+          optionalTaskInputSnapshot(row.inputSnapshot) ?? undefined,
+        branchIndex: requireNumber(row.branchIndex),
+        nodeRunId: row.nodeRunId,
         nodeId: row.nodeId,
         ...(output ? { output } : {}),
-        status: requireTaskRunRuntimeStatus(row.runtimeStatus),
+        status: requireTaskRuntimeStatus(row.runtimeStatus),
       });
     }
 
     const dependencies = yield* db
       .select({
-        childTaskRunId: schema.taskDependencies.childTaskRunId,
-        requiredParentItemIndex:
-          schema.taskDependencies.requiredParentItemIndex,
-        requiredParentNodeExecutionId:
-          schema.taskDependencies.requiredParentNodeExecutionId,
+        childTaskId: schema.taskDependencies.childTaskId,
+        requiredParentBranchIndex:
+          schema.taskDependencies.requiredParentBranchIndex,
+        requiredParentNodeRunId:
+          schema.taskDependencies.requiredParentNodeRunId,
         requiredParentNodeId: schema.taskDependencies.requiredParentNodeId,
-        resolvedParentTaskRunId:
-          schema.taskDependencies.resolvedParentTaskRunId,
+        resolvedParentTaskId: schema.taskDependencies.resolvedParentTaskId,
         sourceHandle: schema.taskDependencies.sourceHandle,
         targetHandle: schema.taskDependencies.targetHandle,
         targetNodeId: schema.taskDependencies.targetNodeId,
       })
       .from(schema.taskDependencies)
       .innerJoin(
-        schema.taskRuns,
-        sql`${schema.taskRuns.id} = ${schema.taskDependencies.childTaskRunId}`,
+        schema.tasks,
+        sql`${schema.tasks.id} = ${schema.taskDependencies.childTaskId}`,
       )
-      .where(sql`${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-        and ${schema.taskRuns.workflowId} = ${command.workflowId}
-        and ${schema.taskRuns.runtimeStatus} is not null`)
+      .where(sql`${schema.tasks.ownerUserId} = ${command.ownerUserId}
+        and ${schema.tasks.workflowId} = ${command.workflowId}
+        and ${schema.tasks.runtimeStatus} is not null`)
       .orderBy(schema.taskDependencies.id);
 
     return {
       creditBalance: balance,
       dependencies: dependencies.map((dependency) => ({
-        childTaskRunId: dependency.childTaskRunId,
-        requiredParentItemIndex: requireNumber(
-          dependency.requiredParentItemIndex,
+        childTaskId: dependency.childTaskId,
+        requiredParentBranchIndex: requireNumber(
+          dependency.requiredParentBranchIndex,
         ),
-        requiredParentNodeExecutionId: dependency.requiredParentNodeExecutionId,
+        requiredParentNodeRunId: dependency.requiredParentNodeRunId,
         requiredParentNodeId: dependency.requiredParentNodeId,
-        resolvedParentTaskRunId: dependency.resolvedParentTaskRunId,
+        resolvedParentTaskId: dependency.resolvedParentTaskId,
         sourceHandle: dependency.sourceHandle,
         targetHandle: dependency.targetHandle,
         targetNodeId: dependency.targetNodeId,
       })),
-      taskRuns: Array.from(taskRunsById.values()),
-    } satisfies TaskRunGatekeeperState;
+      tasks: Array.from(tasksById.values()),
+    } satisfies TaskGatekeeperState;
   });
 }
 
-function applyWakeUpTaskRunDebitsEffect(
-  command: WakeUpTaskRunChildrenRepositoryCommand & {
+function applyWakeUpTaskDebitsEffect(
+  command: WakeUpTaskChildrenRepositoryCommand & {
     readonly workflowId: string;
   },
-  gatekeeperResult: ReturnType<typeof wakeUpTaskRunChildren>,
+  gatekeeperResult: ReturnType<typeof wakeUpTaskChildren>,
 ) {
   return Effect.gen(function* () {
     let nextResult = gatekeeperResult;
-    const failedDebitTaskRunIds = new Set<string>();
+    const failedDebitTaskIds = new Set<string>();
     for (const job of gatekeeperResult.executionJobs) {
-      const taskRun = requireGatekeeperTaskRun(nextResult.state, job.taskRunId);
-      const debit = yield* debitTaskRunCreditsEffect({
-        amount: taskRun.creditCost,
+      const task = requireGatekeeperTask(nextResult.state, job.taskId);
+      const debit = yield* debitTaskCreditsEffect({
+        amount: task.creditCost,
         ownerUserId: command.ownerUserId,
-        taskRunId: taskRun.id,
+        taskId: task.id,
         workflowId: command.workflowId,
       });
       if (debit.debited) {
         continue;
       }
-      failedDebitTaskRunIds.add(taskRun.id);
-      const failureResult = recordDirectTaskRunFailure(nextResult.state, {
+      failedDebitTaskIds.add(task.id);
+      const failureResult = recordDirectTaskFailure(nextResult.state, {
         failureReason: { type: "INSUFFICIENT_CREDITS" },
-        taskRunId: taskRun.id,
+        taskId: task.id,
       });
       nextResult = {
         executionJobs: nextResult.executionJobs.filter(
-          (candidate) => candidate.taskRunId !== taskRun.id,
+          (candidate) => candidate.taskId !== task.id,
         ),
         state: failureResult.state,
         taskStatusEvents: [
           ...nextResult.taskStatusEvents.filter(
-            (event) => !failedDebitTaskRunIds.has(event.taskRunId),
+            (event) => !failedDebitTaskIds.has(event.taskId),
           ),
           ...failureResult.taskStatusEvents,
         ],
@@ -1658,31 +1588,31 @@ function applyWakeUpTaskRunDebitsEffect(
 }
 
 function persistWakeUpGatekeeperResultEffect(
-  initialState: TaskRunGatekeeperState,
-  nextState: TaskRunGatekeeperState,
+  initialState: TaskGatekeeperState,
+  nextState: TaskGatekeeperState,
 ) {
   return Effect.gen(function* () {
     const db = yield* PgDrizzle.PgDrizzle;
-    const initialTaskRuns = new Map(
-      initialState.taskRuns.map((taskRun) => [taskRun.id, taskRun]),
+    const initialTasks = new Map(
+      initialState.tasks.map((task) => [task.id, task]),
     );
     let durableStateChanged = false;
 
     for (const dependency of nextState.dependencies) {
       const initialDependency = initialState.dependencies.find(
         (candidate) =>
-          candidate.childTaskRunId === dependency.childTaskRunId &&
-          candidate.requiredParentNodeExecutionId ===
-            dependency.requiredParentNodeExecutionId &&
-          candidate.requiredParentItemIndex ===
-            dependency.requiredParentItemIndex &&
+          candidate.childTaskId === dependency.childTaskId &&
+          candidate.requiredParentNodeRunId ===
+            dependency.requiredParentNodeRunId &&
+          candidate.requiredParentBranchIndex ===
+            dependency.requiredParentBranchIndex &&
           candidate.sourceHandle === dependency.sourceHandle &&
           candidate.targetHandle === dependency.targetHandle,
       );
       if (
         !initialDependency ||
-        initialDependency.resolvedParentTaskRunId ===
-          dependency.resolvedParentTaskRunId
+        initialDependency.resolvedParentTaskId ===
+          dependency.resolvedParentTaskId
       ) {
         continue;
       }
@@ -1690,46 +1620,43 @@ function persistWakeUpGatekeeperResultEffect(
         .update(schema.taskDependencies)
         .set({
           resolvedAt: new Date(),
-          resolvedParentTaskRunId: dependency.resolvedParentTaskRunId,
+          resolvedParentTaskId: dependency.resolvedParentTaskId,
         })
-        .where(sql`${schema.taskDependencies.childTaskRunId} = ${dependency.childTaskRunId}
-          and ${schema.taskDependencies.requiredParentNodeExecutionId} = ${dependency.requiredParentNodeExecutionId}
-          and ${schema.taskDependencies.requiredParentItemIndex} = ${dependency.requiredParentItemIndex}
+        .where(sql`${schema.taskDependencies.childTaskId} = ${dependency.childTaskId}
+          and ${schema.taskDependencies.requiredParentNodeRunId} = ${dependency.requiredParentNodeRunId}
+          and ${schema.taskDependencies.requiredParentBranchIndex} = ${dependency.requiredParentBranchIndex}
           and ${schema.taskDependencies.sourceHandle} is not distinct from ${dependency.sourceHandle}
           and ${schema.taskDependencies.targetHandle} is not distinct from ${dependency.targetHandle}
-          and ${schema.taskDependencies.resolvedParentTaskRunId} is null`)
+          and ${schema.taskDependencies.resolvedParentTaskId} is null`)
         .returning({ id: schema.taskDependencies.id });
       durableStateChanged = durableStateChanged || Boolean(updated);
     }
 
-    for (const taskRun of nextState.taskRuns) {
-      const initialTaskRun = initialTaskRuns.get(taskRun.id);
-      if (
-        !initialTaskRun ||
-        !gatekeeperTaskRunChanged(initialTaskRun, taskRun)
-      ) {
+    for (const task of nextState.tasks) {
+      const initialTask = initialTasks.get(task.id);
+      if (!initialTask || !gatekeeperTaskChanged(initialTask, task)) {
         continue;
       }
       const [updated] = yield* db
-        .update(schema.taskRuns)
+        .update(schema.tasks)
         .set({
           error:
-            taskRun.status === "UPSTREAM_FAILED"
-              ? `Upstream Task Run ${taskRun.failureReason?.type === "UPSTREAM_FAILED" ? taskRun.failureReason.failedParentTaskRunId : "unknown"} did not approve.`
+            task.status === "UPSTREAM_FAILED"
+              ? `Upstream Task ${task.failureReason?.type === "UPSTREAM_FAILED" ? task.failureReason.failedParentTaskId : "unknown"} did not approve.`
               : null,
           failedAt:
-            taskRun.status === "FAILED" || taskRun.status === "UPSTREAM_FAILED"
+            task.status === "FAILED" || task.status === "UPSTREAM_FAILED"
               ? new Date()
               : null,
-          failureReason: taskRun.failureReason?.type ?? null,
-          inputSnapshot: taskRun.inputSnapshot ?? null,
-          queuedAt: taskRun.status === "QUEUED" ? new Date() : null,
-          runtimeStatus: taskRun.status,
+          failureReason: task.failureReason?.type ?? null,
+          inputSnapshot: task.inputSnapshot ?? null,
+          queuedAt: task.status === "QUEUED" ? new Date() : null,
+          runtimeStatus: task.status,
           updatedAt: new Date(),
         })
-        .where(sql`${schema.taskRuns.id} = ${taskRun.id}
-          and ${schema.taskRuns.runtimeStatus} = ${initialTaskRun.status}`)
-        .returning({ id: schema.taskRuns.id });
+        .where(sql`${schema.tasks.id} = ${task.id}
+          and ${schema.tasks.runtimeStatus} = ${initialTask.status}`)
+        .returning({ id: schema.tasks.id });
       durableStateChanged = durableStateChanged || Boolean(updated);
     }
 
@@ -1738,41 +1665,38 @@ function persistWakeUpGatekeeperResultEffect(
 }
 
 function buildWakeUpExecutionJobs(
-  command: WakeUpTaskRunChildrenRepositoryCommand & {
+  command: WakeUpTaskChildrenRepositoryCommand & {
     readonly workflowId: string;
   },
-  state: TaskRunGatekeeperState,
-  taskRunIds: readonly string[],
+  state: TaskGatekeeperState,
+  taskIds: readonly string[],
 ): readonly RuntimeExecutionJobPayload[] {
-  return taskRunIds.map((taskRunId) => {
-    const taskRun = requireGatekeeperTaskRun(state, taskRunId);
+  return taskIds.map((taskId) => {
+    const task = requireGatekeeperTask(state, taskId);
     return buildRuntimeExecutionJobPayload({
-      attempt: taskRun.attempt,
-      itemIndex: taskRun.itemIndex,
-      nodeExecutionId: taskRun.nodeExecutionId,
+      branchIndex: task.branchIndex,
+      nodeRunId: task.nodeRunId,
       ownerUserId: command.ownerUserId,
-      taskRunId: taskRun.id,
+      taskId: task.id,
       workflowId: command.workflowId,
     });
   });
 }
 
-function requireGatekeeperTaskRun(
-  state: TaskRunGatekeeperState,
-  taskRunId: string,
-): TaskRunGatekeeperTaskRun {
-  const taskRun = state.taskRuns.find(
-    (candidate) => candidate.id === taskRunId,
-  );
-  if (!taskRun) {
-    throw new TypeError(`Missing gatekeeper Task Run ${taskRunId}`);
+function requireGatekeeperTask(
+  state: TaskGatekeeperState,
+  taskId: string,
+): TaskGatekeeperTask {
+  const task = state.tasks.find((candidate) => candidate.id === taskId);
+  if (!task) {
+    throw new TypeError(`Missing gatekeeper Task ${taskId}`);
   }
-  return taskRun;
+  return task;
 }
 
-function gatekeeperTaskRunChanged(
-  left: TaskRunGatekeeperTaskRun,
-  right: TaskRunGatekeeperTaskRun,
+function gatekeeperTaskChanged(
+  left: TaskGatekeeperTask,
+  right: TaskGatekeeperTask,
 ): boolean {
   return (
     left.status !== right.status ||
@@ -1783,9 +1707,9 @@ function gatekeeperTaskRunChanged(
   );
 }
 
-function taskRunFailureReasonFromDatabase(value: string): TaskRunFailureReason {
+function taskFailureReasonFromDatabase(value: string): TaskFailureReason {
   if (value === "UPSTREAM_FAILED") {
-    return { failedParentTaskRunId: "unknown", type: "UPSTREAM_FAILED" };
+    return { failedParentTaskId: "unknown", type: "UPSTREAM_FAILED" };
   }
   if (value === "INSUFFICIENT_CREDITS") {
     return { type: "INSUFFICIENT_CREDITS" };
@@ -1796,28 +1720,27 @@ function taskRunFailureReasonFromDatabase(value: string): TaskRunFailureReason {
   return { message: "Execution failed.", type: "EXECUTION_FAILED" };
 }
 
-function resolveApprovedDependenciesForChildEffect(childTaskRunId: string) {
+function resolveApprovedDependenciesForChildEffect(childTaskId: string) {
   return Effect.gen(function* () {
     const db = yield* PgDrizzle.PgDrizzle;
     const dependencies = yield* db
       .select({
         id: schema.taskDependencies.id,
-        parentItemIndex: schema.taskDependencies.requiredParentItemIndex,
-        parentNodeExecutionId:
-          schema.taskDependencies.requiredParentNodeExecutionId,
+        parentBranchIndex: schema.taskDependencies.requiredParentBranchIndex,
+        parentNodeRunId: schema.taskDependencies.requiredParentNodeRunId,
       })
       .from(schema.taskDependencies)
-      .where(sql`${schema.taskDependencies.childTaskRunId} = ${childTaskRunId}
-        and ${schema.taskDependencies.resolvedParentTaskRunId} is null`)
+      .where(sql`${schema.taskDependencies.childTaskId} = ${childTaskId}
+        and ${schema.taskDependencies.resolvedParentTaskId} is null`)
       .orderBy(schema.taskDependencies.id);
     for (const dependency of dependencies) {
       const [parent] = yield* db
-        .select({ id: schema.taskRuns.id })
-        .from(schema.taskRuns)
-        .where(sql`${schema.taskRuns.nodeExecutionId} = ${dependency.parentNodeExecutionId}
-          and ${schema.taskRuns.itemIndex} = ${dependency.parentItemIndex}
-          and ${schema.taskRuns.runtimeStatus} = 'APPROVED'`)
-        .orderBy(sql`${schema.taskRuns.attempt} desc`, schema.taskRuns.id)
+        .select({ id: schema.tasks.id })
+        .from(schema.tasks)
+        .where(sql`${schema.tasks.nodeRunId} = ${dependency.parentNodeRunId}
+          and ${schema.tasks.branchIndex} = ${dependency.parentBranchIndex}
+          and ${schema.tasks.runtimeStatus} = 'APPROVED'`)
+        .orderBy(sql`${schema.tasks.createdAt} desc`, schema.tasks.id)
         .limit(1);
       if (!parent) {
         continue;
@@ -1826,14 +1749,14 @@ function resolveApprovedDependenciesForChildEffect(childTaskRunId: string) {
         .update(schema.taskDependencies)
         .set({
           resolvedAt: new Date(),
-          resolvedParentTaskRunId: parent.id,
+          resolvedParentTaskId: parent.id,
         })
         .where(sql`${schema.taskDependencies.id} = ${dependency.id}`);
     }
   });
 }
 
-function loadResolvedParentSnapshotsEffect(childTaskRunId: string) {
+function loadResolvedParentSnapshotsEffect(childTaskId: string) {
   return Effect.gen(function* () {
     const db = yield* PgDrizzle.PgDrizzle;
     const rows = yield* db
@@ -1849,26 +1772,25 @@ function loadResolvedParentSnapshotsEffect(childTaskRunId: string) {
         assetSizeBytes: schema.assets.sizeBytes,
         assetStorageKey: schema.assets.storageKey,
         assetText: schema.assets.textContent,
-        attempt: schema.taskRuns.attempt,
-        itemIndex: schema.taskRuns.itemIndex,
-        nodeExecutionId: schema.taskRuns.nodeExecutionId,
-        parentItemIndex: schema.taskDependencies.requiredParentItemIndex,
+        branchIndex: schema.tasks.branchIndex,
+        nodeRunId: schema.tasks.nodeRunId,
+        parentBranchIndex: schema.taskDependencies.requiredParentBranchIndex,
         parentNodeId: schema.taskDependencies.requiredParentNodeId,
         sourceHandle: schema.taskDependencies.sourceHandle,
         targetHandle: schema.taskDependencies.targetHandle,
         targetNodeId: schema.taskDependencies.targetNodeId,
-        taskRunId: schema.taskRuns.id,
+        taskId: schema.tasks.id,
       })
       .from(schema.taskDependencies)
       .innerJoin(
-        schema.taskRuns,
-        sql`${schema.taskRuns.id} = ${schema.taskDependencies.resolvedParentTaskRunId}`,
+        schema.tasks,
+        sql`${schema.tasks.id} = ${schema.taskDependencies.resolvedParentTaskId}`,
       )
       .leftJoin(
         schema.assets,
-        sql`${schema.assets.taskRunId} = ${schema.taskRuns.id}`,
+        sql`${schema.assets.taskId} = ${schema.tasks.id}`,
       )
-      .where(sql`${schema.taskDependencies.childTaskRunId} = ${childTaskRunId}`)
+      .where(sql`${schema.taskDependencies.childTaskId} = ${childTaskId}`)
       .orderBy(schema.taskDependencies.id, schema.assets.id);
     return rows.map((row) => {
       const asset = buildWorkflowAssetFromRow(row);
@@ -1876,17 +1798,16 @@ function loadResolvedParentSnapshotsEffect(childTaskRunId: string) {
       return {
         ...(asset ? { asset } : {}),
         address: {
-          parentItemIndex: requireNumber(row.parentItemIndex),
+          parentBranchIndex: requireNumber(row.parentBranchIndex),
           parentNodeId: row.parentNodeId,
           sourceHandle: row.sourceHandle,
           targetHandle: row.targetHandle,
           targetNodeId: row.targetNodeId,
         },
-        attempt: requireNumber(row.attempt),
-        itemIndex: requireNumber(row.itemIndex),
-        nodeExecutionId: row.nodeExecutionId,
+        branchIndex: requireNumber(row.branchIndex),
+        nodeRunId: row.nodeRunId,
         ...(output ? { output } : {}),
-        taskRunId: row.taskRunId,
+        taskId: row.taskId,
       };
     });
   });
@@ -1956,57 +1877,51 @@ function buildWorkflowAssetFromRow(row: {
   };
 }
 
-function loadTaskRunRuntimeStatusEffect(command: DecideTaskRunReviewCommand) {
+function loadTaskRuntimeStatusEffect(command: DecideTaskReviewCommand) {
   return Effect.gen(function* () {
     const db = yield* PgDrizzle.PgDrizzle;
     const rows = yield* db
-      .select({ runtimeStatus: schema.taskRuns.runtimeStatus })
-      .from(schema.taskRuns)
-      .where(sql`${schema.taskRuns.id} = ${command.taskRunId}
-        and ${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-        and ${schema.taskRuns.attempt} = ${command.attempt}`)
+      .select({ runtimeStatus: schema.tasks.runtimeStatus })
+      .from(schema.tasks)
+      .where(sql`${schema.tasks.id} = ${command.taskId}
+        and ${schema.tasks.ownerUserId} = ${command.ownerUserId}
+`)
       .for("update")
       .limit(1);
     return rows[0]?.runtimeStatus ?? null;
   });
 }
 
-function getRuntimeTaskRunsForNodeExecutionEffect(command: {
-  readonly nodeExecutionId: string;
+function getRuntimeTasksForNodeRunEffect(command: {
+  readonly nodeRunId: string;
   readonly ownerUserId: string;
 }) {
   return repositoryTransaction(
-    "getRuntimeTaskRunsForNodeExecution",
+    "getRuntimeTasksForNodeRun",
     Effect.gen(function* () {
       const db = yield* PgDrizzle.PgDrizzle;
       const rows = yield* db
         .select({
-          attempt: schema.taskRuns.attempt,
-          inputSnapshot: schema.taskRuns.inputSnapshot,
-          itemIndex: schema.taskRuns.itemIndex,
-          nodeExecutionId: schema.taskRuns.nodeExecutionId,
-          ownerUserId: schema.taskRuns.ownerUserId,
-          runtimeStatus: schema.taskRuns.runtimeStatus,
-          taskRunId: schema.taskRuns.id,
-          workflowId: schema.taskRuns.workflowId,
+          inputSnapshot: schema.tasks.inputSnapshot,
+          branchIndex: schema.tasks.branchIndex,
+          nodeRunId: schema.tasks.nodeRunId,
+          ownerUserId: schema.tasks.ownerUserId,
+          runtimeStatus: schema.tasks.runtimeStatus,
+          taskId: schema.tasks.id,
+          workflowId: schema.tasks.workflowId,
         })
-        .from(schema.taskRuns)
-        .where(sql`${schema.taskRuns.nodeExecutionId} = ${command.nodeExecutionId}
-          and ${schema.taskRuns.ownerUserId} = ${command.ownerUserId}
-          and ${schema.taskRuns.runtimeStatus} is not null`)
-        .orderBy(
-          schema.taskRuns.itemIndex,
-          schema.taskRuns.attempt,
-          schema.taskRuns.id,
-        );
+        .from(schema.tasks)
+        .where(sql`${schema.tasks.nodeRunId} = ${command.nodeRunId}
+          and ${schema.tasks.ownerUserId} = ${command.ownerUserId}
+          and ${schema.tasks.runtimeStatus} is not null`)
+        .orderBy(schema.tasks.branchIndex, schema.tasks.id);
       return rows.map((row) => ({
-        attempt: requireNumber(row.attempt),
-        inputSnapshot: optionalTaskRunInputSnapshot(row.inputSnapshot) ?? null,
-        itemIndex: requireNumber(row.itemIndex),
-        nodeExecutionId: row.nodeExecutionId,
+        inputSnapshot: optionalTaskInputSnapshot(row.inputSnapshot) ?? null,
+        branchIndex: requireNumber(row.branchIndex),
+        nodeRunId: row.nodeRunId,
         ownerUserId: row.ownerUserId,
-        runtimeStatus: requireTaskRunRuntimeStatus(row.runtimeStatus),
-        taskRunId: row.taskRunId,
+        runtimeStatus: requireTaskRuntimeStatus(row.runtimeStatus),
+        taskId: row.taskId,
         workflowId: row.workflowId,
       }));
     }),
@@ -2014,7 +1929,7 @@ function getRuntimeTaskRunsForNodeExecutionEffect(command: {
 }
 
 function getTaskDependenciesForChildEffect(command: {
-  readonly childTaskRunId: string;
+  readonly childTaskId: string;
 }) {
   return repositoryTransaction(
     "getTaskDependenciesForChild",
@@ -2022,25 +1937,24 @@ function getTaskDependenciesForChildEffect(command: {
       const db = yield* PgDrizzle.PgDrizzle;
       const rows = yield* db
         .select({
-          childTaskRunId: schema.taskDependencies.childTaskRunId,
-          requiredParentItemIndex:
-            schema.taskDependencies.requiredParentItemIndex,
-          requiredParentNodeExecutionId:
-            schema.taskDependencies.requiredParentNodeExecutionId,
+          childTaskId: schema.taskDependencies.childTaskId,
+          requiredParentBranchIndex:
+            schema.taskDependencies.requiredParentBranchIndex,
+          requiredParentNodeRunId:
+            schema.taskDependencies.requiredParentNodeRunId,
           requiredParentNodeId: schema.taskDependencies.requiredParentNodeId,
-          resolvedParentTaskRunId:
-            schema.taskDependencies.resolvedParentTaskRunId,
+          resolvedParentTaskId: schema.taskDependencies.resolvedParentTaskId,
           sourceHandle: schema.taskDependencies.sourceHandle,
           targetHandle: schema.taskDependencies.targetHandle,
           targetNodeId: schema.taskDependencies.targetNodeId,
         })
         .from(schema.taskDependencies)
         .where(
-          sql`${schema.taskDependencies.childTaskRunId} = ${command.childTaskRunId}`,
+          sql`${schema.taskDependencies.childTaskId} = ${command.childTaskId}`,
         )
         .orderBy(
-          schema.taskDependencies.requiredParentNodeExecutionId,
-          schema.taskDependencies.requiredParentItemIndex,
+          schema.taskDependencies.requiredParentNodeRunId,
+          schema.taskDependencies.requiredParentBranchIndex,
         );
       return rows;
     }),
@@ -2087,25 +2001,20 @@ function getCreditLedgerForUserEffect(command: {
   );
 }
 
-function countPlannedTaskRunsForNodeExecution(
-  plan: WorkflowRunPlan,
-  nodeExecutionId: string,
-) {
-  return plan.taskRunsToCreate.filter(
-    (taskRun) => taskRun.nodeExecutionId === nodeExecutionId,
-  ).length;
+function countPlannedTasksForNodeRun(plan: WorkflowRunPlan, nodeRunId: string) {
+  return plan.tasksToCreate.filter((task) => task.nodeRunId === nodeRunId)
+    .length;
 }
 
-function staleTaskRunTransition(
-  command: { readonly attempt: number; readonly taskRunId: string },
+function staleTaskTransition(
+  command: { readonly taskId: string },
   operation: string,
 ) {
   return Effect.fail({
-    _tag: "StaleTaskRunTransition",
-    attempt: command.attempt,
+    _tag: "StaleTaskTransition",
     operation,
-    taskRunId: command.taskRunId,
-  } satisfies StaleTaskRunTransition);
+    taskId: command.taskId,
+  } satisfies StaleTaskTransition);
 }
 
 function committedOutcome<T>(
@@ -2128,10 +2037,10 @@ function emptyPostCommitWork(
   };
 }
 
-function workflowIdFromNodeExecutions(
-  nodeExecutionById: ReadonlyMap<string, NodeExecutionIdentity>,
+function workflowIdFromNodeRuns(
+  nodeRunById: ReadonlyMap<string, NodeRunIdentity>,
 ): string {
-  const workflowId = nodeExecutionById.values().next().value?.workflowId;
+  const workflowId = nodeRunById.values().next().value?.workflowId;
   if (!workflowId) {
     throw new TypeError(
       "Workflow Run plan has no transaction-local workflow id",
@@ -2142,70 +2051,68 @@ function workflowIdFromNodeExecutions(
 }
 
 function buildRepositoryInputSnapshot(input: {
-  readonly attempt: number;
   readonly documentRevision?: number | null;
-  readonly itemIndex: number;
-  readonly nodeExecutionId: string;
+  readonly branchIndex: number;
+  readonly nodeRunId: string;
   readonly nodeId: string;
-  readonly resolvedParents: readonly ResolvedParentTaskRunSnapshot[] | null;
-  readonly targetNodeConfig: TaskRunInputSnapshot["targetNodeConfig"];
-  readonly taskRunId: string;
-  readonly workflowDefinition: TaskRunInputSnapshot["workflowDefinition"];
-}): TaskRunInputSnapshot {
-  return buildTaskRunInputSnapshot({
-    attempt: input.attempt,
+  readonly resolvedParents: readonly ResolvedParentTaskSnapshot[] | null;
+  readonly targetNodeConfig: TaskInputSnapshot["targetNodeConfig"];
+  readonly taskId: string;
+  readonly workflowDefinition: TaskInputSnapshot["workflowDefinition"];
+}): TaskInputSnapshot {
+  return buildTaskInputSnapshot({
     documentRevision: input.documentRevision,
-    itemIndex: input.itemIndex,
-    nodeExecutionId: input.nodeExecutionId,
+    branchIndex: input.branchIndex,
+    nodeRunId: input.nodeRunId,
     nodeId: input.nodeId,
-    resolvedParentTaskRuns: input.resolvedParents ?? [],
+    resolvedParentTasks: input.resolvedParents ?? [],
     targetNodeConfig: input.targetNodeConfig,
-    taskRunId: input.taskRunId,
+    taskId: input.taskId,
     workflowDefinition: input.workflowDefinition,
   });
 }
 
-function requireNodeExecutionIdentity(
-  nodeExecutionById: ReadonlyMap<string, NodeExecutionIdentity>,
-  nodeExecutionId: string,
+function requireNodeRunIdentity(
+  nodeRunById: ReadonlyMap<string, NodeRunIdentity>,
+  nodeRunId: string,
 ) {
-  const nodeExecution = nodeExecutionById.get(nodeExecutionId);
-  if (!nodeExecution) {
-    throw new TypeError(`Missing Node Execution ${nodeExecutionId}`);
+  const nodeRun = nodeRunById.get(nodeRunId);
+  if (!nodeRun) {
+    throw new TypeError(`Missing Node Run ${nodeRunId}`);
   }
 
-  return nodeExecution;
+  return nodeRun;
 }
 
 function buildTaskDependencyId(input: {
-  readonly childTaskRunId: string;
-  readonly parentNodeExecutionId: string;
-  readonly parentItemIndex: number;
+  readonly childTaskId: string;
+  readonly parentNodeRunId: string;
+  readonly parentBranchIndex: number;
   readonly sourceHandle?: string | null;
   readonly targetHandle?: string | null;
 }) {
   return [
-    input.childTaskRunId,
-    input.parentNodeExecutionId,
-    input.parentItemIndex,
+    input.childTaskId,
+    input.parentNodeRunId,
+    input.parentBranchIndex,
     input.sourceHandle ?? "",
     input.targetHandle ?? "",
   ].join(":");
 }
 
-function taskRunCostAdjustmentCredits(
+function taskCostAdjustmentCredits(
   creditCost: number,
   providerCostCredits: number,
 ): number {
   return Math.ceil(Math.max(providerCostCredits - creditCost, 0));
 }
 
-function blockedCancelResult(status: string | null): CancelTaskRunResult {
+function blockedCancelResult(status: string | null): CancelTaskResult {
   if (status === "RUNNING") {
     return {
       blocked: true,
       decided: false,
-      message: "Running Task Runs cannot be cancelled.",
+      message: "Running Tasks cannot be cancelled.",
       reason: "RUNNING_TASK_RUN_CANCELLATION_BLOCKED",
     };
   }
@@ -2215,7 +2122,7 @@ function blockedCancelResult(status: string | null): CancelTaskRunResult {
       blocked: true,
       decided: false,
       message:
-        "Pending Review Task Runs must be approved or rejected instead of cancelled.",
+        "Pending Review Tasks must be approved or rejected instead of cancelled.",
       reason: "PENDING_REVIEW_REQUIRES_REVIEW_DECISION",
     };
   }
@@ -2246,9 +2153,9 @@ function requireNumber(value: unknown): number {
   throw new TypeError("Expected integer database number value");
 }
 
-function requireTaskRunRuntimeStatus(
+function requireTaskRuntimeStatus(
   value: unknown,
-): RuntimeTaskRunRow["runtimeStatus"] {
+): RuntimeTaskRow["runtimeStatus"] {
   if (
     value === "WAITING_UPSTREAM" ||
     value === "QUEUED" ||
@@ -2263,32 +2170,30 @@ function requireTaskRunRuntimeStatus(
     return value;
   }
 
-  throw new TypeError("Expected task run runtime status value");
+  throw new TypeError("Expected task runtime status value");
 }
 
-function requireTaskRunInputSnapshot(value: unknown): TaskRunInputSnapshot {
-  if (!isTaskRunInputSnapshot(value)) {
-    throw new TypeError("Expected task run input snapshot database value");
+function requireTaskInputSnapshot(value: unknown): TaskInputSnapshot {
+  if (!isTaskInputSnapshot(value)) {
+    throw new TypeError("Expected task input snapshot database value");
   }
 
   return value;
 }
 
-function requireExecutableTaskRunInputSnapshot(
+function requireExecutableTaskInputSnapshot(
   value: unknown,
-): ExecutableTaskRunInputSnapshot {
-  const snapshot = requireTaskRunInputSnapshot(value);
+): ExecutableTaskInputSnapshot {
+  const snapshot = requireTaskInputSnapshot(value);
   if (snapshot.providerInput.kind === "non-executable-node") {
     throw new TypeError(
-      "Expected executable task run input snapshot database value",
+      "Expected executable task input snapshot database value",
     );
   }
 
   return { ...snapshot, providerInput: snapshot.providerInput };
 }
 
-function optionalTaskRunInputSnapshot(
-  value: unknown,
-): TaskRunInputSnapshot | null {
-  return value === null ? null : requireTaskRunInputSnapshot(value);
+function optionalTaskInputSnapshot(value: unknown): TaskInputSnapshot | null {
+  return value === null ? null : requireTaskInputSnapshot(value);
 }

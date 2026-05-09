@@ -97,6 +97,10 @@ export class RuntimePostCommitWork extends Context.Tag("RuntimePostCommitWork")<
 
   static readonly Live =
     RuntimePostCommitWork.layerWithSchedule(defaultRetrySchedule);
+
+  static readonly Test = RuntimePostCommitWork.layerWithSchedule(
+    Schedule.recurs(0),
+  );
 }
 
 export function deliverPostCommitWorkBestEffort(
@@ -219,31 +223,31 @@ function telemetryDetails(error: PostCommitWorkDeliveryError, attempt: number) {
 }
 
 function itemIdentifiers(item: PostCommitWorkItem): {
-  readonly itemIndex?: number;
+  readonly branchIndex?: number;
   readonly jobId?: string;
-  readonly nodeExecutionId?: string;
+  readonly nodeRunId?: string;
   readonly status?: string;
-  readonly taskRunId?: string;
+  readonly taskId?: string;
 } {
   switch (item.kind) {
     case "execution-job":
       return {
-        itemIndex: item.value.itemIndex,
+        branchIndex: item.value.branchIndex,
         jobId: item.value.jobId,
-        nodeExecutionId: item.value.nodeExecutionId,
-        taskRunId: item.value.taskRunId,
+        nodeRunId: item.value.nodeRunId,
+        taskId: item.value.taskId,
       };
     case "wake-up-call-job":
       return {
         jobId: item.value.jobId,
-        taskRunId: item.value.parentTaskRunId,
+        taskId: item.value.parentTaskId,
       };
     case "task-status-event":
       return {
-        itemIndex: item.value.itemIndex,
-        nodeExecutionId: item.value.nodeExecutionId,
+        branchIndex: item.value.branchIndex,
+        nodeRunId: item.value.nodeRunId,
         status: item.value.status,
-        taskRunId: item.value.taskRunId,
+        taskId: item.value.taskId,
       };
   }
 }

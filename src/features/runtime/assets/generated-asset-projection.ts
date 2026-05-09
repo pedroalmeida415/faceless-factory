@@ -21,7 +21,7 @@ export type GeneratedAsset = GeneratedCdnAsset | GeneratedInlineTextAsset;
 export type GeneratedAssetProjectionError = {
   readonly actualAssetCount: number;
   readonly kind: "INVALID_PRIMARY_GENERATED_ASSET_COUNT";
-  readonly message: "Completed Task Run must produce exactly one primary generated Asset.";
+  readonly message: "Completed Task must produce exactly one primary generated Asset.";
 };
 
 export type GeneratedAssetProjectionResult =
@@ -29,7 +29,7 @@ export type GeneratedAssetProjectionResult =
   | GeneratedAssetProjectionError;
 
 const invalidPrimaryGeneratedAssetCountMessage =
-  "Completed Task Run must produce exactly one primary generated Asset." as const;
+  "Completed Task must produce exactly one primary generated Asset." as const;
 
 export function projectGeneratedAssetToTaskOutput(
   assets: readonly GeneratedAsset[],

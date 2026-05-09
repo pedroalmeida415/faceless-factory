@@ -106,7 +106,7 @@ export function createRuntimeProcessor(input: {
         return sanitizeRuntimeProcessorOutcome(
           await input.orchestrator.handleWakeUpCall({
             ownerUserId: parsed.job.data.ownerUserId,
-            settledParentTaskRunId: parsed.job.data.parentTaskRunId,
+            settledParentTaskId: parsed.job.data.parentTaskId,
             workflowId: parsed.job.data.workflowId,
           }),
         );

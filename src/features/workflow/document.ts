@@ -416,15 +416,11 @@ function asWorkflowReviewOutput(value: unknown): WorkflowReviewOutput | null {
 
   return {
     assets: asWorkflowAssets(value.assets),
-    attempt:
-      Number.isInteger(value.attempt) && (value.attempt as number) >= 0
-        ? (value.attempt as number)
-        : 0,
     executionId: asNullableString(value.executionId, null),
     outputIndex,
     status,
-    ...(typeof value.taskRunId === "string" && value.taskRunId.length > 0
-      ? { taskRunId: value.taskRunId }
+    ...(typeof value.taskId === "string" && value.taskId.length > 0
+      ? { taskId: value.taskId }
       : {}),
     text: asNullableString(value.text, null),
   };

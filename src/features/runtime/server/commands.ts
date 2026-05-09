@@ -12,11 +12,11 @@ import {
 import type {
   EventPublisherServiceForCommands,
   HandleWakeUpCallCommand,
-  RejectTaskRunCommand,
-  RejectTaskRunRepositoryCommand,
-  ReviewTaskRunDecisionCommand,
+  RejectTaskCommand,
+  RejectTaskRepositoryCommand,
+  ReviewTaskDecisionCommand,
   RuntimeCommitPlanResult,
-  RuntimeRejectTaskRunResult,
+  RuntimeRejectTaskResult,
   RuntimeRepositoryForCommands,
   RuntimeReviewDecisionResult,
   RuntimeSettleCompletionResult,
@@ -24,26 +24,26 @@ import type {
   SettleWorkerCompletionCommand,
   SettleWorkerFailureCommand,
   StartWorkflowRunInput,
-  TaskRunCancellationBlockedReason,
+  TaskCancellationBlockedReason,
 } from "~/features/runtime/server/command-types";
 import { RuntimePostCommitWork } from "~/features/runtime/server/post-commit-work";
 import type {
   RepositoryCommittedOutcome,
   RuntimeRepositoryFailure,
-  StaleTaskRunTransition,
+  StaleTaskTransition,
   WakeUpParentNotFound,
-  WakeUpTaskRunChildrenRepositoryResult,
+  WakeUpTaskChildrenRepositoryResult,
 } from "~/features/runtime/server/repository";
 
 export type RuntimeCommandError =
   | (WorkflowRunPlannerError & { readonly committed: false })
-  | StaleTaskRunTransition
+  | StaleTaskTransition
   | WakeUpParentNotFound
   | {
-      readonly _tag: "TaskRunCancellationBlockedError";
+      readonly _tag: "TaskCancellationBlockedError";
       readonly committed: false;
       readonly message: string;
-      readonly reason: TaskRunCancellationBlockedReason;
+      readonly reason: TaskCancellationBlockedReason;
     }
   | {
       readonly _tag: "RuntimeCommitError";
@@ -60,32 +60,45 @@ export class RuntimeRepository extends Context.Tag("RuntimeRepository")<
 export class EventPublisherService extends Context.Tag("EventPublisherService")<
   EventPublisherService,
   EventPublisherServiceForCommands
->() {}
+>() {
+  static readonly Test = Layer.succeed(this, {
+    publishTaskStatusEvent: () => Effect.void,
+  });
+}
 
 export class RuntimeIdGenerator extends Context.Tag("RuntimeIdGenerator")<
   RuntimeIdGenerator,
   {
-    readonly createNodeExecutionId: () => string;
-    readonly createTaskRunId: () => string;
+    readonly createNodeRunId: () => string;
+    readonly createTaskId: () => string;
   }
 >() {
+  static readonly Test = Layer.sync(this, () => {
+    let nodeRunId = 0;
+    let taskId = 0;
+    return {
+      createNodeRunId: () => `test-node-run-${++nodeRunId}`,
+      createTaskId: () => `test-task-${++taskId}`,
+    };
+  });
+
   static readonly Live = Layer.succeed(this, {
-    createNodeExecutionId: randomUUID,
-    createTaskRunId: randomUUID,
+    createNodeRunId: randomUUID,
+    createTaskId: randomUUID,
   });
 }
 
 export class RuntimeCommands extends Context.Tag("RuntimeCommands")<
   RuntimeCommands,
   {
-    readonly approveTaskRun: (
-      command: ReviewTaskRunDecisionCommand,
+    readonly approveTask: (
+      command: ReviewTaskDecisionCommand,
     ) => Effect.Effect<
       RuntimeCommandOutcome<RuntimeReviewDecisionResult>,
       RuntimeCommandError
     >;
-    readonly cancelTaskRun: (
-      command: ReviewTaskRunDecisionCommand,
+    readonly cancelTask: (
+      command: ReviewTaskDecisionCommand,
     ) => Effect.Effect<
       RuntimeCommandOutcome<RuntimeReviewDecisionResult>,
       RuntimeCommandError
@@ -93,13 +106,13 @@ export class RuntimeCommands extends Context.Tag("RuntimeCommands")<
     readonly handleWakeUpCall: (
       command: HandleWakeUpCallCommand,
     ) => Effect.Effect<
-      RuntimeCommandOutcome<WakeUpTaskRunChildrenRepositoryResult>,
+      RuntimeCommandOutcome<WakeUpTaskChildrenRepositoryResult>,
       RuntimeCommandError
     >;
-    readonly rejectTaskRun: (
-      command: RejectTaskRunCommand,
+    readonly rejectTask: (
+      command: RejectTaskCommand,
     ) => Effect.Effect<
-      RuntimeCommandOutcome<RuntimeRejectTaskRunResult>,
+      RuntimeCommandOutcome<RuntimeRejectTaskResult>,
       RuntimeCommandError
     >;
     readonly settleWorkerCompletion: (
@@ -122,7 +135,7 @@ export class RuntimeCommands extends Context.Tag("RuntimeCommands")<
     >;
   }
 >() {
-  static readonly Live = Layer.effect(
+  static readonly layer = Layer.effect(
     this,
     Effect.gen(function* () {
       const repository = yield* RuntimeRepository;
@@ -130,15 +143,15 @@ export class RuntimeCommands extends Context.Tag("RuntimeCommands")<
       const postCommit = yield* RuntimePostCommitWork;
 
       return {
-        approveTaskRun: (command) =>
-          handleReviewDecision(repository.approveTaskRun(command), postCommit),
-        cancelTaskRun: (command) =>
+        approveTask: (command) =>
+          handleReviewDecision(repository.approveTask(command), postCommit),
+        cancelTask: (command) =>
           Effect.flatMap(
             mapRepositoryErrors(
-              repository.cancelTaskRun(command),
-              "Failed to cancel Task Run.",
+              repository.cancelTask(command),
+              "Failed to cancel Task.",
             ).pipe(
-              Effect.catchTag("StaleTaskRunTransition", () =>
+              Effect.catchTag("StaleTaskTransition", () =>
                 Effect.succeed(null),
               ),
             ),
@@ -147,7 +160,7 @@ export class RuntimeCommands extends Context.Tag("RuntimeCommands")<
                 ? Effect.succeed(ignored("STALE_TASK_RUN"))
                 : "blocked" in outcome.value
                   ? Effect.fail({
-                      _tag: "TaskRunCancellationBlockedError",
+                      _tag: "TaskCancellationBlockedError",
                       committed: false,
                       message: outcome.value.message,
                       reason: outcome.value.reason,
@@ -157,7 +170,7 @@ export class RuntimeCommands extends Context.Tag("RuntimeCommands")<
         handleWakeUpCall: (command) =>
           Effect.gen(function* () {
             const outcome = yield* mapRepositoryErrors(
-              repository.wakeUpTaskRunChildren(command),
+              repository.wakeUpTaskChildren(command),
               "Failed to handle Wake-Up Call.",
             ).pipe(
               Effect.catchTag("WakeUpParentNotFound", () =>
@@ -173,16 +186,16 @@ export class RuntimeCommands extends Context.Tag("RuntimeCommands")<
             yield* postCommit.deliver(outcome.postCommitWork);
             return committed(outcome.value);
           }),
-        rejectTaskRun: (command) =>
+        rejectTask: (command) =>
           Effect.gen(function* () {
             const outcome = yield* mapRepositoryErrors(
-              repository.rejectTaskRunAndCreateRegeneration({
+              repository.rejectTaskAndCreateRegeneration({
                 ...command,
-                newTaskRunId: ids.createTaskRunId(),
-              } satisfies RejectTaskRunRepositoryCommand),
-              "Failed to reject Task Run.",
+                newTaskId: ids.createTaskId(),
+              } satisfies RejectTaskRepositoryCommand),
+              "Failed to reject Task.",
             ).pipe(
-              Effect.catchTag("StaleTaskRunTransition", () =>
+              Effect.catchTag("StaleTaskTransition", () =>
                 Effect.succeed(null),
               ),
             );
@@ -195,10 +208,10 @@ export class RuntimeCommands extends Context.Tag("RuntimeCommands")<
         settleWorkerCompletion: (command) =>
           Effect.gen(function* () {
             const outcome = yield* mapRepositoryErrors(
-              repository.settleTaskRunCompletion(command),
-              "Failed to settle completed Task Run.",
+              repository.settleTaskCompletion(command),
+              "Failed to settle completed Task.",
             ).pipe(
-              Effect.catchTag("StaleTaskRunTransition", () =>
+              Effect.catchTag("StaleTaskTransition", () =>
                 Effect.succeed(null),
               ),
             );
@@ -211,10 +224,10 @@ export class RuntimeCommands extends Context.Tag("RuntimeCommands")<
         settleWorkerFailure: (command) =>
           Effect.gen(function* () {
             const outcome = yield* mapRepositoryErrors(
-              repository.settleTaskRunFailure(command),
-              "Failed to settle failed Task Run.",
+              repository.settleTaskFailure(command),
+              "Failed to settle failed Task.",
             ).pipe(
-              Effect.catchTag("StaleTaskRunTransition", () =>
+              Effect.catchTag("StaleTaskTransition", () =>
                 Effect.succeed(null),
               ),
             );
@@ -228,8 +241,8 @@ export class RuntimeCommands extends Context.Tag("RuntimeCommands")<
           Effect.gen(function* () {
             const planning = planWorkflowRun({
               ...startInput,
-              createNodeExecutionId: ids.createNodeExecutionId,
-              createTaskRunId: ids.createTaskRunId,
+              createNodeRunId: ids.createNodeRunId,
+              createTaskId: ids.createTaskId,
             });
             if (!planning.ok) {
               return yield* Effect.fail({
@@ -248,6 +261,10 @@ export class RuntimeCommands extends Context.Tag("RuntimeCommands")<
       };
     }),
   );
+
+  static readonly Test = RuntimeCommands.layer;
+
+  static readonly Live = RuntimeCommands.layer;
 }
 
 export type RuntimeCommandsService = Context.Tag.Service<
@@ -255,14 +272,14 @@ export type RuntimeCommandsService = Context.Tag.Service<
 >;
 
 function handleReviewDecision(
-  decide: ReturnType<RuntimeRepositoryForCommands["approveTaskRun"]>,
+  decide: ReturnType<RuntimeRepositoryForCommands["approveTask"]>,
   postCommit: Context.Tag.Service<typeof RuntimePostCommitWork>,
 ) {
   return Effect.gen(function* () {
     const outcome = yield* mapRepositoryErrors<
       RepositoryCommittedOutcome<RuntimeReviewDecisionResult>
-    >(decide, "Failed to decide Task Run review.").pipe(
-      Effect.catchTag("StaleTaskRunTransition", () => Effect.succeed(null)),
+    >(decide, "Failed to decide Task review.").pipe(
+      Effect.catchTag("StaleTaskTransition", () => Effect.succeed(null)),
     );
     if (!outcome) {
       return ignored<RuntimeReviewDecisionResult>("STALE_TASK_RUN");
@@ -288,7 +305,7 @@ function mapRepositoryErrors<T>(
   return run.pipe(
     Effect.mapError((error) => {
       if (
-        error._tag === "StaleTaskRunTransition" ||
+        error._tag === "StaleTaskTransition" ||
         error._tag === "WakeUpParentNotFound"
       ) {
         return error;
@@ -304,7 +321,7 @@ function mapRepositoryErrors<T>(
 }
 
 function isEmptyWakeUpOutcome(
-  outcome: RepositoryCommittedOutcome<WakeUpTaskRunChildrenRepositoryResult>,
+  outcome: RepositoryCommittedOutcome<WakeUpTaskChildrenRepositoryResult>,
 ) {
   return (
     outcome.value.parentFound &&

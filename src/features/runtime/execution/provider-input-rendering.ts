@@ -1,6 +1,6 @@
 import { providerDependencyMatches } from "~/features/runtime/domain/provider-dependency-address";
-import type { ResolvedParentTaskRunInputSnapshot } from "~/features/runtime/execution/task-run-input-snapshot";
-import type { MaterializedProviderInputFacts } from "~/features/runtime/materialization/task-run-input-materialization";
+import type { ResolvedParentTaskInputSnapshot } from "~/features/runtime/execution/task-input-snapshot";
+import type { MaterializedProviderInputFacts } from "~/features/runtime/materialization/task-input-materialization";
 import type {
   WorkflowDefinitionDocumentNode,
   WorkflowDefinitionGraphDocument,
@@ -40,7 +40,7 @@ import type {
   WorkflowAsset,
 } from "~/features/workflow/types";
 
-export type RenderedTaskRunProviderInput =
+export type RenderedTaskProviderInput =
   | {
       readonly kind: "image-generation-request";
       readonly request: GenerateImageRequest;
@@ -54,62 +54,62 @@ export type RenderedTaskRunProviderInput =
       readonly request: GenerateLlmRequest;
     };
 
-export type NonExecutableTaskRunProviderInput = {
+export type NonExecutableTaskProviderInput = {
   readonly kind: "non-executable-node";
   readonly reason: "UNSUPPORTED_NODE_KIND";
   readonly message: string;
 };
 
-export type TaskRunProviderInput =
-  | RenderedTaskRunProviderInput
-  | NonExecutableTaskRunProviderInput;
+export type TaskProviderInput =
+  | RenderedTaskProviderInput
+  | NonExecutableTaskProviderInput;
 
-export type TaskRunProviderInputRenderingResult =
+export type TaskProviderInputRenderingResult =
   | {
       readonly kind: "executable";
-      readonly providerInput: RenderedTaskRunProviderInput;
+      readonly providerInput: RenderedTaskProviderInput;
     }
   | {
       readonly kind: "non-executable";
-      readonly providerInput: NonExecutableTaskRunProviderInput;
+      readonly providerInput: NonExecutableTaskProviderInput;
     };
 
-export type RenderTaskRunProviderInputCommand = {
+export type RenderTaskProviderInputCommand = {
   readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
-  readonly itemIndex: number;
+  readonly branchIndex: number;
   readonly idempotencyKey: string;
   readonly materializedInputFacts?: MaterializedProviderInputFacts;
-  readonly resolvedParentTaskRuns: readonly ResolvedParentTaskRunInputSnapshot[];
+  readonly resolvedParentTasks: readonly ResolvedParentTaskInputSnapshot[];
   readonly workflowDefinition?: WorkflowDefinitionGraphDocument;
 };
 
-export function renderTaskRunProviderInput(
-  command: RenderTaskRunProviderInputCommand,
-): TaskRunProviderInputRenderingResult {
+export function renderTaskProviderInput(
+  command: RenderTaskProviderInputCommand,
+): TaskProviderInputRenderingResult {
   const prompt = command.materializedInputFacts
     ? joinTextValues([
         command.materializedInputFacts.prompt,
-        renderPrompt(command.resolvedParentTaskRuns),
+        renderPrompt(command.resolvedParentTasks),
       ])
     : command.workflowDefinition
       ? renderTextInput(command, PROMPT_INPUT_HANDLE_ID)
-      : renderPrompt(command.resolvedParentTaskRuns);
+      : renderPrompt(command.resolvedParentTasks);
   const systemPrompt = command.materializedInputFacts
     ? joinTextValues([
         command.materializedInputFacts.systemPrompt ?? "",
-        renderSystemPrompt(command.resolvedParentTaskRuns) ?? "",
+        renderSystemPrompt(command.resolvedParentTasks) ?? "",
       ]) || null
     : command.workflowDefinition
       ? renderTextInput(command, SYSTEM_PROMPT_INPUT_HANDLE_ID) || null
-      : renderSystemPrompt(command.resolvedParentTaskRuns);
+      : renderSystemPrompt(command.resolvedParentTasks);
   const imageInputsByHandle = command.materializedInputFacts
     ? mergeImageInputsByHandle(
         command.materializedInputFacts.imageInputsByHandle,
-        renderImageInputsByHandle(command.resolvedParentTaskRuns),
+        renderImageInputsByHandle(command.resolvedParentTasks),
       )
     : command.workflowDefinition
       ? renderWorkflowImageInputsByHandle(command)
-      : renderImageInputsByHandle(command.resolvedParentTaskRuns);
+      : renderImageInputsByHandle(command.resolvedParentTasks);
 
   switch (command.targetNodeConfig.kind) {
     case "imageGenerator":
@@ -190,14 +190,14 @@ function mergeImageInputsByHandle(
   return result;
 }
 
-export function isRenderedTaskRunProviderInput(
-  value: TaskRunProviderInput,
-): value is RenderedTaskRunProviderInput {
+export function isRenderedTaskProviderInput(
+  value: TaskProviderInput,
+): value is RenderedTaskProviderInput {
   return value.kind !== "non-executable-node";
 }
 
 function renderPrompt(
-  parents: readonly ResolvedParentTaskRunInputSnapshot[],
+  parents: readonly ResolvedParentTaskInputSnapshot[],
 ): string {
   return joinTextOutputs(
     parents.filter((parent) => isPromptHandle(parent.address.targetHandle)),
@@ -205,7 +205,7 @@ function renderPrompt(
 }
 
 function renderSystemPrompt(
-  parents: readonly ResolvedParentTaskRunInputSnapshot[],
+  parents: readonly ResolvedParentTaskInputSnapshot[],
 ): string | null {
   const text = joinTextOutputs(
     parents.filter((parent) =>
@@ -216,9 +216,7 @@ function renderSystemPrompt(
   return text.length ? text : null;
 }
 
-function joinTextOutputs(
-  parents: readonly ResolvedParentTaskRunInputSnapshot[],
-) {
+function joinTextOutputs(parents: readonly ResolvedParentTaskInputSnapshot[]) {
   return parents
     .flatMap((parent) =>
       parent.output?.kind === "inline-text-asset" ? [parent.output.text] : [],
@@ -229,7 +227,7 @@ function joinTextOutputs(
 }
 
 function renderTextInput(
-  command: RenderTaskRunProviderInputCommand,
+  command: RenderTaskProviderInputCommand,
   handleId: string,
 ) {
   const workflowDefinition = command.workflowDefinition;
@@ -245,8 +243,8 @@ function renderTextInput(
   );
   if (!incomingEdges.length) {
     return handleId === SYSTEM_PROMPT_INPUT_HANDLE_ID
-      ? (renderSystemPrompt(command.resolvedParentTaskRuns) ?? "")
-      : renderPrompt(command.resolvedParentTaskRuns);
+      ? (renderSystemPrompt(command.resolvedParentTasks) ?? "")
+      : renderPrompt(command.resolvedParentTasks);
   }
 
   const values = incomingEdges.flatMap((edge) => {
@@ -263,12 +261,12 @@ function renderTextInput(
   });
   const value = buildTextRuntimeValue(values);
   return value
-    ? (getBroadcastOutput(value.items, command.itemIndex) ?? "")
+    ? (getBroadcastOutput(value.items, command.branchIndex) ?? "")
     : "";
 }
 
 function renderWorkflowImageInputsByHandle(
-  command: RenderTaskRunProviderInputCommand,
+  command: RenderTaskProviderInputCommand,
 ): Record<string, WorkflowAsset[]> {
   const workflowDefinition = command.workflowDefinition;
   if (!workflowDefinition) {
@@ -300,7 +298,7 @@ function renderWorkflowImageInputsByHandle(
         return [];
       }
 
-      return getBroadcastOutput(value.items, command.itemIndex) ?? [];
+      return getBroadcastOutput(value.items, command.branchIndex) ?? [];
     });
 
     if (assets.length) {
@@ -312,7 +310,7 @@ function renderWorkflowImageInputsByHandle(
 }
 
 function getTargetGeneratorInputHandles(
-  command: RenderTaskRunProviderInputCommand,
+  command: RenderTaskProviderInputCommand,
 ) {
   const edges = command.workflowDefinition?.edges ?? [];
   switch (command.targetNodeConfig.kind) {
@@ -340,7 +338,7 @@ function getTargetGeneratorInputHandles(
 }
 
 function resolveWorkflowNodeRuntimeValue(input: {
-  readonly command: RenderTaskRunProviderInputCommand;
+  readonly command: RenderTaskProviderInputCommand;
   readonly incomingByTarget: ReturnType<typeof buildIncomingByTarget>;
   readonly nodeId: string;
   readonly path: ReadonlySet<string>;
@@ -391,7 +389,7 @@ function resolveWorkflowNodeRuntimeValue(input: {
       });
       if (
         value &&
-        input.command.resolvedParentTaskRuns.some((parent) =>
+        input.command.resolvedParentTasks.some((parent) =>
           providerDependencyMatches(parent.address, {
             parentNodeId: inputEdge.source,
             sourceHandle: inputEdge.sourceHandle,
@@ -416,7 +414,7 @@ function resolveWorkflowNodeRuntimeValue(input: {
     case "imageGenerator":
     case "videoGenerator":
     case "llmGenerator":
-      return resolveParentTaskRunRuntimeValue({
+      return resolveParentTaskRuntimeValue({
         command: input.command,
         nodeId: node.id,
         sourceHandle: input.sourceHandle,
@@ -426,7 +424,7 @@ function resolveWorkflowNodeRuntimeValue(input: {
 }
 
 function resolvePromptRuntimeValue(input: {
-  readonly command: RenderTaskRunProviderInputCommand;
+  readonly command: RenderTaskProviderInputCommand;
   readonly incomingByTarget: ReturnType<typeof buildIncomingByTarget>;
   readonly node: Extract<WorkflowDefinitionDocumentNode, { kind: "prompt" }>;
   readonly nodeId: string;
@@ -477,13 +475,13 @@ function resolvePromptRuntimeValue(input: {
   return prompts.length ? { items: prompts, type: "text" } : null;
 }
 
-function resolveParentTaskRunRuntimeValue(input: {
-  readonly command: RenderTaskRunProviderInputCommand;
+function resolveParentTaskRuntimeValue(input: {
+  readonly command: RenderTaskProviderInputCommand;
   readonly nodeId: string;
   readonly sourceHandle?: string | null;
   readonly targetHandle?: string | null;
 }): RuntimeValue | null {
-  const parents = input.command.resolvedParentTaskRuns.filter((parent) => {
+  const parents = input.command.resolvedParentTasks.filter((parent) => {
     return providerDependencyMatches(parent.address, {
       parentNodeId: input.nodeId,
       sourceHandle: input.sourceHandle,
@@ -510,7 +508,7 @@ function resolveParentTaskRunRuntimeValue(input: {
 }
 
 function renderImageInputsByHandle(
-  parents: readonly ResolvedParentTaskRunInputSnapshot[],
+  parents: readonly ResolvedParentTaskInputSnapshot[],
 ): Record<string, WorkflowAsset[]> {
   const imageInputsByHandle: Record<string, WorkflowAsset[]> = {};
 
@@ -531,7 +529,7 @@ function renderImageInputsByHandle(
 }
 
 function renderWorkflowImageAsset(
-  parent: ResolvedParentTaskRunInputSnapshot,
+  parent: ResolvedParentTaskInputSnapshot,
 ): WorkflowAsset | null {
   if (parent.asset?.kind === "image") {
     return parent.asset;

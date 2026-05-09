@@ -1,4 +1,4 @@
-import { extractTaskRunMaterializationSlice } from "~/features/runtime/materialization/subgraph";
+import { extractTaskMaterializationSlice } from "~/features/runtime/materialization/subgraph";
 import {
   toWorkflowDefinitionGraphDocument,
   type WorkflowDocument,
@@ -8,7 +8,7 @@ import { WorkflowValidationError } from "~/features/workflow/errors";
 const ACTIVE_TASK_RUN_SAVE_LOCK_MESSAGE =
   "Cannot edit nodes that are participating in a running workflow.";
 
-type ActiveTaskRunSaveLockParams = {
+type ActiveTaskSaveLockParams = {
   readonly activeTargetNodeIds: readonly string[];
   readonly currentDocument: WorkflowDocument;
   readonly nextDocument: WorkflowDocument;
@@ -26,20 +26,18 @@ function materializationSemanticDocument(document: WorkflowDocument) {
   };
 }
 
-export function assertActiveTaskRunSaveAllowed(
-  params: ActiveTaskRunSaveLockParams,
-) {
+export function assertActiveTaskSaveAllowed(params: ActiveTaskSaveLockParams) {
   if (!params.activeTargetNodeIds.length) {
     return;
   }
 
   const currentMaterializationSlice = materializationSemanticDocument(
-    extractTaskRunMaterializationSlice(params.currentDocument, [
+    extractTaskMaterializationSlice(params.currentDocument, [
       ...params.activeTargetNodeIds,
     ]),
   );
   const nextMaterializationSlice = materializationSemanticDocument(
-    extractTaskRunMaterializationSlice(params.nextDocument, [
+    extractTaskMaterializationSlice(params.nextDocument, [
       ...params.activeTargetNodeIds,
     ]),
   );

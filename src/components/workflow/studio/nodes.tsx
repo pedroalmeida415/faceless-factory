@@ -122,7 +122,9 @@ function formatNumericValue(value: number, step?: number) {
 }
 
 function updateListItem(items: string[], index: number, value: string) {
-  return items.map((item, itemIndex) => (itemIndex === index ? value : item));
+  return items.map((item, branchIndex) =>
+    branchIndex === index ? value : item,
+  );
 }
 
 function normalizeListItems(items: string[]) {
@@ -141,7 +143,7 @@ function insertListItem(items: string[], index = items.length) {
 }
 
 function removeListItem(items: string[], index: number) {
-  const nextItems = items.filter((_, itemIndex) => itemIndex !== index);
+  const nextItems = items.filter((_, branchIndex) => branchIndex !== index);
   return nextItems.length ? nextItems : [""];
 }
 
@@ -439,8 +441,8 @@ function WorkflowExecutionCostBadge({ nodeId }: { nodeId: string }) {
       className="border-primary/20 bg-primary/10 text-primary"
       title={
         priceQuote.isEstimate
-          ? "Estimated own-node cost per Task Run slot. Final usage may settle higher."
-          : "Own-node cost per Task Run slot. Upstream costs are shown in the run preview."
+          ? "Estimated own-node cost per Task slot. Final usage may settle higher."
+          : "Own-node cost per Task slot. Upstream costs are shown in the run preview."
       }
       variant="outline"
     >
@@ -542,17 +544,17 @@ function RunCostPreviewPanel({ preview }: { preview: RuntimeRunCostPreview }) {
         </div>
         {!preview.balance.enoughForImmediateQueue ? (
           <div className="text-destructive">
-            {`Current balance is ${formatCredits(preview.balance.available)}. Only immediately queued Task Runs are checked before this run starts.`}
+            {`Current balance is ${formatCredits(preview.balance.available)}. Only immediately queued Tasks are checked before this run starts.`}
           </div>
         ) : null}
         <div className="space-y-1">
           {preview.items.slice(0, 6).map((item) => (
             <div
               className="flex items-center justify-between gap-2 text-muted-foreground"
-              key={`${item.source}:${item.taskRunId}`}
+              key={`${item.source}:${item.taskId}`}
             >
               <span className="truncate">
-                {`${item.role} ${item.nodeId}[${item.itemIndex}]`}
+                {`${item.role} ${item.nodeId}[${item.branchIndex}]`}
               </span>
               <span className="shrink-0">
                 {`${formatCredits(item.creditCost)} - ${formatDebitTiming(item.debitTiming)}`}
@@ -561,7 +563,7 @@ function RunCostPreviewPanel({ preview }: { preview: RuntimeRunCostPreview }) {
           ))}
           {preview.items.length > 6 ? (
             <div className="text-muted-foreground">
-              {`+${preview.items.length - 6} more Task Run slots`}
+              {`+${preview.items.length - 6} more Task slots`}
             </div>
           ) : null}
         </div>
@@ -620,7 +622,7 @@ export function WorkflowExecutionEstimateWarning({
   return (
     <NodeNotice tone="accent">
       {priceQuote
-        ? `${formatCredits(priceQuote.creditCostPerSlot)} planned per Task Run slot. LLM reasoning overage may add a ledger adjustment.`
+        ? `${formatCredits(priceQuote.creditCostPerSlot)} planned per Task slot. LLM reasoning overage may add a ledger adjustment.`
         : "Planned cost only. LLM reasoning overage may add a ledger adjustment."}
     </NodeNotice>
   );
@@ -946,28 +948,25 @@ function GeneratorReviewPanel({
       outputIndex: number,
       decision: "approve" | "reject",
       reviewExecutionId: string | null,
-      taskRunId: string | undefined,
-      attempt: number,
+      taskId: string | undefined,
     ) => {
       void outputIndex;
       void reviewExecutionId;
 
-      if (!taskRunId || !projectId) {
-        setActivity("This review item is missing Task Run metadata.");
+      if (!taskId || !projectId) {
+        setActivity("This review item is missing Task metadata.");
         return;
       }
 
       const effect = (
         decision === "approve"
-          ? WorkflowClientService.approveTaskRun({
-              attempt,
+          ? WorkflowClientService.approveTask({
               projectId,
-              taskRunId,
+              taskId,
             })
-          : WorkflowClientService.rejectTaskRun({
-              attempt,
+          : WorkflowClientService.rejectTask({
               projectId,
-              taskRunId,
+              taskId,
             })
       ).pipe(
         Effect.flatMap(() =>
@@ -1008,9 +1007,7 @@ function GeneratorReviewPanel({
         >
           <div className="flex items-center justify-between gap-2">
             <Badge variant="outline">{output.status}</Badge>
-            <span className="text-muted-foreground text-xs">
-              Attempt {output.attempt + 1}
-            </span>
+            <span className="text-muted-foreground text-xs">Branch result</span>
           </div>
           {valueType === "text" ? (
             <p className="whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-sm">
@@ -1030,8 +1027,7 @@ function GeneratorReviewPanel({
                   output.outputIndex,
                   "approve",
                   output.executionId,
-                  output.taskRunId,
-                  output.attempt,
+                  output.taskId,
                 )
               }
             >
@@ -1045,8 +1041,7 @@ function GeneratorReviewPanel({
                   output.outputIndex,
                   "reject",
                   output.executionId,
-                  output.taskRunId,
-                  output.attempt,
+                  output.taskId,
                 )
               }
             >

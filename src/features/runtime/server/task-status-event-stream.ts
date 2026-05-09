@@ -21,7 +21,7 @@ export type WorkflowEventPublishError = {
   readonly _tag: "WorkflowEventPublishError";
   readonly cause: unknown;
   readonly channel: string;
-  readonly taskRunId?: string;
+  readonly taskId?: string;
   readonly workflowId: string;
 };
 
@@ -79,7 +79,7 @@ export function createWorkflowEventPublisher(pubSub: WorkflowEventPubSubLike) {
           _tag: "WorkflowEventPublishError",
           cause,
           channel,
-          taskRunId: event.taskRunId,
+          taskId: event.taskId,
           workflowId,
         }),
       }).pipe(
@@ -90,7 +90,7 @@ export function createWorkflowEventPublisher(pubSub: WorkflowEventPubSubLike) {
               _tag: "WorkflowEventPublishError",
               cause,
               channel,
-              taskRunId: event.taskRunId,
+              taskId: event.taskId,
               workflowId,
             }),
           }),
@@ -99,7 +99,7 @@ export function createWorkflowEventPublisher(pubSub: WorkflowEventPubSubLike) {
         Effect.tapError(recordPublishFailure),
         Effect.withSpan("workflow-event-stream.publish", {
           attributes: {
-            "workflow_runtime.task_run_id": event.taskRunId,
+            "workflow_runtime.task_id": event.taskId,
             "workflow_runtime.workflow_id": workflowId,
           },
         }),
@@ -183,7 +183,7 @@ function recordPublishFailure(error: WorkflowEventPublishError) {
   return Metric.update(
     workflowEventStreamMetrics.publishFailures.pipe(
       Metric.tagged("channel", error.channel),
-      Metric.tagged("task_run_id", error.taskRunId ?? "none"),
+      Metric.tagged("task_id", error.taskId ?? "none"),
       Metric.tagged("workflow_id", error.workflowId),
     ),
     1,
@@ -191,7 +191,7 @@ function recordPublishFailure(error: WorkflowEventPublishError) {
     Effect.zipRight(
       Effect.logWarning("Workflow Event Stream publish failed", {
         channel: error.channel,
-        taskRunId: error.taskRunId,
+        taskId: error.taskId,
         workflowId: error.workflowId,
       }),
     ),

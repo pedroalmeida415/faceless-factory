@@ -13,32 +13,32 @@ import {
   generatedImageAsset,
   generatedImageToGeneratedVideoDocument,
   generatedTextAsset,
-  getAssetsForTaskRun,
+  getAssetsForTask,
+  getTaskCreditState,
   getTaskDependenciesForChild,
-  getTaskRunCreditState,
-  getTaskRunState,
+  getTaskState,
   getUserCreditBalance,
   insertGeneratedMediaAsset,
   insertGeneratedTextAsset,
-  insertNodeExecution,
+  insertNodeRun,
+  insertTask,
   insertTaskDependency,
-  insertTaskRun,
   insertUser,
-  latestTaskRun,
+  latestTask,
   nextId,
   outputReorderDocument,
   type RuntimeContractDatabase,
   resetRuntimeContractTables,
-  setNodeExecutionOutputCount,
+  setNodeRunOutputCount,
   setUserCreditBalance,
   setupRuntimeContractTables,
   simpleScriptDocument,
   unwrapPlan,
 } from "~/features/runtime/contract-harness";
 import {
-  isTaskRunInputSnapshot,
-  type TaskRunInputSnapshot,
-} from "~/features/runtime/execution/task-run-input-snapshot";
+  isTaskInputSnapshot,
+  type TaskInputSnapshot,
+} from "~/features/runtime/execution/task-input-snapshot";
 import { planWorkflowRun } from "~/features/runtime/planning/workflow-run-planner";
 import {
   RuntimeCommands,
@@ -54,11 +54,11 @@ import {
   createRuntimeRepository,
   createRuntimeRepositoryFromDatabase,
 } from "~/features/runtime/server/repository";
-import { getTaskRunProjectionForWorkflow } from "~/features/runtime/server/task-projection-repository";
-import { applyTaskRunStudioProjection } from "~/features/runtime/task-run-studio-projection";
+import { getTaskProjectionForWorkflow } from "~/features/runtime/server/task-projection-repository";
+import { applyTaskStudioProjection } from "~/features/runtime/task-studio-projection";
 import type { WorkflowDocument } from "~/features/workflow/document";
 import { WorkflowValidationError } from "~/features/workflow/errors";
-import { assertActiveTaskRunSaveAllowed } from "~/features/workflow/save-lock-policy";
+import { assertActiveTaskSaveAllowed } from "~/features/workflow/save-lock-policy";
 import { WorkflowEngine } from "~/features/workflow/workflow-engine";
 import { ServerTestRuntime } from "~/server/effect";
 import { DatabaseService } from "~/server/services/database";
@@ -87,27 +87,21 @@ function createContractCommandRepository() {
 function createContractRepository() {
   const repository = createRuntimeRepository();
   return {
-    approveTaskRun: (
-      command: Omit<
-        Parameters<typeof repository.approveTaskRun>[0],
-        "workflowId"
-      >,
+    approveTask: (
+      command: Omit<Parameters<typeof repository.approveTask>[0], "workflowId">,
     ) =>
       ServerTestRuntime.runPromise(
-        repository.approveTaskRun({ ...command, workflowId: "workflow-id" }),
+        repository.approveTask({ ...command, workflowId: "workflow-id" }),
       ).then((outcome) => outcome.value),
-    cancelTaskRun: (
-      command: Omit<
-        Parameters<typeof repository.cancelTaskRun>[0],
-        "workflowId"
-      >,
+    cancelTask: (
+      command: Omit<Parameters<typeof repository.cancelTask>[0], "workflowId">,
     ) =>
       ServerTestRuntime.runPromise(
-        repository.cancelTaskRun({ ...command, workflowId: "workflow-id" }),
+        repository.cancelTask({ ...command, workflowId: "workflow-id" }),
       ).then((outcome) => outcome.value),
-    claimQueuedTaskRun: (
-      command: Parameters<typeof repository.claimQueuedTaskRun>[0],
-    ) => ServerTestRuntime.runPromise(repository.claimQueuedTaskRun(command)),
+    claimQueuedTask: (
+      command: Parameters<typeof repository.claimQueuedTask>[0],
+    ) => ServerTestRuntime.runPromise(repository.claimQueuedTask(command)),
     commitWorkflowRunPlan: (
       plan: Parameters<typeof repository.commitWorkflowRunPlan>[0],
     ) =>
@@ -120,51 +114,51 @@ function createContractRepository() {
       ServerTestRuntime.runPromise(
         repository.getTaskDependenciesForChild(command),
       ),
-    rejectTaskRunAndCreateRegeneration: (
+    rejectTaskAndCreateRegeneration: (
       command: Parameters<
-        typeof repository.rejectTaskRunAndCreateRegeneration
+        typeof repository.rejectTaskAndCreateRegeneration
       >[0] extends infer T
         ? Omit<T, "workflowId">
         : never,
     ) =>
       ServerTestRuntime.runPromise(
-        repository.rejectTaskRunAndCreateRegeneration({
+        repository.rejectTaskAndCreateRegeneration({
           ...command,
           workflowId: "workflow-id",
         }),
       ).then((outcome) => outcome.value),
-    settleTaskRunCompletion: (
+    settleTaskCompletion: (
       command: Omit<
-        Parameters<typeof repository.settleTaskRunCompletion>[0],
+        Parameters<typeof repository.settleTaskCompletion>[0],
         "workflowId"
       >,
     ) =>
       ServerTestRuntime.runPromise(
-        repository.settleTaskRunCompletion({
+        repository.settleTaskCompletion({
           ...command,
           workflowId: "workflow-id",
         }),
       ).then((outcome) => outcome.value),
-    settleTaskRunFailure: (
+    settleTaskFailure: (
       command: Omit<
-        Parameters<typeof repository.settleTaskRunFailure>[0],
+        Parameters<typeof repository.settleTaskFailure>[0],
         "workflowId"
       >,
     ) =>
       ServerTestRuntime.runPromise(
-        repository.settleTaskRunFailure({
+        repository.settleTaskFailure({
           ...command,
           workflowId: "workflow-id",
         }),
       ).then((outcome) => outcome.value),
-    wakeUpTaskRunChildren: (
+    wakeUpTaskChildren: (
       command: Omit<
-        Parameters<typeof repository.wakeUpTaskRunChildren>[0],
+        Parameters<typeof repository.wakeUpTaskChildren>[0],
         "workflowId"
       >,
     ) =>
       ServerTestRuntime.runPromise(
-        repository.wakeUpTaskRunChildren({
+        repository.wakeUpTaskChildren({
           ...command,
           workflowId: "workflow-id",
         }),
@@ -188,25 +182,25 @@ describe.serial("Workflow runtime state-machine contract", () => {
     await insertUser(db, { creditBalance: 100 });
     const delivered: PostCommitWork[] = [];
     const repository = await createContractCommandRepository();
-    const layer = RuntimeCommands.Live.pipe(
+    const layer = RuntimeCommands.Test.pipe(
       Layer.provide(
         Layer.mergeAll(
           Layer.succeed(RuntimeRepository, repository),
           Layer.succeed(RuntimeIdGenerator, {
-            createNodeExecutionId: nextId("node-execution"),
-            createTaskRunId: nextId("task-run"),
+            createNodeRunId: nextId("node-execution"),
+            createTaskId: nextId("task-run"),
           }),
           Layer.succeed(RuntimePostCommitWork, {
             deliver: (work) =>
               Effect.promise(async () => {
                 delivered.push(work);
                 for (const job of work.executionJobs) {
-                  const taskRun = await getTaskRunState(db, job.taskRunId);
-                  assert.equal(taskRun.runtimeStatus, "QUEUED");
+                  const task = await getTaskState(db, job.taskId);
+                  assert.equal(task.runtimeStatus, "QUEUED");
                 }
                 for (const event of work.taskStatusEvents) {
-                  const taskRun = await getTaskRunState(db, event.taskRunId);
-                  assert.equal(taskRun.runtimeStatus, event.status);
+                  const task = await getTaskState(db, event.taskId);
+                  assert.equal(task.runtimeStatus, event.status);
                 }
               }),
           }),
@@ -220,8 +214,8 @@ describe.serial("Workflow runtime state-machine contract", () => {
           command: { type: "run-node", nodeId: "script" },
           document: simpleScriptDocument(),
           documentRevision: 1,
-          latestNodeExecutions: [],
-          latestTaskRuns: [],
+          latestNodeRuns: [],
+          latestTasks: [],
           ownerId: "owner-user",
           workflowId: "workflow-id",
         }),
@@ -239,18 +233,18 @@ describe.serial("Workflow runtime state-machine contract", () => {
     });
   });
 
-  test("planner run-node contract creates upstream closure, reuses durable batches, waits on active parents, and never creates empty executable Node Executions", () => {
+  test("planner run-node contract creates upstream closure, reuses durable batches, waits on active parents, and never creates empty executable Node Runs", () => {
     const document = generatedImageToGeneratedVideoDocument();
-    const firstRunLatestTaskRuns: ReturnType<typeof latestTaskRun>[] = [];
+    const firstRunLatestTasks: ReturnType<typeof latestTask>[] = [];
     const firstRun = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-node", nodeId: "video" },
-        createNodeExecutionId: nextId("node-execution"),
-        createTaskRunId: nextId("task-run"),
+        createNodeRunId: nextId("node-execution"),
+        createTaskId: nextId("task-run"),
         document,
         documentRevision: 12,
-        latestNodeExecutions: [],
-        latestTaskRuns: firstRunLatestTaskRuns,
+        latestNodeRuns: [],
+        latestTasks: firstRunLatestTasks,
         ownerId: "owner-user",
         plannedItemCountByNodeId: { image: 2, video: 2 },
         workflowId: "workflow-id",
@@ -258,105 +252,100 @@ describe.serial("Workflow runtime state-machine contract", () => {
     );
 
     assert.deepEqual(
-      firstRun.nodeExecutionsToCreate.map((execution) => execution.nodeId),
+      firstRun.nodeRunsToCreate.map((execution) => execution.nodeId),
       ["image", "video"],
     );
     assert.deepEqual(
-      firstRun.taskRunsToCreate.map((taskRun) => ({
-        attempt: taskRun.attempt,
-        itemIndex: taskRun.itemIndex,
-        nodeId: taskRun.nodeId,
-        status: taskRun.status,
+      firstRun.tasksToCreate.map((task) => ({
+        branchIndex: task.branchIndex,
+        nodeId: task.nodeId,
+        status: task.status,
       })),
       [
-        { attempt: 0, itemIndex: 0, nodeId: "image", status: "QUEUED" },
-        { attempt: 0, itemIndex: 1, nodeId: "image", status: "QUEUED" },
+        { branchIndex: 0, nodeId: "image", status: "QUEUED" },
+        { branchIndex: 1, nodeId: "image", status: "QUEUED" },
         {
-          attempt: 0,
-          itemIndex: 0,
+          branchIndex: 0,
           nodeId: "video",
           status: "WAITING_UPSTREAM",
         },
         {
-          attempt: 0,
-          itemIndex: 1,
+          branchIndex: 1,
           nodeId: "video",
           status: "WAITING_UPSTREAM",
         },
       ],
     );
-    assertPlanInvariants(firstRun, document, firstRunLatestTaskRuns);
+    assertPlanInvariants(firstRun, document, firstRunLatestTasks);
 
-    const activeUpstreamLatestTaskRuns = [
-      latestTaskRun({
+    const activeUpstreamLatestTasks = [
+      latestTask({
         id: "image-running-0",
-        nodeExecutionId: "image-execution",
+        nodeRunId: "image-execution",
         status: "RUNNING",
       }),
-      latestTaskRun({
+      latestTask({
         id: "image-pending-1",
-        itemIndex: 1,
-        nodeExecutionId: "image-execution",
+        branchIndex: 1,
+        nodeRunId: "image-execution",
         status: "PENDING_REVIEW",
       }),
     ];
     const activeUpstreamRun = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-node", nodeId: "video" },
-        createNodeExecutionId: nextId("node-execution-active"),
-        createTaskRunId: nextId("task-run-active"),
+        createNodeRunId: nextId("node-execution-active"),
+        createTaskId: nextId("task-run-active"),
         document,
-        latestNodeExecutions: [{ id: "image-execution", nodeId: "image" }],
-        latestTaskRuns: activeUpstreamLatestTaskRuns,
+        latestNodeRuns: [{ id: "image-execution", nodeId: "image" }],
+        latestTasks: activeUpstreamLatestTasks,
         ownerId: "owner-user",
         plannedItemCountByNodeId: { image: 2, video: 2 },
         workflowId: "workflow-id",
       }),
     );
 
-    assert.deepEqual(activeUpstreamRun.nodeExecutionsToReuse, [
+    assert.deepEqual(activeUpstreamRun.nodeRunsToReuse, [
       { id: "image-execution", nodeId: "image" },
     ]);
     assert.deepEqual(
-      activeUpstreamRun.taskRunsToCreate.map((taskRun) => ({
-        itemIndex: taskRun.itemIndex,
-        nodeId: taskRun.nodeId,
-        status: taskRun.status,
+      activeUpstreamRun.tasksToCreate.map((task) => ({
+        branchIndex: task.branchIndex,
+        nodeId: task.nodeId,
+        status: task.status,
       })),
       [
-        { itemIndex: 0, nodeId: "video", status: "WAITING_UPSTREAM" },
-        { itemIndex: 1, nodeId: "video", status: "WAITING_UPSTREAM" },
+        { branchIndex: 0, nodeId: "video", status: "WAITING_UPSTREAM" },
+        { branchIndex: 1, nodeId: "video", status: "WAITING_UPSTREAM" },
       ],
     );
     assertPlanInvariants(
       activeUpstreamRun,
       document,
-      activeUpstreamLatestTaskRuns,
+      activeUpstreamLatestTasks,
     );
 
-    const recoverableUpstreamLatestTaskRuns = [
-      latestTaskRun({
-        attempt: 2,
+    const recoverableUpstreamLatestTasks = [
+      latestTask({
         id: "image-failed-0",
-        nodeExecutionId: "image-execution",
+        nodeRunId: "image-execution",
         status: "FAILED",
       }),
-      latestTaskRun({
-        attempt: 4,
+      latestTask({
         id: "image-cancelled-1",
-        itemIndex: 1,
-        nodeExecutionId: "image-execution",
+        branchIndex: 1,
+        nodeRunId: "image-execution",
         status: "CANCELLED",
       }),
     ];
     const recoverableUpstreamRun = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-node", nodeId: "video" },
-        createNodeExecutionId: nextId("node-execution-recover"),
-        createTaskRunId: nextId("task-run-recover"),
+        createNodeRunId: nextId("node-execution-recover"),
+        createTaskId: nextId("task-run-recover"),
         document,
-        latestNodeExecutions: [{ id: "image-execution", nodeId: "image" }],
-        latestTaskRuns: recoverableUpstreamLatestTaskRuns,
+        latestNodeRuns: [{ id: "image-execution", nodeId: "image" }],
+        latestTasks: recoverableUpstreamLatestTasks,
         ownerId: "owner-user",
         plannedItemCountByNodeId: { image: 2, video: 2 },
         workflowId: "workflow-id",
@@ -364,39 +353,34 @@ describe.serial("Workflow runtime state-machine contract", () => {
     );
 
     assert.deepEqual(
-      recoverableUpstreamRun.taskRunsToCreate.map((taskRun) => ({
-        attempt: taskRun.attempt,
-        itemIndex: taskRun.itemIndex,
-        nodeExecutionId: taskRun.nodeExecutionId,
-        nodeId: taskRun.nodeId,
-        status: taskRun.status,
+      recoverableUpstreamRun.tasksToCreate.map((task) => ({
+        branchIndex: task.branchIndex,
+        nodeRunId: task.nodeRunId,
+        nodeId: task.nodeId,
+        status: task.status,
       })),
       [
         {
-          attempt: 3,
-          itemIndex: 0,
-          nodeExecutionId: "image-execution",
+          branchIndex: 0,
+          nodeRunId: "image-execution",
           nodeId: "image",
           status: "QUEUED",
         },
         {
-          attempt: 5,
-          itemIndex: 1,
-          nodeExecutionId: "image-execution",
+          branchIndex: 1,
+          nodeRunId: "image-execution",
           nodeId: "image",
           status: "QUEUED",
         },
         {
-          attempt: 0,
-          itemIndex: 0,
-          nodeExecutionId: "node-execution-recover-1",
+          branchIndex: 0,
+          nodeRunId: "node-execution-recover-1",
           nodeId: "video",
           status: "WAITING_UPSTREAM",
         },
         {
-          attempt: 0,
-          itemIndex: 1,
-          nodeExecutionId: "node-execution-recover-1",
+          branchIndex: 1,
+          nodeRunId: "node-execution-recover-1",
           nodeId: "video",
           status: "WAITING_UPSTREAM",
         },
@@ -405,19 +389,13 @@ describe.serial("Workflow runtime state-machine contract", () => {
     assertPlanInvariants(
       recoverableUpstreamRun,
       document,
-      recoverableUpstreamLatestTaskRuns,
+      recoverableUpstreamLatestTasks,
     );
 
-    const reviewBarrierLatestTaskRuns = [
-      latestTaskRun({
-        id: "image-approved-old",
-        nodeExecutionId: "image-execution",
-        status: "APPROVED",
-      }),
-      latestTaskRun({
-        attempt: 1,
+    const reviewBarrierLatestTasks = [
+      latestTask({
         id: "image-pending-latest",
-        nodeExecutionId: "image-execution",
+        nodeRunId: "image-execution",
         status: "PENDING_REVIEW",
       }),
     ];
@@ -425,76 +403,65 @@ describe.serial("Workflow runtime state-machine contract", () => {
       planWorkflowRun({
         command: { type: "run-node", nodeId: "video" },
         document,
-        latestNodeExecutions: [{ id: "image-execution", nodeId: "image" }],
-        latestTaskRuns: reviewBarrierLatestTaskRuns,
+        latestNodeRuns: [{ id: "image-execution", nodeId: "image" }],
+        latestTasks: reviewBarrierLatestTasks,
         ownerId: "owner-user",
         workflowId: "workflow-id",
       }),
     );
-    assert.equal(
-      reviewBarrierRun.taskRunsToCreate[0]?.status,
-      "WAITING_UPSTREAM",
-    );
-    assertPlanInvariants(
-      reviewBarrierRun,
-      document,
-      reviewBarrierLatestTaskRuns,
-    );
+    assert.equal(reviewBarrierRun.tasksToCreate[0]?.status, "WAITING_UPSTREAM");
+    assertPlanInvariants(reviewBarrierRun, document, reviewBarrierLatestTasks);
   });
 
-  test("planner run-node contract fills empty reused upstream Node Execution slots before children wait on them", () => {
+  test("planner run-node contract fills empty reused upstream Node Run slots before children wait on them", () => {
     const document = generatedImageToGeneratedVideoDocument();
-    const latestTaskRuns: ReturnType<typeof latestTaskRun>[] = [];
+    const latestTasks: ReturnType<typeof latestTask>[] = [];
     const plan = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-node", nodeId: "video" },
-        createNodeExecutionId: nextId(
-          "runtime-node-execution-run-node-empty-parent",
-        ),
-        createTaskRunId: nextId("runtime-task-run-run-node-empty-parent"),
+        createNodeRunId: nextId("runtime-node-execution-run-node-empty-parent"),
+        createTaskId: nextId("runtime-task-run-run-node-empty-parent"),
         document,
-        latestNodeExecutions: [
-          { id: "empty-image-execution", nodeId: "image" },
-        ],
-        latestTaskRuns,
+        latestNodeRuns: [{ id: "empty-image-execution", nodeId: "image" }],
+        latestTasks,
         ownerId: "owner-user",
         plannedItemCountByNodeId: { image: 2, video: 2 },
         workflowId: "workflow-id",
       }),
     );
 
-    assert.deepEqual(plan.nodeExecutionsToReuse, [
+    assert.deepEqual(plan.nodeRunsToReuse, [
       { id: "empty-image-execution", nodeId: "image" },
     ]);
     assert.deepEqual(
-      plan.taskRunsToCreate.map((taskRun) => ({
-        itemIndex: taskRun.itemIndex,
-        nodeExecutionId: taskRun.nodeExecutionId,
-        nodeId: taskRun.nodeId,
-        status: taskRun.status,
+      plan.tasksToCreate.map((task) => ({
+        branchIndex: task.branchIndex,
+        nodeRunId: task.nodeRunId,
+        nodeId: task.nodeId,
+        status: task.status,
       })),
       [
         {
-          itemIndex: 0,
-          nodeExecutionId: "empty-image-execution",
+          branchIndex: 0,
+          nodeRunId: "empty-image-execution",
           nodeId: "image",
           status: "QUEUED",
         },
         {
-          itemIndex: 1,
-          nodeExecutionId: "empty-image-execution",
+          branchIndex: 1,
+          nodeRunId: "empty-image-execution",
           nodeId: "image",
           status: "QUEUED",
         },
         {
-          itemIndex: 0,
-          nodeExecutionId: "runtime-node-execution-run-node-empty-parent-1",
+          branchIndex: 0,
+          nodeRunId: "runtime-node-execution-run-node-empty-parent-1",
           nodeId: "video",
           status: "WAITING_UPSTREAM",
         },
         {
-          itemIndex: 1,
-          nodeExecutionId: "runtime-node-execution-run-node-empty-parent-1",
+          branchIndex: 1,
+          nodeRunId: "runtime-node-execution-run-node-empty-parent-1",
           nodeId: "video",
           status: "WAITING_UPSTREAM",
         },
@@ -503,100 +470,98 @@ describe.serial("Workflow runtime state-machine contract", () => {
     assert.deepEqual(
       plan.taskDependenciesToCreate.map((dependency) => ({
         childNodeId: dependency.childNodeId,
-        parentItemIndex: dependency.parentItemIndex,
-        parentNodeExecutionId: dependency.parentNodeExecutionId,
+        parentBranchIndex: dependency.parentBranchIndex,
+        parentNodeRunId: dependency.parentNodeRunId,
         parentNodeId: dependency.parentNodeId,
       })),
       [
         {
           childNodeId: "video",
-          parentItemIndex: 0,
-          parentNodeExecutionId: "empty-image-execution",
+          parentBranchIndex: 0,
+          parentNodeRunId: "empty-image-execution",
           parentNodeId: "image",
         },
         {
           childNodeId: "video",
-          parentItemIndex: 1,
-          parentNodeExecutionId: "empty-image-execution",
+          parentBranchIndex: 1,
+          parentNodeRunId: "empty-image-execution",
           parentNodeId: "image",
         },
       ],
     );
-    assertPlanInvariants(plan, document, latestTaskRuns);
+    assertPlanInvariants(plan, document, latestTasks);
   });
 
-  test("planner run-node contract fills empty reused upstream Node Execution slots before children wait on them", () => {
+  test("planner run-node contract fills empty reused upstream Node Run slots before children wait on them", () => {
     const document = generatedImageToGeneratedVideoDocument();
-    const latestTaskRuns: ReturnType<typeof latestTaskRun>[] = [];
+    const latestTasks: ReturnType<typeof latestTask>[] = [];
     const plan = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-node", nodeId: "video" },
-        createNodeExecutionId: nextId("runtime-node-execution-empty-parent"),
-        createTaskRunId: nextId("runtime-task-run-empty-parent"),
+        createNodeRunId: nextId("runtime-node-execution-empty-parent"),
+        createTaskId: nextId("runtime-task-run-empty-parent"),
         document,
-        latestNodeExecutions: [
-          { id: "empty-image-execution", nodeId: "image" },
-        ],
-        latestTaskRuns,
+        latestNodeRuns: [{ id: "empty-image-execution", nodeId: "image" }],
+        latestTasks,
         ownerId: "owner-user",
         plannedItemCountByNodeId: { image: 2, video: 2 },
         workflowId: "workflow-id",
       }),
     );
 
-    assert.deepEqual(plan.nodeExecutionsToReuse, [
+    assert.deepEqual(plan.nodeRunsToReuse, [
       { id: "empty-image-execution", nodeId: "image" },
     ]);
     assert.deepEqual(
-      plan.taskRunsToCreate.map((taskRun) => ({
-        itemIndex: taskRun.itemIndex,
-        nodeExecutionId: taskRun.nodeExecutionId,
-        nodeId: taskRun.nodeId,
-        status: taskRun.status,
+      plan.tasksToCreate.map((task) => ({
+        branchIndex: task.branchIndex,
+        nodeRunId: task.nodeRunId,
+        nodeId: task.nodeId,
+        status: task.status,
       })),
       [
         {
-          itemIndex: 0,
-          nodeExecutionId: "empty-image-execution",
+          branchIndex: 0,
+          nodeRunId: "empty-image-execution",
           nodeId: "image",
           status: "QUEUED",
         },
         {
-          itemIndex: 1,
-          nodeExecutionId: "empty-image-execution",
+          branchIndex: 1,
+          nodeRunId: "empty-image-execution",
           nodeId: "image",
           status: "QUEUED",
         },
         {
-          itemIndex: 0,
-          nodeExecutionId: "runtime-node-execution-empty-parent-1",
+          branchIndex: 0,
+          nodeRunId: "runtime-node-execution-empty-parent-1",
           nodeId: "video",
           status: "WAITING_UPSTREAM",
         },
         {
-          itemIndex: 1,
-          nodeExecutionId: "runtime-node-execution-empty-parent-1",
+          branchIndex: 1,
+          nodeRunId: "runtime-node-execution-empty-parent-1",
           nodeId: "video",
           status: "WAITING_UPSTREAM",
         },
       ],
     );
-    assertPlanInvariants(plan, document, latestTaskRuns);
+    assertPlanInvariants(plan, document, latestTasks);
   });
 
-  test("repository and gatekeeper contract commits materialized Task Runs, gates review, freezes dependencies, and keeps Wake-Up Calls idempotent", async () => {
+  test("repository and gatekeeper contract commits materialized Tasks, gates review, freezes dependencies, and keeps Wake-Up Calls idempotent", async () => {
     const repository = createContractRepository();
     await insertUser(db, { creditBalance: 100 });
     const document = generatedImageToGeneratedVideoDocument();
     const plan = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-node", nodeId: "video" },
-        createNodeExecutionId: nextId("runtime-node-execution"),
-        createTaskRunId: nextId("runtime-task-run"),
+        createNodeRunId: nextId("runtime-node-execution"),
+        createTaskId: nextId("runtime-task-run"),
         document,
         documentRevision: 44,
-        latestNodeExecutions: [],
-        latestTaskRuns: [],
+        latestNodeRuns: [],
+        latestTasks: [],
         ownerId: "owner-user",
         plannedItemCountByNodeId: { image: 1, video: 1 },
         workflowId: "workflow-id",
@@ -606,53 +571,48 @@ describe.serial("Workflow runtime state-machine contract", () => {
     const commit = await repository.commitWorkflowRunPlan(plan);
     assert.deepEqual(
       commit.executionJobs.map((job) => job.jobId),
-      ["task-run~runtime-task-run-1~attempt~0~execute"],
+      ["task~runtime-task-run-1~execute"],
     );
     assertNoColonJobIds(commit.executionJobs, commit.wakeUpJobs);
     assert.deepEqual(commit.taskStatusEvents.map(eventContract), [
       {
-        attempt: 0,
-        itemIndex: 0,
-        nodeExecutionId: "runtime-node-execution-1",
+        branchIndex: 0,
+        nodeRunId: "runtime-node-execution-1",
         status: "QUEUED",
-        taskRunId: "runtime-task-run-1",
+        taskId: "runtime-task-run-1",
       },
       {
-        attempt: 0,
-        itemIndex: 0,
-        nodeExecutionId: "runtime-node-execution-2",
+        branchIndex: 0,
+        nodeRunId: "runtime-node-execution-2",
         status: "WAITING_UPSTREAM",
-        taskRunId: "runtime-task-run-2",
+        taskId: "runtime-task-run-2",
       },
     ]);
     assert.equal(await getUserCreditBalance(db, "owner-user"), 90);
-    assert.deepEqual(await getTaskRunCreditState(db, "runtime-task-run-2"), {
+    assert.deepEqual(await getTaskCreditState(db, "runtime-task-run-2"), {
       creditCost: 40,
       failureReason: null,
       runtimeStatus: "WAITING_UPSTREAM",
     });
     await assertRuntimeInvariants(db);
 
-    const claimed = await repository.claimQueuedTaskRun({
-      attempt: 0,
+    const claimed = await repository.claimQueuedTask({
       ownerUserId: "owner-user",
-      taskRunId: "runtime-task-run-1",
+      taskId: "runtime-task-run-1",
     });
     assert.equal(claimed.claimed, true);
-    if (!claimed.claimed)
-      throw new Error("Expected queued image Task Run claim");
+    if (!claimed.claimed) throw new Error("Expected queued image Task claim");
     assert.equal(
       claimed.inputSnapshot.providerInput.kind,
       "image-generation-request",
     );
 
-    const pendingReview = await repository.settleTaskRunCompletion({
-      attempt: 0,
+    const pendingReview = await repository.settleTaskCompletion({
       providerCostCredits: 6,
       generatedAsset: generatedImageAsset("image-asset-pending"),
       ownerUserId: "owner-user",
       reviewRequired: true,
-      taskRunId: "runtime-task-run-1",
+      taskId: "runtime-task-run-1",
     });
     assert.equal(pendingReview.settled, true);
     assert.equal(
@@ -664,60 +624,57 @@ describe.serial("Workflow runtime state-machine contract", () => {
       null,
     );
     assert.equal(
-      (await getTaskRunCreditState(db, "runtime-task-run-2")).runtimeStatus,
+      (await getTaskCreditState(db, "runtime-task-run-2")).runtimeStatus,
       "WAITING_UPSTREAM",
     );
 
-    const approved = await repository.approveTaskRun({
-      attempt: 0,
+    const approved = await repository.approveTask({
       ownerUserId: "owner-user",
-      taskRunId: "runtime-task-run-1",
+      taskId: "runtime-task-run-1",
     });
     assert.deepEqual(approved, {
       decided: true,
       event: {
-        attempt: 0,
-        itemIndex: 0,
-        nodeExecutionId: "runtime-node-execution-1",
+        branchIndex: 0,
+        nodeRunId: "runtime-node-execution-1",
         status: "APPROVED",
-        taskRunId: "runtime-task-run-1",
+        taskId: "runtime-task-run-1",
       },
       wakeUpJob: {
         jobId: "wake-up~runtime-task-run-1",
         ownerUserId: "owner-user",
-        parentTaskRunId: "runtime-task-run-1",
+        parentTaskId: "runtime-task-run-1",
         workflowId: "workflow-id",
       },
     });
     assertNoColonJobIds([approved.wakeUpJob]);
 
-    const wake = await repository.wakeUpTaskRunChildren({
+    const wake = await repository.wakeUpTaskChildren({
       ownerUserId: "owner-user",
-      settledParentTaskRunId: "runtime-task-run-1",
+      settledParentTaskId: "runtime-task-run-1",
     });
     assert.deepEqual(
       wake.executionJobs.map((job) => job.jobId),
-      ["task-run~runtime-task-run-2~attempt~0~execute"],
+      ["task~runtime-task-run-2~execute"],
     );
     assert.deepEqual(wake.taskStatusEvents.map(eventContract), [
       {
-        attempt: 0,
-        itemIndex: 0,
-        nodeExecutionId: "runtime-node-execution-2",
+        branchIndex: 0,
+        nodeRunId: "runtime-node-execution-2",
         status: "QUEUED",
-        taskRunId: "runtime-task-run-2",
+        taskId: "runtime-task-run-2",
       },
     ]);
     assertNoColonJobIds(wake.executionJobs);
     assert.equal(await getUserCreditBalance(db, "owner-user"), 50);
-    assert.deepEqual(await getTaskRunCreditState(db, "runtime-task-run-2"), {
+    assert.deepEqual(await getTaskCreditState(db, "runtime-task-run-2"), {
       creditCost: 40,
       failureReason: null,
       runtimeStatus: "QUEUED",
     });
-    const duplicateWake = await repository.wakeUpTaskRunChildren({
+    const duplicateWake = await repository.wakeUpTaskChildren({
       ownerUserId: "owner-user",
-      settledParentTaskRunId: "runtime-task-run-1",
+      settledParentTaskId: "runtime-task-run-1",
     });
     assert.deepEqual(duplicateWake, {
       executionJobs: [],
@@ -727,15 +684,12 @@ describe.serial("Workflow runtime state-machine contract", () => {
     assert.equal(await getUserCreditBalance(db, "owner-user"), 50);
 
     const dependencies = await repository.getTaskDependenciesForChild({
-      childTaskRunId: "runtime-task-run-2",
+      childTaskId: "runtime-task-run-2",
     });
-    assert.equal(
-      dependencies[0]?.resolvedParentTaskRunId,
-      "runtime-task-run-1",
-    );
-    const child = await getTaskRunState(db, "runtime-task-run-2");
-    assert.equal(isTaskRunInputSnapshot(child.inputSnapshot), true);
-    if (!isTaskRunInputSnapshot(child.inputSnapshot)) {
+    assert.equal(dependencies[0]?.resolvedParentTaskId, "runtime-task-run-1");
+    const child = await getTaskState(db, "runtime-task-run-2");
+    assert.equal(isTaskInputSnapshot(child.inputSnapshot), true);
+    if (!isTaskInputSnapshot(child.inputSnapshot)) {
       throw new Error("Expected queued child input snapshot");
     }
     assert.equal(child.inputSnapshot.documentRevision, 44);
@@ -744,123 +698,116 @@ describe.serial("Workflow runtime state-machine contract", () => {
       "video-generation-request",
     );
     assert.equal(
-      child.inputSnapshot.resolvedParentTaskRuns[0]?.taskRunId,
+      child.inputSnapshot.resolvedParentTasks[0]?.taskId,
       "runtime-task-run-1",
     );
     await assertRuntimeInvariants(db);
   });
 
-  test("attempt contract distinguishes rejection, cancellation, failure, regeneration, rerun, and explicit recovery", async () => {
+  test("Task replacement contract distinguishes rejection, cancellation, failure, regeneration, rerun, and explicit recovery", async () => {
     const repository = createContractRepository();
     await insertUser(db, { creditBalance: 60 });
-    await insertTaskRun(db, {
-      attempt: 0,
+    await insertTask(db, {
       creditCost: 5,
-      id: "review-attempt-0",
-      nodeExecutionId: "node-execution-review",
+      id: "review-task-original",
+      nodeRunId: "node-execution-review",
       runtimeStatus: "PENDING_REVIEW",
     });
 
-    const rejected = await repository.rejectTaskRunAndCreateRegeneration({
-      attempt: 0,
-      newTaskRunId: "review-attempt-1",
+    const rejected = await repository.rejectTaskAndCreateRegeneration({
+      newTaskId: "review-task-regenerated",
       ownerUserId: "owner-user",
-      taskRunId: "review-attempt-0",
+      taskId: "review-task-original",
     });
     assert.equal(rejected.rejected, true);
     assert.deepEqual(
       rejected.rejected ? rejected.taskStatusEvents.map(eventContract) : [],
       [
         {
-          attempt: 0,
-          itemIndex: 0,
-          nodeExecutionId: "node-execution-review",
+          branchIndex: 0,
+          nodeRunId: "node-execution-review",
           status: "REJECTED",
-          taskRunId: "review-attempt-0",
+          taskId: "review-task-original",
         },
         {
-          attempt: 1,
-          itemIndex: 0,
-          nodeExecutionId: "node-execution-review",
+          branchIndex: 0,
+          nodeRunId: "node-execution-review",
           status: "QUEUED",
-          taskRunId: "review-attempt-1",
+          taskId: "review-task-regenerated",
         },
       ],
     );
     assert.equal(
-      (await getTaskRunCreditState(db, "review-attempt-0")).runtimeStatus,
+      (await getTaskCreditState(db, "review-task-original")).runtimeStatus,
       "REJECTED",
     );
     assert.equal(
-      (await getTaskRunCreditState(db, "review-attempt-1")).runtimeStatus,
+      (await getTaskCreditState(db, "review-task-regenerated")).runtimeStatus,
       "QUEUED",
     );
 
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "cancelled-parent",
-      nodeExecutionId: "node-execution-cancel-parent",
+      nodeRunId: "node-execution-cancel-parent",
       runtimeStatus: "QUEUED",
     });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "waiting-child-of-cancelled",
-      nodeExecutionId: "node-execution-child-of-cancelled",
+      nodeRunId: "node-execution-child-of-cancelled",
       runtimeStatus: "WAITING_UPSTREAM",
     });
     await insertTaskDependency(db, {
-      childTaskRunId: "waiting-child-of-cancelled",
-      parentNodeExecutionId: "node-execution-cancel-parent",
+      childTaskId: "waiting-child-of-cancelled",
+      parentNodeRunId: "node-execution-cancel-parent",
     });
-    await repository.cancelTaskRun({
-      attempt: 0,
+    await repository.cancelTask({
       ownerUserId: "owner-user",
-      taskRunId: "cancelled-parent",
+      taskId: "cancelled-parent",
     });
-    await repository.wakeUpTaskRunChildren({
+    await repository.wakeUpTaskChildren({
       ownerUserId: "owner-user",
-      settledParentTaskRunId: "cancelled-parent",
+      settledParentTaskId: "cancelled-parent",
     });
     assert.equal(
-      (await getTaskRunCreditState(db, "cancelled-parent")).runtimeStatus,
+      (await getTaskCreditState(db, "cancelled-parent")).runtimeStatus,
       "CANCELLED",
     );
     assert.equal(
-      (await getTaskRunCreditState(db, "waiting-child-of-cancelled"))
+      (await getTaskCreditState(db, "waiting-child-of-cancelled"))
         .runtimeStatus,
       "UPSTREAM_FAILED",
     );
 
     await insertUser(db, { creditBalance: 3, id: "low-credit-user" });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       creditCost: 10,
       id: "unfunded-parent",
-      nodeExecutionId: "node-execution-unfunded-parent",
+      nodeRunId: "node-execution-unfunded-parent",
       ownerUserId: "low-credit-user",
       runtimeStatus: "RUNNING",
     });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "waiting-child-of-unfunded",
-      nodeExecutionId: "node-execution-child-of-unfunded",
+      nodeRunId: "node-execution-child-of-unfunded",
       ownerUserId: "low-credit-user",
       runtimeStatus: "WAITING_UPSTREAM",
     });
     await insertTaskDependency(db, {
-      childTaskRunId: "waiting-child-of-unfunded",
-      parentNodeExecutionId: "node-execution-unfunded-parent",
+      childTaskId: "waiting-child-of-unfunded",
+      parentNodeRunId: "node-execution-unfunded-parent",
     });
-    await repository.settleTaskRunFailure({
-      attempt: 0,
+    await repository.settleTaskFailure({
       failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
       failureSource: nonRefundableProviderFailureSource(),
       ownerUserId: "low-credit-user",
-      taskRunId: "unfunded-parent",
+      taskId: "unfunded-parent",
     });
-    await repository.wakeUpTaskRunChildren({
+    await repository.wakeUpTaskChildren({
       ownerUserId: "low-credit-user",
-      settledParentTaskRunId: "unfunded-parent",
+      settledParentTaskId: "unfunded-parent",
     });
     assert.equal(
-      (await getTaskRunCreditState(db, "waiting-child-of-unfunded"))
-        .runtimeStatus,
+      (await getTaskCreditState(db, "waiting-child-of-unfunded")).runtimeStatus,
       "UPSTREAM_FAILED",
     );
 
@@ -868,27 +815,25 @@ describe.serial("Workflow runtime state-machine contract", () => {
     const regenerate = unwrapPlan(
       planWorkflowRun({
         command: {
-          itemIndex: 1,
-          nodeExecutionId: "node-execution-script-existing",
-          type: "run-task-slot",
+          branchIndex: 1,
+          nodeRunId: "node-execution-script-existing",
+          type: "run-task",
         },
         document,
-        latestNodeExecutions: [
+        latestNodeRuns: [
           { id: "node-execution-script-existing", nodeId: "script" },
         ],
-        latestTaskRuns: [
-          latestTaskRun({
-            attempt: 2,
+        latestTasks: [
+          latestTask({
             id: "script-item-0-approved",
-            itemIndex: 0,
-            nodeExecutionId: "node-execution-script-existing",
+            branchIndex: 0,
+            nodeRunId: "node-execution-script-existing",
             status: "APPROVED",
           }),
-          latestTaskRun({
-            attempt: 3,
+          latestTask({
             id: "script-item-1-cancelled",
-            itemIndex: 1,
-            nodeExecutionId: "node-execution-script-existing",
+            branchIndex: 1,
+            nodeRunId: "node-execution-script-existing",
             status: "CANCELLED",
           }),
         ],
@@ -898,16 +843,14 @@ describe.serial("Workflow runtime state-machine contract", () => {
       }),
     );
     assert.deepEqual(
-      regenerate.taskRunsToCreate.map((taskRun) => ({
-        attempt: taskRun.attempt,
-        itemIndex: taskRun.itemIndex,
-        nodeExecutionId: taskRun.nodeExecutionId,
+      regenerate.tasksToCreate.map((task) => ({
+        branchIndex: task.branchIndex,
+        nodeRunId: task.nodeRunId,
       })),
       [
         {
-          attempt: 4,
-          itemIndex: 1,
-          nodeExecutionId: "node-execution-script-existing",
+          branchIndex: 1,
+          nodeRunId: "node-execution-script-existing",
         },
       ],
     );
@@ -915,15 +858,14 @@ describe.serial("Workflow runtime state-machine contract", () => {
       planWorkflowRun({
         command: { type: "run-node", nodeId: "script" },
         document,
-        latestNodeExecutions: [
+        latestNodeRuns: [
           { id: "node-execution-script-existing", nodeId: "script" },
         ],
-        latestTaskRuns: [
-          latestTaskRun({
-            attempt: 4,
+        latestTasks: [
+          latestTask({
             id: "script-item-1-approved",
-            itemIndex: 1,
-            nodeExecutionId: "node-execution-script-existing",
+            branchIndex: 1,
+            nodeRunId: "node-execution-script-existing",
             status: "APPROVED",
           }),
         ],
@@ -933,18 +875,14 @@ describe.serial("Workflow runtime state-machine contract", () => {
       }),
     );
     assert.notEqual(
-      rerun.nodeExecutionsToCreate[0]?.id,
+      rerun.nodeRunsToCreate[0]?.id,
       "node-execution-script-existing",
     );
     assert.deepEqual(
-      rerun.taskRunsToCreate.map((taskRun) => ({
-        attempt: taskRun.attempt,
-        itemIndex: taskRun.itemIndex,
+      rerun.tasksToCreate.map((task) => ({
+        branchIndex: task.branchIndex,
       })),
-      [
-        { attempt: 0, itemIndex: 0 },
-        { attempt: 0, itemIndex: 1 },
-      ],
+      [{ branchIndex: 0 }, { branchIndex: 1 }],
     );
     await assertRuntimeInvariants(db);
   });
@@ -952,33 +890,30 @@ describe.serial("Workflow runtime state-machine contract", () => {
   test("materialized snapshot, provider, queue, projection, and save-lock consumers obey the runtime contract", async () => {
     const jobPayloads = [
       buildRuntimeExecutionJobPayload({
-        attempt: 2,
-        itemIndex: 1,
-        nodeExecutionId: "node-execution-queue",
+        branchIndex: 1,
+        nodeRunId: "node-execution-queue",
         ownerUserId: "owner-user",
-        taskRunId: "task-run-queue",
+        taskId: "task-run-queue",
         workflowId: "workflow-id",
       }),
       buildRuntimeCompletionSettlementJobPayload({
-        attempt: 2,
         providerCostCredits: 1,
         generatedAsset: generatedTextAsset("asset-queue", "done"),
         ownerUserId: "owner-user",
         reviewRequired: false,
-        taskRunId: "task-run-queue",
+        taskId: "task-run-queue",
         workflowId: "workflow-id",
       }),
       buildRuntimeFailureSettlementJobPayload({
-        attempt: 2,
         failureReason: { message: "failed", type: "PROVIDER_FAILED" },
         failureSource: nonRefundableProviderFailureSource(),
         ownerUserId: "owner-user",
-        taskRunId: "task-run-queue",
+        taskId: "task-run-queue",
         workflowId: "workflow-id",
       }),
       buildRuntimeWakeUpJobPayload({
         ownerUserId: "owner-user",
-        parentTaskRunId: "task-run-queue",
+        parentTaskId: "task-run-queue",
         workflowId: "workflow-id",
       }),
     ];
@@ -991,7 +926,7 @@ describe.serial("Workflow runtime state-machine contract", () => {
     });
     const snapshot = executableSnapshot({
       prompt: "frozen prompt, not live graph",
-      taskRunId: "task-run-provider",
+      taskId: "task-run-provider",
     });
     await Effect.runPromise(
       executor.execute({
@@ -1017,7 +952,7 @@ describe.serial("Workflow runtime state-machine contract", () => {
       })),
     } as WorkflowDocument;
     assert.doesNotThrow(() =>
-      assertActiveTaskRunSaveAllowed({
+      assertActiveTaskSaveAllowed({
         activeTargetNodeIds: ["active-generator"],
         currentDocument,
         nextDocument: movedWithRuntimePayloads,
@@ -1025,7 +960,7 @@ describe.serial("Workflow runtime state-machine contract", () => {
     );
     assert.throws(
       () =>
-        assertActiveTaskRunSaveAllowed({
+        assertActiveTaskSaveAllowed({
           activeTargetNodeIds: ["active-generator"],
           currentDocument,
           nextDocument: {
@@ -1039,43 +974,41 @@ describe.serial("Workflow runtime state-machine contract", () => {
       WorkflowValidationError,
     );
 
-    await insertNodeExecution(db, {
+    await insertNodeRun(db, {
       id: "node-execution-projection-old",
       nodeId: "projected-node",
     });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "projected-old-approved",
-      nodeExecutionId: "node-execution-projection-old",
+      nodeRunId: "node-execution-projection-old",
       runtimeStatus: "APPROVED",
     });
     await insertGeneratedTextAsset(db, {
       assetId: "projected-old-asset",
-      taskRunId: "projected-old-approved",
+      taskId: "projected-old-approved",
       text: "stale text",
     });
-    await insertTaskRun(db, {
-      attempt: 1,
+    await insertTask(db, {
       failureReason: "PROVIDER_FAILED",
       id: "projected-latest-failed",
-      nodeExecutionId: "node-execution-projection-old",
+      nodeRunId: "node-execution-projection-old",
       nodeId: "projected-node",
       runtimeStatus: "FAILED",
     });
     const projection = await ServerTestRuntime.runPromise(
-      getTaskRunProjectionForWorkflow({
+      getTaskProjectionForWorkflow({
         ownerUserId: "owner-user",
         workflowId: "workflow-id",
       }),
     );
     assert.deepEqual(projection, [
       {
-        attempt: 1,
         failureReason: "PROVIDER_FAILED",
-        itemIndex: 0,
-        nodeExecutionId: "node-execution-projection-old",
+        branchIndex: 0,
+        nodeRunId: "node-execution-projection-old",
         nodeId: "projected-node",
         status: "FAILED",
-        taskRunId: "projected-latest-failed",
+        taskId: "projected-latest-failed",
       },
     ]);
 
@@ -1085,14 +1018,13 @@ describe.serial("Workflow runtime state-machine contract", () => {
     );
     const nodeId = studio.document.nodes[0]?.id;
     assert.ok(nodeId);
-    const projectedStudio = applyTaskRunStudioProjection({
+    const projectedStudio = applyTaskStudioProjection({
       document: studio.document,
       runtime: studio.runtime,
       slots: [
         {
-          attempt: 3,
-          itemIndex: 0,
-          nodeExecutionId: "node-execution-studio",
+          branchIndex: 0,
+          nodeRunId: "node-execution-studio",
           nodeId,
           output: {
             assetId: "studio-text",
@@ -1100,7 +1032,7 @@ describe.serial("Workflow runtime state-machine contract", () => {
             text: "draft",
           },
           status: "PENDING_REVIEW",
-          taskRunId: "studio-task-run",
+          taskId: "studio-task-run",
         },
       ],
     });
@@ -1126,23 +1058,22 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
 
   test("review-disabled completion approves immediately, emits renderable output, and drafts a Wake-Up Call for children", async () => {
     const repository = createContractRepository();
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "parent-review-disabled",
-      nodeExecutionId: "node-execution-parent-review-disabled",
+      nodeRunId: "node-execution-parent-review-disabled",
       runtimeStatus: "RUNNING",
     });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "child-waits-on-review-disabled",
-      nodeExecutionId: "node-execution-child-review-disabled",
+      nodeRunId: "node-execution-child-review-disabled",
       runtimeStatus: "WAITING_UPSTREAM",
     });
     await insertTaskDependency(db, {
-      childTaskRunId: "child-waits-on-review-disabled",
-      parentNodeExecutionId: "node-execution-parent-review-disabled",
+      childTaskId: "child-waits-on-review-disabled",
+      parentNodeRunId: "node-execution-parent-review-disabled",
     });
 
-    const result = await repository.settleTaskRunCompletion({
-      attempt: 0,
+    const result = await repository.settleTaskCompletion({
       providerCostCredits: 4,
       generatedAsset: generatedTextAsset(
         "asset-review-disabled",
@@ -1150,55 +1081,53 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
       ),
       ownerUserId: "owner-user",
       reviewRequired: false,
-      taskRunId: "parent-review-disabled",
+      taskId: "parent-review-disabled",
     });
 
     assert.deepEqual(result, {
       event: {
-        attempt: 0,
-        itemIndex: 0,
-        nodeExecutionId: "node-execution-parent-review-disabled",
+        branchIndex: 0,
+        nodeRunId: "node-execution-parent-review-disabled",
         output: {
           assetId: "asset-review-disabled",
           kind: "inline-text-asset",
           text: "approved text",
         },
         status: "APPROVED",
-        taskRunId: "parent-review-disabled",
+        taskId: "parent-review-disabled",
       },
       settled: true,
       wakeUpJob: {
         jobId: "wake-up~parent-review-disabled",
         ownerUserId: "owner-user",
-        parentTaskRunId: "parent-review-disabled",
+        parentTaskId: "parent-review-disabled",
         workflowId: "workflow-id",
       },
     });
     assert.equal(
-      (await getTaskRunCreditState(db, "parent-review-disabled")).runtimeStatus,
+      (await getTaskCreditState(db, "parent-review-disabled")).runtimeStatus,
       "APPROVED",
     );
     assert.deepEqual(eventContract(result.settled ? result.event : never()), {
-      attempt: 0,
-      itemIndex: 0,
-      nodeExecutionId: "node-execution-parent-review-disabled",
+      branchIndex: 0,
+      nodeRunId: "node-execution-parent-review-disabled",
       status: "APPROVED",
-      taskRunId: "parent-review-disabled",
+      taskId: "parent-review-disabled",
     });
     await assertRuntimeInvariants(db);
   });
 
-  test("cancel command covers every cancellable and non-cancellable Task Run state", async () => {
+  test("cancel command covers every cancellable and non-cancellable Task state", async () => {
     const repository = await createContractCommandRepository();
     const wakeUpJobs: ReturnType<typeof buildRuntimeWakeUpJobPayload>[] = [];
     const publishedEvents: ReturnType<typeof eventContract>[] = [];
-    const layer = RuntimeCommands.Live.pipe(
+    const layer = RuntimeCommands.Test.pipe(
       Layer.provide(
         Layer.mergeAll(
           Layer.succeed(RuntimeRepository, repository),
           Layer.succeed(RuntimeIdGenerator, {
-            createNodeExecutionId: nextId("node-execution"),
-            createTaskRunId: nextId("task-run"),
+            createNodeRunId: nextId("node-execution"),
+            createTaskId: nextId("task-run"),
           }),
           Layer.succeed(RuntimePostCommitWork, {
             deliver: (work) =>
@@ -1212,13 +1141,12 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
         ),
       ),
     );
-    const runCancel = (taskRunId: string) =>
+    const runCancel = (taskId: string) =>
       Effect.runPromise(
         Effect.flatMap(RuntimeCommands, (commands) =>
-          commands.cancelTaskRun({
-            attempt: 0,
+          commands.cancelTask({
             ownerUserId: "owner-user",
-            taskRunId,
+            taskId,
             workflowId: "workflow-id",
           }),
         ).pipe(
@@ -1236,21 +1164,21 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
         ),
       );
     await insertUser(db, { creditBalance: 100 });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       creditCost: 12,
       id: "cancel-command-waiting",
       runtimeStatus: "WAITING_UPSTREAM",
     });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       creditCost: 12,
       id: "cancel-command-queued",
       runtimeStatus: "QUEUED",
     });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "cancel-command-running",
       runtimeStatus: "RUNNING",
     });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "cancel-command-review",
       runtimeStatus: "PENDING_REVIEW",
     });
@@ -1261,7 +1189,7 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
       "FAILED",
       "UPSTREAM_FAILED",
     ] as const) {
-      await insertTaskRun(db, {
+      await insertTask(db, {
         id: `cancel-command-${status.toLowerCase()}`,
         runtimeStatus: status,
       });
@@ -1288,17 +1216,17 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
     assert.equal(queued.ok ? queued.value.decided : false, true);
     assert.equal(running.ok, false);
     assert.deepEqual(running.ok ? null : running.error, {
-      _tag: "TaskRunCancellationBlockedError",
+      _tag: "TaskCancellationBlockedError",
       committed: false,
-      message: "Running Task Runs cannot be cancelled.",
+      message: "Running Tasks cannot be cancelled.",
       reason: "RUNNING_TASK_RUN_CANCELLATION_BLOCKED",
     });
     assert.equal(pendingReview.ok, false);
     assert.deepEqual(pendingReview.ok ? null : pendingReview.error, {
-      _tag: "TaskRunCancellationBlockedError",
+      _tag: "TaskCancellationBlockedError",
       committed: false,
       message:
-        "Pending Review Task Runs must be approved or rejected instead of cancelled.",
+        "Pending Review Tasks must be approved or rejected instead of cancelled.",
       reason: "PENDING_REVIEW_REQUIRES_REVIEW_DECISION",
     });
     assert.deepEqual(
@@ -1313,43 +1241,38 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
     );
     assert.deepEqual(publishedEvents, [
       {
-        attempt: 0,
-        itemIndex: 0,
-        nodeExecutionId: "node-execution-cancel-command-waiting",
+        branchIndex: 0,
+        nodeRunId: "node-execution-cancel-command-waiting",
         status: "CANCELLED",
-        taskRunId: "cancel-command-waiting",
+        taskId: "cancel-command-waiting",
       },
       {
-        attempt: 0,
-        itemIndex: 0,
-        nodeExecutionId: "node-execution-cancel-command-queued",
+        branchIndex: 0,
+        nodeRunId: "node-execution-cancel-command-queued",
         status: "CANCELLED",
-        taskRunId: "cancel-command-queued",
+        taskId: "cancel-command-queued",
       },
     ]);
     assert.deepEqual(
-      wakeUpJobs.map((job) => job.parentTaskRunId),
+      wakeUpJobs.map((job) => job.parentTaskId),
       ["cancel-command-waiting", "cancel-command-queued"],
     );
-    assert.deepEqual(
-      await getTaskRunCreditState(db, "cancel-command-waiting"),
-      {
-        creditCost: 12,
-        failureReason: null,
-        runtimeStatus: "CANCELLED",
-      },
-    );
-    assert.deepEqual(await getTaskRunCreditState(db, "cancel-command-queued"), {
+    assert.deepEqual(await getTaskCreditState(db, "cancel-command-waiting"), {
+      creditCost: 12,
+      failureReason: null,
+      runtimeStatus: "CANCELLED",
+    });
+    assert.deepEqual(await getTaskCreditState(db, "cancel-command-queued"), {
       creditCost: 12,
       failureReason: null,
       runtimeStatus: "CANCELLED",
     });
     assert.equal(
-      (await getTaskRunCreditState(db, "cancel-command-running")).runtimeStatus,
+      (await getTaskCreditState(db, "cancel-command-running")).runtimeStatus,
       "RUNNING",
     );
     assert.equal(
-      (await getTaskRunCreditState(db, "cancel-command-review")).runtimeStatus,
+      (await getTaskCreditState(db, "cancel-command-review")).runtimeStatus,
       "PENDING_REVIEW",
     );
     assert.equal(await getUserCreditBalance(db, "owner-user"), 112);
@@ -1359,73 +1282,71 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
   test("insufficient credits fail a ready child, cascade descendants, and later credits do not auto-resume", async () => {
     const repository = createContractRepository();
     await insertUser(db, { creditBalance: 5 });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "funded-parent-approved",
-      nodeExecutionId: "node-execution-funded-parent",
+      nodeRunId: "node-execution-funded-parent",
       runtimeStatus: "APPROVED",
     });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       creditCost: 20,
       id: "unfunded-child",
-      nodeExecutionId: "node-execution-unfunded-child",
+      nodeRunId: "node-execution-unfunded-child",
       runtimeStatus: "WAITING_UPSTREAM",
     });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       creditCost: 1,
       id: "unfunded-grandchild",
-      nodeExecutionId: "node-execution-unfunded-grandchild",
+      nodeRunId: "node-execution-unfunded-grandchild",
       runtimeStatus: "WAITING_UPSTREAM",
     });
     await insertTaskDependency(db, {
-      childTaskRunId: "unfunded-child",
-      parentNodeExecutionId: "node-execution-funded-parent",
+      childTaskId: "unfunded-child",
+      parentNodeRunId: "node-execution-funded-parent",
     });
     await insertTaskDependency(db, {
-      childTaskRunId: "unfunded-grandchild",
-      parentNodeExecutionId: "node-execution-unfunded-child",
+      childTaskId: "unfunded-grandchild",
+      parentNodeRunId: "node-execution-unfunded-child",
     });
 
     assert.equal(
-      (await getTaskRunCreditState(db, "unfunded-child")).creditCost,
+      (await getTaskCreditState(db, "unfunded-child")).creditCost,
       20,
     );
-    const result = await repository.wakeUpTaskRunChildren({
+    const result = await repository.wakeUpTaskChildren({
       ownerUserId: "owner-user",
-      settledParentTaskRunId: "funded-parent-approved",
+      settledParentTaskId: "funded-parent-approved",
     });
 
     assert.deepEqual(result.executionJobs, []);
     assert.deepEqual(result.taskStatusEvents.map(eventContract), [
       {
-        attempt: 0,
-        itemIndex: 0,
-        nodeExecutionId: "node-execution-unfunded-child",
+        branchIndex: 0,
+        nodeRunId: "node-execution-unfunded-child",
         status: "FAILED",
-        taskRunId: "unfunded-child",
+        taskId: "unfunded-child",
       },
       {
-        attempt: 0,
-        itemIndex: 0,
-        nodeExecutionId: "node-execution-unfunded-grandchild",
+        branchIndex: 0,
+        nodeRunId: "node-execution-unfunded-grandchild",
         status: "UPSTREAM_FAILED",
-        taskRunId: "unfunded-grandchild",
+        taskId: "unfunded-grandchild",
       },
     ]);
-    assert.deepEqual(await getTaskRunCreditState(db, "unfunded-child"), {
+    assert.deepEqual(await getTaskCreditState(db, "unfunded-child"), {
       creditCost: 20,
       failureReason: "INSUFFICIENT_CREDITS",
       runtimeStatus: "FAILED",
     });
     assert.equal(
-      (await getTaskRunCreditState(db, "unfunded-grandchild")).runtimeStatus,
+      (await getTaskCreditState(db, "unfunded-grandchild")).runtimeStatus,
       "UPSTREAM_FAILED",
     );
     assert.equal(await getUserCreditBalance(db, "owner-user"), 5);
 
     await setUserCreditBalance(db, { creditBalance: 100 });
-    const duplicateWake = await repository.wakeUpTaskRunChildren({
+    const duplicateWake = await repository.wakeUpTaskChildren({
       ownerUserId: "owner-user",
-      settledParentTaskRunId: "funded-parent-approved",
+      settledParentTaskId: "funded-parent-approved",
     });
     assert.deepEqual(duplicateWake, {
       executionJobs: [],
@@ -1433,43 +1354,43 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
       taskStatusEvents: [],
     });
     assert.equal(
-      (await getTaskRunCreditState(db, "unfunded-child")).runtimeStatus,
+      (await getTaskCreditState(db, "unfunded-child")).runtimeStatus,
       "FAILED",
     );
     assert.equal(
-      (await getTaskRunCreditState(db, "unfunded-grandchild")).runtimeStatus,
+      (await getTaskCreditState(db, "unfunded-grandchild")).runtimeStatus,
       "UPSTREAM_FAILED",
     );
     await assertRuntimeInvariants(db);
   });
 
-  test("queued children freeze exact parent Task Run dependencies and snapshots across later regeneration", async () => {
+  test("queued children freeze exact parent Task dependencies and snapshots across later regeneration", async () => {
     const repository = createContractRepository();
     await insertUser(db, { creditBalance: 100 });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "parent-approved-before-regeneration",
-      nodeExecutionId: "node-execution-parent-freeze",
+      nodeRunId: "node-execution-parent-freeze",
       nodeId: "source",
       runtimeStatus: "APPROVED",
     });
     await insertGeneratedTextAsset(db, {
       assetId: "asset-parent-before-regeneration",
-      taskRunId: "parent-approved-before-regeneration",
+      taskId: "parent-approved-before-regeneration",
       text: "old approved parent text",
     });
     const plan = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-node", nodeId: "script" },
-        createNodeExecutionId: () => "node-execution-child-freeze",
-        createTaskRunId: () => "child-freezes-parent",
+        createNodeRunId: () => "node-execution-child-freeze",
+        createTaskId: () => "child-freezes-parent",
         document: broadcastGeneratedTextDocument(),
-        latestNodeExecutions: [
+        latestNodeRuns: [
           { id: "node-execution-parent-freeze", nodeId: "source" },
         ],
-        latestTaskRuns: [
-          latestTaskRun({
+        latestTasks: [
+          latestTask({
             id: "parent-approved-before-regeneration",
-            nodeExecutionId: "node-execution-parent-freeze",
+            nodeRunId: "node-execution-parent-freeze",
             status: "APPROVED",
           }),
         ],
@@ -1483,35 +1404,34 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
       db,
       "child-freezes-parent",
     );
-    const frozenState = await getTaskRunState(db, "child-freezes-parent");
+    const frozenState = await getTaskState(db, "child-freezes-parent");
     assert.equal(
-      frozenDependencies[0]?.resolvedParentTaskRunId,
+      frozenDependencies[0]?.resolvedParentTaskId,
       "parent-approved-before-regeneration",
     );
     assert.equal(
-      frozenState.inputSnapshot.resolvedParentTaskRuns[0]?.taskRunId,
+      frozenState.inputSnapshot.resolvedParentTasks[0]?.taskId,
       "parent-approved-before-regeneration",
     );
 
-    await insertTaskRun(db, {
-      attempt: 1,
+    await insertTask(db, {
       id: "parent-approved-after-regeneration",
-      nodeExecutionId: "node-execution-parent-freeze",
+      nodeRunId: "node-execution-parent-freeze",
       nodeId: "source",
       runtimeStatus: "APPROVED",
     });
     await insertGeneratedTextAsset(db, {
       assetId: "asset-parent-after-regeneration",
-      taskRunId: "parent-approved-after-regeneration",
+      taskId: "parent-approved-after-regeneration",
       text: "new approved parent text",
     });
-    await repository.wakeUpTaskRunChildren({
+    await repository.wakeUpTaskChildren({
       ownerUserId: "owner-user",
-      settledParentTaskRunId: "parent-approved-after-regeneration",
+      settledParentTaskId: "parent-approved-after-regeneration",
     });
 
     assert.equal(
-      (await getTaskRunCreditState(db, "parent-approved-before-regeneration"))
+      (await getTaskCreditState(db, "parent-approved-before-regeneration"))
         .runtimeStatus,
       "APPROVED",
     );
@@ -1520,7 +1440,7 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
       frozenDependencies,
     );
     assert.deepEqual(
-      (await getTaskRunState(db, "child-freezes-parent")).inputSnapshot,
+      (await getTaskState(db, "child-freezes-parent")).inputSnapshot,
       frozenState.inputSnapshot,
     );
     await assertRuntimeInvariants(db);
@@ -1529,34 +1449,34 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
   test("broadcast and output-reorder materialization align Task Dependencies with provider snapshots", async () => {
     const repository = createContractRepository();
     await insertUser(db, { creditBalance: 100 });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "broadcast-source-approved",
-      nodeExecutionId: "node-execution-broadcast-source",
+      nodeRunId: "node-execution-broadcast-source",
       nodeId: "source",
       runtimeStatus: "APPROVED",
     });
     await insertGeneratedTextAsset(db, {
       assetId: "asset-broadcast-source",
-      taskRunId: "broadcast-source-approved",
+      taskId: "broadcast-source-approved",
       text: "broadcast prompt",
     });
-    const broadcastLatestTaskRuns = [
-      latestTaskRun({
+    const broadcastLatestTasks = [
+      latestTask({
         id: "broadcast-source-approved",
-        nodeExecutionId: "node-execution-broadcast-source",
+        nodeRunId: "node-execution-broadcast-source",
         status: "APPROVED",
       }),
     ];
     const broadcastPlan = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-node", nodeId: "script" },
-        createNodeExecutionId: () => "node-execution-broadcast-script",
-        createTaskRunId: nextId("broadcast-script-task"),
+        createNodeRunId: () => "node-execution-broadcast-script",
+        createTaskId: nextId("broadcast-script-task"),
         document: broadcastGeneratedTextDocument(),
-        latestNodeExecutions: [
+        latestNodeRuns: [
           { id: "node-execution-broadcast-source", nodeId: "source" },
         ],
-        latestTaskRuns: broadcastLatestTaskRuns,
+        latestTasks: broadcastLatestTasks,
         ownerId: "owner-user",
         plannedItemCountByNodeId: { script: 3, source: 1 },
         workflowId: "workflow-id",
@@ -1565,91 +1485,91 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
     assertPlanInvariants(
       broadcastPlan,
       broadcastGeneratedTextDocument(),
-      broadcastLatestTaskRuns,
+      broadcastLatestTasks,
     );
     assert.deepEqual(
       broadcastPlan.taskDependenciesToCreate.map((dependency) => ({
-        childTaskRunId: dependency.childTaskRunId,
-        parentItemIndex: dependency.parentItemIndex,
+        childTaskId: dependency.childTaskId,
+        parentBranchIndex: dependency.parentBranchIndex,
         parentNodeId: dependency.parentNodeId,
       })),
       [
         {
-          childTaskRunId: "broadcast-script-task-1",
-          parentItemIndex: 0,
+          childTaskId: "broadcast-script-task-1",
+          parentBranchIndex: 0,
           parentNodeId: "source",
         },
         {
-          childTaskRunId: "broadcast-script-task-2",
-          parentItemIndex: 0,
+          childTaskId: "broadcast-script-task-2",
+          parentBranchIndex: 0,
           parentNodeId: "source",
         },
         {
-          childTaskRunId: "broadcast-script-task-3",
-          parentItemIndex: 0,
+          childTaskId: "broadcast-script-task-3",
+          parentBranchIndex: 0,
           parentNodeId: "source",
         },
       ],
     );
     await repository.commitWorkflowRunPlan(broadcastPlan);
-    for (const taskRunId of [
+    for (const taskId of [
       "broadcast-script-task-1",
       "broadcast-script-task-2",
       "broadcast-script-task-3",
     ]) {
-      const state = await getTaskRunState(db, taskRunId);
+      const state = await getTaskState(db, taskId);
       assert.equal(providerPrompt(state.inputSnapshot), "broadcast prompt");
       assert.equal(
-        state.inputSnapshot.resolvedParentTaskRuns[0]?.taskRunId,
+        state.inputSnapshot.resolvedParentTasks[0]?.taskId,
         "broadcast-source-approved",
       );
     }
 
     await resetRuntimeContractTables(db);
     await insertUser(db, { creditBalance: 100 });
-    for (const [itemIndex, text] of ["first", "second"].entries()) {
-      const taskRunId = `reorder-source-approved-${itemIndex}`;
-      await insertTaskRun(db, {
-        id: taskRunId,
-        itemIndex,
-        nodeExecutionId: "node-execution-reorder-source",
+    for (const [branchIndex, text] of ["first", "second"].entries()) {
+      const taskId = `reorder-source-approved-${branchIndex}`;
+      await insertTask(db, {
+        id: taskId,
+        branchIndex,
+        nodeRunId: "node-execution-reorder-source",
         nodeId: "source",
         runtimeStatus: "APPROVED",
       });
       await insertGeneratedTextAsset(db, {
-        assetId: `asset-${taskRunId}`,
-        taskRunId,
+        assetId: `asset-${taskId}`,
+        taskId,
         text,
       });
     }
-    await setNodeExecutionOutputCount(db, {
-      nodeExecutionId: "node-execution-reorder-source",
+    await setNodeRunOutputCount(db, {
+      nodeRunId: "node-execution-reorder-source",
       outputCount: 2,
     });
-    const reorderLatestTaskRuns = [
-      latestTaskRun({
+    const reorderLatestTasks = [
+      latestTask({
         id: "reorder-source-approved-0",
-        itemIndex: 0,
-        nodeExecutionId: "node-execution-reorder-source",
+        branchIndex: 0,
+        nodeRunId: "node-execution-reorder-source",
         status: "APPROVED",
       }),
-      latestTaskRun({
+      latestTask({
         id: "reorder-source-approved-1",
-        itemIndex: 1,
-        nodeExecutionId: "node-execution-reorder-source",
+        branchIndex: 1,
+        nodeRunId: "node-execution-reorder-source",
         status: "APPROVED",
       }),
     ];
     const reorderPlan = unwrapPlan(
       planWorkflowRun({
         command: { type: "run-node", nodeId: "script" },
-        createNodeExecutionId: () => "node-execution-reorder-script",
-        createTaskRunId: nextId("reorder-script-task"),
+        createNodeRunId: () => "node-execution-reorder-script",
+        createTaskId: nextId("reorder-script-task"),
         document: outputReorderDocument(),
-        latestNodeExecutions: [
+        latestNodeRuns: [
           { id: "node-execution-reorder-source", nodeId: "source" },
         ],
-        latestTaskRuns: reorderLatestTaskRuns,
+        latestTasks: reorderLatestTasks,
         ownerId: "owner-user",
         plannedItemCountByNodeId: { script: 2, source: 2 },
         workflowId: "workflow-id",
@@ -1658,24 +1578,24 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
     assertPlanInvariants(
       reorderPlan,
       outputReorderDocument(),
-      reorderLatestTaskRuns,
+      reorderLatestTasks,
     );
     assert.deepEqual(
       reorderPlan.taskDependenciesToCreate.map(
-        (dependency) => dependency.parentItemIndex,
+        (dependency) => dependency.parentBranchIndex,
       ),
       [1, 0],
     );
     await repository.commitWorkflowRunPlan(reorderPlan);
     assert.equal(
       providerPrompt(
-        (await getTaskRunState(db, "reorder-script-task-1")).inputSnapshot,
+        (await getTaskState(db, "reorder-script-task-1")).inputSnapshot,
       ),
       "second",
     );
     assert.equal(
       providerPrompt(
-        (await getTaskRunState(db, "reorder-script-task-2")).inputSnapshot,
+        (await getTaskState(db, "reorder-script-task-2")).inputSnapshot,
       ),
       "first",
     );
@@ -1688,13 +1608,13 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
       planWorkflowRun({
         command: { type: "run-node", nodeId: "script" },
         document,
-        latestNodeExecutions: [
+        latestNodeRuns: [
           { id: "node-execution-active-script", nodeId: "script" },
         ],
-        latestTaskRuns: [
-          latestTaskRun({
+        latestTasks: [
+          latestTask({
             id: "active-script-task",
-            nodeExecutionId: "node-execution-active-script",
+            nodeRunId: "node-execution-active-script",
             status: "QUEUED",
           }),
         ],
@@ -1707,13 +1627,13 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
       planWorkflowRun({
         command: { type: "run-node", nodeId: "script" },
         document,
-        latestNodeExecutions: [
+        latestNodeRuns: [
           { id: "node-execution-active-script", nodeId: "script" },
         ],
-        latestTaskRuns: [
-          latestTaskRun({
+        latestTasks: [
+          latestTask({
             id: "active-script-task",
-            nodeExecutionId: "node-execution-active-script",
+            nodeRunId: "node-execution-active-script",
             status: "PENDING_REVIEW",
           }),
         ],
@@ -1723,16 +1643,15 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
       false,
     );
 
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "active-slot-original",
-      nodeExecutionId: "node-execution-active-slot",
+      nodeRunId: "node-execution-active-slot",
       runtimeStatus: "QUEUED",
     });
     await assert.rejects(() =>
-      insertTaskRun(db, {
-        attempt: 1,
+      insertTask(db, {
         id: "active-slot-duplicate",
-        nodeExecutionId: "node-execution-active-slot",
+        nodeRunId: "node-execution-active-slot",
         runtimeStatus: "RUNNING",
       }),
     );
@@ -1741,32 +1660,30 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
 
   test("settled generated text and image Assets are workflow-local, task-run-linked, and renderable in events", async () => {
     const repository = createContractRepository();
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "text-producing-task",
-      nodeExecutionId: "node-execution-text-producing",
+      nodeRunId: "node-execution-text-producing",
       runtimeStatus: "RUNNING",
     });
-    await insertTaskRun(db, {
+    await insertTask(db, {
       id: "image-producing-task",
-      nodeExecutionId: "node-execution-image-producing",
+      nodeRunId: "node-execution-image-producing",
       runtimeStatus: "RUNNING",
     });
 
-    const text = await repository.settleTaskRunCompletion({
-      attempt: 0,
+    const text = await repository.settleTaskCompletion({
       providerCostCredits: 0,
       generatedAsset: generatedTextAsset("asset-generated-text", "render me"),
       ownerUserId: "owner-user",
       reviewRequired: false,
-      taskRunId: "text-producing-task",
+      taskId: "text-producing-task",
     });
-    const image = await repository.settleTaskRunCompletion({
-      attempt: 0,
+    const image = await repository.settleTaskCompletion({
       providerCostCredits: 0,
       generatedAsset: generatedImageAsset("asset-generated-image"),
       ownerUserId: "owner-user",
       reviewRequired: false,
-      taskRunId: "image-producing-task",
+      taskId: "image-producing-task",
     });
 
     assert.equal(text.settled, true);
@@ -1782,7 +1699,7 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
       contentType: "image/png",
       kind: "cdn-asset",
     });
-    assert.deepEqual(await getAssetsForTaskRun(db, "text-producing-task"), [
+    assert.deepEqual(await getAssetsForTask(db, "text-producing-task"), [
       {
         cdnUrl: null,
         id: "asset-generated-text",
@@ -1790,12 +1707,12 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
         mimeType: "text/plain",
         ownerUserId: "owner-user",
         source: "generated",
-        taskRunId: "text-producing-task",
+        taskId: "text-producing-task",
         text: "render me",
         workflowId: "workflow-id",
       },
     ]);
-    assert.deepEqual(await getAssetsForTaskRun(db, "image-producing-task"), [
+    assert.deepEqual(await getAssetsForTask(db, "image-producing-task"), [
       {
         cdnUrl: "https://cdn.example.com/asset-generated-image.png",
         id: "asset-generated-image",
@@ -1803,7 +1720,7 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
         mimeType: "image/png",
         ownerUserId: "owner-user",
         source: "generated",
-        taskRunId: "image-producing-task",
+        taskId: "image-producing-task",
         text: null,
         workflowId: "workflow-id",
       },
@@ -1811,7 +1728,7 @@ describe.serial("Workflow runtime exhaustive state-machine contract", () => {
 
     await insertGeneratedMediaAsset(db, {
       assetId: "asset-direct-fixture",
-      taskRunId: "image-producing-task",
+      taskId: "image-producing-task",
     });
     await assertRuntimeInvariants(db);
   });
@@ -1823,12 +1740,12 @@ function never(): never {
 
 function nonRefundableProviderFailureSource() {
   return {
-    taskRunDebitRefundable: false,
+    taskDebitRefundable: false,
     type: "PROVIDER" as const,
   };
 }
 
-function providerPrompt(snapshot: TaskRunInputSnapshot) {
+function providerPrompt(snapshot: TaskInputSnapshot) {
   assert.equal(snapshot.providerInput.kind, "llm-generation-request");
   return snapshot.providerInput.kind === "llm-generation-request"
     ? snapshot.providerInput.request.prompt

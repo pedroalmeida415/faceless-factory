@@ -3,7 +3,7 @@
 import { Context, Effect, Layer } from "effect";
 
 import { useWorkflowStudioStore } from "~/components/workflow/studio/store";
-import type { TaskRunStudioProjectionSlot } from "~/features/runtime/task-run-studio-projection";
+import type { TaskStudioProjectionSlot } from "~/features/runtime/task-studio-projection";
 import type { WorkflowDocumentNode } from "~/features/workflow/document";
 import type { WorkflowStudioSnapshot } from "~/features/workflow/studio-state";
 import type { WorkflowNodeStatus } from "~/features/workflow/types";
@@ -19,7 +19,7 @@ export class WorkflowStudioStoreService extends Context.Tag(
   WorkflowStudioStoreService,
   {
     readonly applyRuntimeTaskProjection: (
-      slots: readonly TaskRunStudioProjectionSlot[],
+      slots: readonly TaskStudioProjectionSlot[],
     ) => Effect.Effect<void>;
     readonly clearExecutionStreaming: () => Effect.Effect<void>;
     readonly getWorkflowSnapshot: () => Effect.Effect<WorkflowStudioStoreSnapshot>;

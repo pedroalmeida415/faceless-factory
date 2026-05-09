@@ -1,22 +1,21 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { applyTaskRunStudioProjection } from "~/features/runtime/task-run-studio-projection";
+import { applyTaskStudioProjection } from "~/features/runtime/task-studio-projection";
 import { WorkflowEngine } from "~/features/workflow/workflow-engine";
 
-describe("Task Run studio projection", () => {
-  test("projects pending review Task Runs into existing review UI state", () => {
+describe("Task studio projection", () => {
+  test("projects pending review Tasks into existing review UI state", () => {
     const state = addNode("llmGenerator");
     const nodeId = state.document.nodes[0]?.id;
     assert.ok(nodeId);
 
-    const projection = applyTaskRunStudioProjection({
+    const projection = applyTaskStudioProjection({
       document: state.document,
       runtime: state.runtime,
       slots: [
         {
-          attempt: 2,
-          itemIndex: 0,
-          nodeExecutionId: "node-execution-1",
+          branchIndex: 0,
+          nodeRunId: "node-execution-1",
           nodeId,
           output: {
             assetId: "asset-text-1",
@@ -24,7 +23,7 @@ describe("Task Run studio projection", () => {
             text: "Draft caption",
           },
           status: "PENDING_REVIEW",
-          taskRunId: "task-run-1",
+          taskId: "task-run-1",
         },
       ],
     });
@@ -36,29 +35,27 @@ describe("Task Run studio projection", () => {
     assert.deepEqual(node.review.outputs, [
       {
         assets: [],
-        attempt: 2,
         executionId: null,
         outputIndex: 0,
         status: "pending",
-        taskRunId: "task-run-1",
+        taskId: "task-run-1",
         text: "Draft caption",
       },
     ]);
   });
 
-  test("projects approved CDN Task Runs into generator outputs", () => {
+  test("projects approved CDN Tasks into generator outputs", () => {
     const state = addNode("imageGenerator");
     const nodeId = state.document.nodes[0]?.id;
     assert.ok(nodeId);
 
-    const projection = applyTaskRunStudioProjection({
+    const projection = applyTaskStudioProjection({
       document: state.document,
       runtime: state.runtime,
       slots: [
         {
-          attempt: 0,
-          itemIndex: 1,
-          nodeExecutionId: "node-execution-2",
+          branchIndex: 1,
+          nodeRunId: "node-execution-2",
           nodeId,
           output: {
             assetId: "asset-image-1",
@@ -67,7 +64,7 @@ describe("Task Run studio projection", () => {
             kind: "cdn-asset",
           },
           status: "APPROVED",
-          taskRunId: "task-run-2",
+          taskId: "task-run-2",
         },
       ],
     });

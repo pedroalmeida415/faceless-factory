@@ -68,18 +68,18 @@ describe("generated Asset catalog projection", () => {
     });
   });
 
-  test("returns a domain error when a completed Task Run has no primary generated Asset", () => {
+  test("returns a domain error when a completed Task has no primary generated Asset", () => {
     const output = projectGeneratedAssetToTaskOutput([]);
 
     assert.deepEqual(output, {
       actualAssetCount: 0,
       kind: "INVALID_PRIMARY_GENERATED_ASSET_COUNT",
       message:
-        "Completed Task Run must produce exactly one primary generated Asset.",
+        "Completed Task must produce exactly one primary generated Asset.",
     });
   });
 
-  test("returns a domain error when a completed Task Run has multiple primary generated Assets", () => {
+  test("returns a domain error when a completed Task has multiple primary generated Assets", () => {
     const output = projectGeneratedAssetToTaskOutput([
       {
         assetId: "asset-image-1",
@@ -101,7 +101,7 @@ describe("generated Asset catalog projection", () => {
       actualAssetCount: 2,
       kind: "INVALID_PRIMARY_GENERATED_ASSET_COUNT",
       message:
-        "Completed Task Run must produce exactly one primary generated Asset.",
+        "Completed Task must produce exactly one primary generated Asset.",
     });
   });
 });

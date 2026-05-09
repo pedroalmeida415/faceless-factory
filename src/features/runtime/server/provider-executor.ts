@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { Cause, Effect } from "effect";
-import type { ExecutableTaskRunInputSnapshot } from "~/features/runtime/execution/task-run-input-snapshot";
+import type { ExecutableTaskInputSnapshot } from "~/features/runtime/execution/task-input-snapshot";
 import type {
   ProviderExecutionResult,
   RuntimeProviderExecutor,
@@ -105,7 +105,7 @@ export function createRuntimeProviderExecutor(input: {
                     generatedAsset: {
                       assetId: createAssetId(),
                       contentType: "text/plain; charset=utf-8",
-                      fileName: `${inputSnapshot.taskRunId}.txt`,
+                      fileName: `${inputSnapshot.taskId}.txt`,
                       kind: "text",
                       model: response.model,
                       sizeBytes: Buffer.byteLength(
@@ -208,7 +208,7 @@ function toGeneratedMediaAssetPayload(
   };
 }
 
-function getReviewRequired(snapshot: ExecutableTaskRunInputSnapshot) {
+function getReviewRequired(snapshot: ExecutableTaskInputSnapshot) {
   const node = snapshot.targetNodeConfig;
 
   return "reviewEnabled" in node ? node.reviewEnabled : false;
@@ -216,7 +216,7 @@ function getReviewRequired(snapshot: ExecutableTaskRunInputSnapshot) {
 
 function nonRefundableProviderFailureSource() {
   return {
-    taskRunDebitRefundable: false,
+    taskDebitRefundable: false,
     type: "PROVIDER",
   } as const;
 }

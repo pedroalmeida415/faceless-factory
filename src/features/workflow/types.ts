@@ -152,9 +152,8 @@ export type WorkflowReviewOutput = {
   executionId: string | null;
   outputIndex: number;
   status: WorkflowOutputReviewStatus;
-  attempt: number;
   assets: WorkflowAsset[];
-  taskRunId?: string;
+  taskId?: string;
   text: string | null;
 };
 

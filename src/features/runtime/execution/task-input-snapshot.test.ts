@@ -1,44 +1,42 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { buildTaskRunInputSnapshot } from "~/features/runtime/execution/task-run-input-snapshot";
+import { buildTaskInputSnapshot } from "~/features/runtime/execution/task-input-snapshot";
 import {
   createWorkflowNode,
   WORKFLOW_DOCUMENT_VERSION,
   type WorkflowDefinitionGraphDocument,
 } from "~/features/workflow/document";
 
-describe("TaskRunInputSnapshot", () => {
-  test("builds a dependency-free Task Run input snapshot with target config and idempotency key", () => {
+describe("TaskInputSnapshot", () => {
+  test("builds a dependency-free Task input snapshot with target config and idempotency key", () => {
     const node = {
       ...createWorkflowNode("llmGenerator", 0),
       id: "script-node",
       label: "Script",
     };
 
-    const snapshot = buildTaskRunInputSnapshot({
-      attempt: 2,
-      itemIndex: 3,
-      nodeExecutionId: "node-execution-script",
+    const snapshot = buildTaskInputSnapshot({
+      branchIndex: 3,
+      nodeRunId: "node-execution-script",
       nodeId: "script-node",
-      resolvedParentTaskRuns: [],
+      resolvedParentTasks: [],
       targetNodeConfig: node,
-      taskRunId: "task-run-script",
+      taskId: "task-run-script",
     });
 
-    assert.equal(snapshot.kind, "task-run-input-snapshot");
+    assert.equal(snapshot.kind, "task-input-snapshot");
     assert.equal(snapshot.version, 1);
-    assert.equal(snapshot.taskRunId, "task-run-script");
-    assert.equal(snapshot.nodeExecutionId, "node-execution-script");
+    assert.equal(snapshot.taskId, "task-run-script");
+    assert.equal(snapshot.nodeRunId, "node-execution-script");
     assert.equal(snapshot.nodeId, "script-node");
-    assert.equal(snapshot.itemIndex, 3);
-    assert.equal(snapshot.attempt, 2);
-    assert.equal(snapshot.idempotencyKey, "task_run:task-run-script:attempt:2");
+    assert.equal(snapshot.branchIndex, 3);
+    assert.equal(snapshot.idempotencyKey, "task:task-run-script");
     assert.deepEqual(snapshot.targetNodeConfig, node);
-    assert.deepEqual(snapshot.resolvedParentTaskRuns, []);
+    assert.deepEqual(snapshot.resolvedParentTasks, []);
     assert.deepEqual(snapshot.providerInput, {
       kind: "llm-generation-request",
       request: {
-        idempotencyKey: "task_run:task-run-script:attempt:2",
+        idempotencyKey: "task:task-run-script",
         maxOutputTokens: 2048,
         mode: null,
         model: "gemini-3-flash-preview",
@@ -52,7 +50,7 @@ describe("TaskRunInputSnapshot", () => {
     assert.equal(WORKFLOW_DOCUMENT_VERSION, 9);
   });
 
-  test("detaches materialized Task Run snapshots from later non-semantic blueprint edits", () => {
+  test("detaches materialized Task snapshots from later non-semantic blueprint edits", () => {
     const node = {
       ...createWorkflowNode("llmGenerator", 0, { x: 10, y: 20 }),
       id: "script-node",
@@ -67,14 +65,13 @@ describe("TaskRunInputSnapshot", () => {
       version: WORKFLOW_DOCUMENT_VERSION,
     };
 
-    const snapshot = buildTaskRunInputSnapshot({
-      attempt: 0,
-      itemIndex: 0,
-      nodeExecutionId: "node-execution-script",
+    const snapshot = buildTaskInputSnapshot({
+      branchIndex: 0,
+      nodeRunId: "node-execution-script",
       nodeId: "script-node",
-      resolvedParentTaskRuns: [],
+      resolvedParentTasks: [],
       targetNodeConfig: node,
-      taskRunId: "task-run-script",
+      taskId: "task-run-script",
       workflowDefinition,
     });
 

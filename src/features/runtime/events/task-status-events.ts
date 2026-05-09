@@ -1,19 +1,17 @@
 import { z } from "zod";
 
 import {
-  type TaskRunFailureReasonType,
-  type TaskRunStatus,
-  taskRunFailureReasonTypeValues,
-  taskRunStatusValues,
-} from "~/features/runtime/domain/task-run-state";
+  type TaskFailureReasonType,
+  type TaskStatus,
+  taskFailureReasonTypeValues,
+  taskStatusValues,
+} from "~/features/runtime/domain/task-state";
 
-export const taskStatusEventStatusValues = taskRunStatusValues;
-export const taskStatusEventFailureReasonValues =
-  taskRunFailureReasonTypeValues;
+export const taskStatusEventStatusValues = taskStatusValues;
+export const taskStatusEventFailureReasonValues = taskFailureReasonTypeValues;
 
 const nonEmptyStringSchema = z.string().min(1);
-const attemptSchema = z.number().int().nonnegative();
-const itemIndexSchema = z.number().int().nonnegative();
+const branchIndexSchema = z.number().int().nonnegative();
 const renderableAssetUrlSchema = z.union([
   z.string().url(),
   z.string().startsWith("/"),
@@ -39,41 +37,36 @@ export const RenderableTaskOutputSchema = z.discriminatedUnion("kind", [
 
 export function createTaskStatusEventSchema() {
   return z.object({
-    attempt: attemptSchema,
     failureReason: z.enum(taskStatusEventFailureReasonValues).optional(),
-    itemIndex: itemIndexSchema,
-    nodeExecutionId: nonEmptyStringSchema,
+    branchIndex: branchIndexSchema,
+    nodeRunId: nonEmptyStringSchema,
     output: RenderableTaskOutputSchema.optional(),
     status: z.enum(taskStatusEventStatusValues),
-    taskRunId: nonEmptyStringSchema,
+    taskId: nonEmptyStringSchema,
   });
 }
 
 export const TaskStatusEventSchema = createTaskStatusEventSchema();
 
 export type TaskStatusEvent = z.infer<typeof TaskStatusEventSchema>;
-export type TaskStatusEventStatus = TaskRunStatus;
-export type TaskStatusEventFailureReason = TaskRunFailureReasonType;
+export type TaskStatusEventStatus = TaskStatus;
+export type TaskStatusEventFailureReason = TaskFailureReasonType;
 export type RenderableTaskOutput = z.infer<typeof RenderableTaskOutputSchema>;
 export type OrchestratorEventKind = "completion" | "failure" | "review";
 
-export function buildExecutionJobId(input: {
-  taskRunId: string;
-  attempt: number;
-}) {
-  return `task-run~${input.taskRunId}~attempt~${input.attempt}~execute`;
+export function buildExecutionJobId(input: { taskId: string }) {
+  return `task~${input.taskId}~execute`;
 }
 
-export function buildWakeUpJobId(input: { parentTaskRunId: string }) {
-  return `wake-up~${input.parentTaskRunId}`;
+export function buildWakeUpJobId(input: { parentTaskId: string }) {
+  return `wake-up~${input.parentTaskId}`;
 }
 
 export function buildOrchestratorEventId(input: {
-  taskRunId: string;
-  attempt: number;
+  taskId: string;
   kind: OrchestratorEventKind;
 }) {
-  return `task-run~${input.taskRunId}~attempt~${input.attempt}~orchestrator~${input.kind}`;
+  return `task~${input.taskId}~orchestrator~${input.kind}`;
 }
 
 export function buildTaskStatusEvent(input: TaskStatusEvent) {
@@ -81,8 +74,8 @@ export function buildTaskStatusEvent(input: TaskStatusEvent) {
 }
 
 export function shouldApplyTaskStatusEvent(input: {
-  event: Pick<TaskStatusEvent, "attempt">;
-  currentRenderedAttempt: number;
+  event: Pick<TaskStatusEvent, "taskId">;
+  currentRenderedTaskId: string | null;
 }) {
-  return input.event.attempt >= input.currentRenderedAttempt;
+  return input.event.taskId !== input.currentRenderedTaskId;
 }

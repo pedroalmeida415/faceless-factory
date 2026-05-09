@@ -2,7 +2,7 @@ import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
 
 import { Cause, Effect, Exit } from "effect";
-import type { ExecutableTaskRunInputSnapshot } from "~/features/runtime/execution/task-run-input-snapshot";
+import type { ExecutableTaskInputSnapshot } from "~/features/runtime/execution/task-input-snapshot";
 import { createRuntimeProviderExecutor } from "~/features/runtime/server/provider-executor";
 import { createWorkflowNode } from "~/features/workflow/document";
 import type { StagedGeneratedMediaArtifact } from "~/features/workflow/types";
@@ -162,7 +162,7 @@ describe("RuntimeProviderExecutor", () => {
       providerInput: {
         kind: "llm-generation-request" as const,
         request: {
-          idempotencyKey: "task_run:task-run-1:attempt:0",
+          idempotencyKey: "task:task-run-1",
           maxOutputTokens: 512,
           mode: null,
           model: "gemini-3-flash-preview" as const,
@@ -177,7 +177,7 @@ describe("RuntimeProviderExecutor", () => {
         ...baseSnapshot.targetNodeConfig,
         config: { maxOutputTokens: 2048, temperature: 1, thinkingLevel: "LOW" },
       },
-    } satisfies ExecutableTaskRunInputSnapshot;
+    } satisfies ExecutableTaskInputSnapshot;
 
     await Effect.runPromise(
       executor.execute({
@@ -220,7 +220,7 @@ describe("RuntimeProviderExecutor", () => {
           type: "PROVIDER_FAILED",
         },
         failureSource: {
-          taskRunDebitRefundable: false,
+          taskDebitRefundable: false,
           type: "PROVIDER",
         },
       },
@@ -248,7 +248,7 @@ describe("RuntimeProviderExecutor", () => {
           type: "PROVIDER_FAILED",
         },
         failureSource: {
-          taskRunDebitRefundable: false,
+          taskDebitRefundable: false,
           type: "PROVIDER",
         },
       },
@@ -356,7 +356,7 @@ type GenerateEffectSuccess<T> =
 function inputSnapshot(input: {
   kind: "imageGenerator" | "videoGenerator" | "llmGenerator";
   reviewEnabled?: boolean;
-}): ExecutableTaskRunInputSnapshot {
+}): ExecutableTaskInputSnapshot {
   const targetNodeConfig = {
     ...createWorkflowNode(input.kind, 0),
     id: "node-1",
@@ -365,17 +365,16 @@ function inputSnapshot(input: {
   const providerInput = renderProviderInput(input.kind);
 
   return {
-    attempt: 0,
     documentRevision: null,
-    idempotencyKey: "task_run:task-run-1:attempt:0",
-    itemIndex: 0,
-    kind: "task-run-input-snapshot",
-    nodeExecutionId: "node-execution-1",
+    idempotencyKey: "task:task-run-1",
+    branchIndex: 0,
+    kind: "task-input-snapshot",
+    nodeRunId: "node-execution-1",
     nodeId: "node-1",
     providerInput,
-    resolvedParentTaskRuns: [],
+    resolvedParentTasks: [],
     targetNodeConfig,
-    taskRunId: "task-run-1",
+    taskId: "task-run-1",
     version: 1,
     workflowDefinition: {
       edges: [],
@@ -394,7 +393,7 @@ function renderProviderInput(
         kind: "image-generation-request" as const,
         request: {
           aspectRatio: "1:1" as const,
-          idempotencyKey: "task_run:task-run-1:attempt:0",
+          idempotencyKey: "task:task-run-1",
           mode: null,
           model: "gemini-3-pro-image-preview" as const,
           prompt: "make an image",
@@ -408,7 +407,7 @@ function renderProviderInput(
           aspectRatio: "16:9" as const,
           durationSeconds: 4 as const,
           generateAudio: true,
-          idempotencyKey: "task_run:task-run-1:attempt:0",
+          idempotencyKey: "task:task-run-1",
           mode: null,
           model: "veo-3.1-fast-generate-001" as const,
           prompt: "make a video",
@@ -420,7 +419,7 @@ function renderProviderInput(
       return {
         kind: "llm-generation-request" as const,
         request: {
-          idempotencyKey: "task_run:task-run-1:attempt:0",
+          idempotencyKey: "task:task-run-1",
           maxOutputTokens: 2048,
           mode: null,
           model: "gemini-3-flash-preview" as const,

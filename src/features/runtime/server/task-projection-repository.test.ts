@@ -2,13 +2,13 @@ import { beforeAll, beforeEach, describe, test } from "bun:test";
 import assert from "node:assert/strict";
 import { SqlClient } from "@effect/sql";
 import { type Context, Effect } from "effect";
-import { getTaskRunProjectionForWorkflow } from "~/features/runtime/server/task-projection-repository";
+import { getTaskProjectionForWorkflow } from "~/features/runtime/server/task-projection-repository";
 import { ServerTestRuntime } from "~/server/effect";
 import { DatabaseService } from "~/server/services/database";
 
 let database: Context.Tag.Service<typeof DatabaseService>;
 
-describe.serial("getTaskRunProjectionForWorkflow", () => {
+describe.serial("getTaskProjectionForWorkflow", () => {
   beforeAll(async () => {
     database = await ServerTestRuntime.runPromise(DatabaseService);
   });
@@ -19,8 +19,8 @@ describe.serial("getTaskRunProjectionForWorkflow", () => {
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
           yield* sql`delete from assets`;
-          yield* sql`delete from task_runs`;
-          yield* sql`delete from node_executions`;
+          yield* sql`delete from tasks`;
+          yield* sql`delete from node_runs`;
           yield* sql`delete from workflows`;
           yield* sql`delete from "user"`;
           yield* seedWorkflow(sql);
@@ -29,41 +29,39 @@ describe.serial("getTaskRunProjectionForWorkflow", () => {
     );
   });
 
-  test("returns latest slot attempts with renderable generated outputs through Effect SQL", async () => {
+  test("returns latest Branch tasks with renderable generated outputs through Effect SQL", async () => {
     await ServerTestRuntime.runPromise(
       database.run(
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
-          yield* insertNodeExecution(sql, {
+          yield* insertNodeRun(sql, {
             id: "node-execution-source",
             nodeId: "source",
           });
-          yield* insertTaskRun(sql, {
-            attempt: 0,
-            id: "source-item-0-attempt-0",
-            nodeExecutionId: "node-execution-source",
+          yield* insertTask(sql, {
+            id: "source-branch-0-stale-task",
+            nodeRunId: "node-execution-source",
             runtimeStatus: "APPROVED",
           });
           yield* insertGeneratedTextAsset(sql, {
             assetId: "stale-text-asset",
-            taskRunId: "source-item-0-attempt-0",
+            taskId: "source-branch-0-stale-task",
             text: "stale text",
           });
-          yield* insertTaskRun(sql, {
-            attempt: 1,
-            id: "source-item-0-attempt-1",
-            nodeExecutionId: "node-execution-source",
+          yield* insertTask(sql, {
+            id: "source-branch-0-latest-task",
+            nodeRunId: "node-execution-source",
             runtimeStatus: "PENDING_REVIEW",
           });
           yield* insertGeneratedTextAsset(sql, {
             assetId: "latest-text-asset",
-            taskRunId: "source-item-0-attempt-1",
+            taskId: "source-branch-0-latest-task",
             text: "latest text",
           });
-          yield* insertTaskRun(sql, {
-            id: "source-item-1-attempt-0",
-            itemIndex: 1,
-            nodeExecutionId: "node-execution-source",
+          yield* insertTask(sql, {
+            id: "source-branch-1-failed-task",
+            branchIndex: 1,
+            nodeRunId: "node-execution-source",
             runtimeStatus: "FAILED",
             failureReason: "PROVIDER_FAILED",
           });
@@ -72,7 +70,7 @@ describe.serial("getTaskRunProjectionForWorkflow", () => {
     );
 
     const projection = await ServerTestRuntime.runPromise(
-      getTaskRunProjectionForWorkflow({
+      getTaskProjectionForWorkflow({
         ownerUserId: "owner-user",
         workflowId: "workflow-id",
       }),
@@ -80,9 +78,8 @@ describe.serial("getTaskRunProjectionForWorkflow", () => {
 
     assert.deepEqual(projection, [
       {
-        attempt: 1,
-        itemIndex: 0,
-        nodeExecutionId: "node-execution-source",
+        branchIndex: 0,
+        nodeRunId: "node-execution-source",
         nodeId: "source",
         output: {
           assetId: "latest-text-asset",
@@ -90,16 +87,15 @@ describe.serial("getTaskRunProjectionForWorkflow", () => {
           text: "latest text",
         },
         status: "PENDING_REVIEW",
-        taskRunId: "source-item-0-attempt-1",
+        taskId: "source-branch-0-latest-task",
       },
       {
-        attempt: 0,
         failureReason: "PROVIDER_FAILED",
-        itemIndex: 1,
-        nodeExecutionId: "node-execution-source",
+        branchIndex: 1,
+        nodeRunId: "node-execution-source",
         nodeId: "source",
         status: "FAILED",
-        taskRunId: "source-item-1-attempt-0",
+        taskId: "source-branch-1-failed-task",
       },
     ]);
   });
@@ -112,33 +108,31 @@ function seedWorkflow(sql: SqlClient.SqlClient) {
   });
 }
 
-function insertNodeExecution(
+function insertNodeRun(
   sql: SqlClient.SqlClient,
   input: { readonly id: string; readonly nodeId: string },
 ) {
   return sql`
-    insert into node_executions (id, workflow_id, owner_user_id, node_id, execution_id, status, output_count, target_reason, created_at, updated_at)
+    insert into node_runs (id, workflow_id, owner_user_id, node_id, execution_id, status, output_count, target_reason, created_at, updated_at)
     values (${input.id}, 'workflow-id', 'owner-user', ${input.nodeId}, ${input.id}, 'pending', 1, 'node_run', now(), now())
   `;
 }
 
-function insertTaskRun(
+function insertTask(
   sql: SqlClient.SqlClient,
   input: {
-    readonly attempt?: number;
     readonly failureReason?: string;
     readonly id: string;
-    readonly itemIndex?: number;
-    readonly nodeExecutionId: string;
+    readonly branchIndex?: number;
+    readonly nodeRunId: string;
     readonly runtimeStatus: string;
   },
 ) {
-  const attempt = input.attempt ?? 0;
-  const itemIndex = input.itemIndex ?? 0;
+  const branchIndex = input.branchIndex ?? 0;
   return sql`
-    insert into task_runs (id, node_execution_id, workflow_id, owner_user_id, node_id, output_index, version, item_index, attempt, execution_id, job_id, status, runtime_status, target_reason, failure_reason, credit_cost, queued_at, created_at, updated_at)
-    select ${input.id}, node_executions.id, node_executions.workflow_id, node_executions.owner_user_id, node_executions.node_id, ${itemIndex}, ${attempt}, ${itemIndex}, ${attempt}, node_executions.id, ${`job-${input.id}`}, 'queued', ${input.runtimeStatus}, 'node_run', ${input.failureReason ?? null}, 0, now(), now(), now()
-    from node_executions where node_executions.id = ${input.nodeExecutionId}
+    insert into tasks (id, node_run_id, workflow_id, owner_user_id, node_id, output_index, version, branch_index, execution_id, job_id, status, runtime_status, target_reason, failure_reason, credit_cost, queued_at, created_at, updated_at)
+    select ${input.id}, node_runs.id, node_runs.workflow_id, node_runs.owner_user_id, node_runs.node_id, ${branchIndex}, 0, ${branchIndex}, node_runs.id, ${`job-${input.id}`}, 'queued', ${input.runtimeStatus}, 'node_run', ${input.failureReason ?? null}, 0, now(), now(), now()
+    from node_runs where node_runs.id = ${input.nodeRunId}
   `;
 }
 
@@ -146,12 +140,12 @@ function insertGeneratedTextAsset(
   sql: SqlClient.SqlClient,
   input: {
     readonly assetId: string;
-    readonly taskRunId: string;
+    readonly taskId: string;
     readonly text: string;
   },
 ) {
   return sql`
-    insert into assets (id, owner_user_id, workflow_id, source, kind, task_run_id, storage_provider, text_content, mime_type, file_name, size_bytes, created_at)
-    values (${input.assetId}, 'owner-user', 'workflow-id', 'generated', 'text', ${input.taskRunId}, 'inline', ${input.text}, 'text/plain', ${`${input.assetId}.txt`}, ${input.text.length}, now())
+    insert into assets (id, owner_user_id, workflow_id, source, kind, task_id, storage_provider, text_content, mime_type, file_name, size_bytes, created_at)
+    values (${input.assetId}, 'owner-user', 'workflow-id', 'generated', 'text', ${input.taskId}, 'inline', ${input.text}, 'text/plain', ${`${input.assetId}.txt`}, ${input.text.length}, now())
   `;
 }

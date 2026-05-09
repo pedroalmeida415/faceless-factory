@@ -18,8 +18,8 @@ describe.serial("getPlanningStateForWorkflow", () => {
       database.run(
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
-          yield* sql`delete from task_runs`;
-          yield* sql`delete from node_executions`;
+          yield* sql`delete from tasks`;
+          yield* sql`delete from node_runs`;
           yield* sql`delete from workflows`;
           yield* sql`delete from "user"`;
           yield* seedWorkflow(sql);
@@ -28,58 +28,57 @@ describe.serial("getPlanningStateForWorkflow", () => {
     );
   });
 
-  test("returns latest Node Executions and latest slot Attempts for the owner workflow through Effect SQL", async () => {
+  test("returns latest Node Runs and latest Branch Tasks for the owner workflow through Effect SQL", async () => {
     await ServerTestRuntime.runPromise(
       database.run(
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
-          yield* insertNodeExecution(sql, {
+          yield* insertNodeRun(sql, {
             createdAt: "2026-01-01T00:00:00.000Z",
             id: "source-old-execution",
             nodeId: "source",
           });
-          yield* insertNodeExecution(sql, {
+          yield* insertNodeRun(sql, {
             createdAt: "2026-01-02T00:00:00.000Z",
             id: "source-latest-execution",
             nodeId: "source",
           });
-          yield* insertNodeExecution(sql, {
+          yield* insertNodeRun(sql, {
             createdAt: "2026-01-03T00:00:00.000Z",
             id: "child-latest-execution",
             nodeId: "child",
           });
-          yield* insertNodeExecution(sql, {
+          yield* insertNodeRun(sql, {
             id: "other-owner-execution",
             nodeId: "source",
             ownerUserId: "other-owner",
           });
-          yield* insertTaskRun(sql, {
-            attempt: 0,
-            id: "source-stale-attempt",
-            nodeExecutionId: "source-latest-execution",
+          yield* insertTask(sql, {
+            createdAt: "2026-01-02T00:00:00.000Z",
+            id: "source-stale-task",
+            nodeRunId: "source-latest-execution",
             runtimeStatus: "APPROVED",
           });
-          yield* insertTaskRun(sql, {
-            attempt: 1,
-            id: "source-active-attempt",
-            nodeExecutionId: "source-latest-execution",
+          yield* insertTask(sql, {
+            createdAt: "2026-01-02T00:00:01.000Z",
+            id: "source-active-task",
+            nodeRunId: "source-latest-execution",
             runtimeStatus: "PENDING_REVIEW",
           });
-          yield* insertTaskRun(sql, {
-            attempt: 0,
+          yield* insertTask(sql, {
             id: "source-old-execution-task",
-            nodeExecutionId: "source-old-execution",
+            nodeRunId: "source-old-execution",
             runtimeStatus: "APPROVED",
           });
-          yield* insertTaskRun(sql, {
+          yield* insertTask(sql, {
             id: "legacy-task-without-runtime-status",
-            nodeExecutionId: "child-latest-execution",
+            nodeRunId: "child-latest-execution",
             runtimeStatus: null,
           });
-          yield* insertTaskRun(sql, {
+          yield* insertTask(sql, {
             id: "child-task",
-            itemIndex: 1,
-            nodeExecutionId: "child-latest-execution",
+            branchIndex: 1,
+            nodeRunId: "child-latest-execution",
             runtimeStatus: "FAILED",
           });
         }),
@@ -94,26 +93,24 @@ describe.serial("getPlanningStateForWorkflow", () => {
     );
 
     assert.deepEqual(state, {
-      latestNodeExecutions: [
+      latestNodeRuns: [
         { id: "child-latest-execution", nodeId: "child" },
         { id: "source-latest-execution", nodeId: "source" },
       ],
-      latestTaskRuns: [
+      latestTasks: [
         {
-          attempt: 0,
           creditCost: 0,
           id: "child-task",
-          itemIndex: 1,
-          nodeExecutionId: "child-latest-execution",
+          branchIndex: 1,
+          nodeRunId: "child-latest-execution",
           nodeId: "child",
           status: "FAILED",
         },
         {
-          attempt: 1,
           creditCost: 0,
-          id: "source-active-attempt",
-          itemIndex: 0,
-          nodeExecutionId: "source-latest-execution",
+          id: "source-active-task",
+          branchIndex: 0,
+          nodeRunId: "source-latest-execution",
           nodeId: "source",
           status: "PENDING_REVIEW",
         },
@@ -131,7 +128,7 @@ function seedWorkflow(sql: SqlClient.SqlClient) {
   });
 }
 
-function insertNodeExecution(
+function insertNodeRun(
   sql: SqlClient.SqlClient,
   input: {
     readonly createdAt?: string;
@@ -142,26 +139,25 @@ function insertNodeExecution(
 ) {
   const ownerUserId = input.ownerUserId ?? "owner-user";
   return sql`
-    insert into node_executions (id, workflow_id, owner_user_id, node_id, execution_id, status, output_count, target_reason, created_at, updated_at)
+    insert into node_runs (id, workflow_id, owner_user_id, node_id, execution_id, status, output_count, target_reason, created_at, updated_at)
     values (${input.id}, ${ownerUserId === "owner-user" ? "workflow-id" : "other-workflow-id"}, ${ownerUserId}, ${input.nodeId}, ${input.id}, 'pending', 1, 'node_run', ${input.createdAt ?? new Date().toISOString()}, now())
   `;
 }
 
-function insertTaskRun(
+function insertTask(
   sql: SqlClient.SqlClient,
   input: {
-    readonly attempt?: number;
+    readonly createdAt?: string;
     readonly id: string;
-    readonly itemIndex?: number;
-    readonly nodeExecutionId: string;
+    readonly branchIndex?: number;
+    readonly nodeRunId: string;
     readonly runtimeStatus: string | null;
   },
 ) {
-  const attempt = input.attempt ?? 0;
-  const itemIndex = input.itemIndex ?? 0;
+  const branchIndex = input.branchIndex ?? 0;
   return sql`
-    insert into task_runs (id, node_execution_id, workflow_id, owner_user_id, node_id, output_index, version, item_index, attempt, execution_id, job_id, status, runtime_status, target_reason, credit_cost, queued_at, created_at, updated_at)
-    select ${input.id}, node_executions.id, node_executions.workflow_id, node_executions.owner_user_id, node_executions.node_id, ${itemIndex}, ${attempt}, ${itemIndex}, ${attempt}, node_executions.id, ${`job-${input.id}`}, 'queued', ${input.runtimeStatus}, 'node_run', 0, now(), now(), now()
-    from node_executions where node_executions.id = ${input.nodeExecutionId}
+    insert into tasks (id, node_run_id, workflow_id, owner_user_id, node_id, output_index, version, branch_index, execution_id, job_id, status, runtime_status, target_reason, credit_cost, queued_at, created_at, updated_at)
+    select ${input.id}, node_runs.id, node_runs.workflow_id, node_runs.owner_user_id, node_runs.node_id, ${branchIndex}, 0, ${branchIndex}, node_runs.id, ${`job-${input.id}`}, 'queued', ${input.runtimeStatus}, 'node_run', 0, now(), ${input.createdAt ?? new Date().toISOString()}, now()
+    from node_runs where node_runs.id = ${input.nodeRunId}
   `;
 }

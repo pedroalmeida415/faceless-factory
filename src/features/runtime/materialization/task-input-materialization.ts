@@ -3,10 +3,10 @@ import {
   providerDependencyAddressKey,
 } from "~/features/runtime/domain/provider-dependency-address";
 import {
-  buildTaskRunInputSnapshot,
-  type ExecutableTaskRunInputSnapshot,
-} from "~/features/runtime/execution/task-run-input-snapshot";
-import { planTaskRunMaterialization } from "~/features/runtime/materialization/planning";
+  buildTaskInputSnapshot,
+  type ExecutableTaskInputSnapshot,
+} from "~/features/runtime/execution/task-input-snapshot";
+import { planTaskMaterialization } from "~/features/runtime/materialization/planning";
 import {
   toWorkflowDefinitionGraphDocument,
   type WorkflowDefinitionGraphDocument,
@@ -33,25 +33,24 @@ import {
 import type { WorkflowAsset } from "~/features/workflow/types";
 import { isGeneratorNodeKind } from "~/features/workflow/types";
 
-export type MaterializeTaskRunInputCommand = {
-  readonly taskRunId: string;
-  readonly nodeExecutionId: string;
+export type MaterializeTaskInputCommand = {
+  readonly taskId: string;
+  readonly nodeRunId: string;
   readonly nodeId: string;
-  readonly itemIndex: number;
-  readonly attempt: number;
+  readonly branchIndex: number;
   readonly document: WorkflowDocument;
   readonly documentRevision: number | null;
   readonly materializedInputFacts?: MaterializedProviderInputFacts;
 };
 
-export type TaskRunInputMaterializationError = {
-  readonly _tag: "TaskRunInputMaterializationError";
+export type TaskInputMaterializationError = {
+  readonly _tag: "TaskInputMaterializationError";
   readonly message: string;
 };
 
-export type TaskRunInputMaterializationResult =
-  | { readonly ok: true; readonly value: ExecutableTaskRunInputSnapshot }
-  | { readonly ok: false; readonly error: TaskRunInputMaterializationError };
+export type TaskInputMaterializationResult =
+  | { readonly ok: true; readonly value: ExecutableTaskInputSnapshot }
+  | { readonly ok: false; readonly error: TaskInputMaterializationError };
 
 export type MaterializedProviderInputFacts = {
   readonly dependencyAddresses: readonly ProviderDependencyAddress[];
@@ -62,11 +61,11 @@ export type MaterializedProviderInputFacts = {
   readonly systemPrompt: string | null;
 };
 
-export type MaterializedTaskRunFacts = {
+export type MaterializedTaskFacts = {
   readonly nodeId: string;
-  readonly itemIndex: number;
+  readonly branchIndex: number;
   readonly dependencyAddresses: readonly ProviderDependencyAddress[];
-  readonly error?: TaskRunInputMaterializationError;
+  readonly error?: TaskInputMaterializationError;
   readonly providerInputFacts: MaterializedProviderInputFacts;
 };
 
@@ -74,7 +73,7 @@ export type WorkflowRunTaskMaterializationFacts = {
   readonly workflowDefinition: WorkflowDefinitionGraphDocument;
   readonly executableNodeIds: readonly string[];
   readonly itemCountByNodeId: Readonly<Record<string, number>>;
-  readonly taskFacts: readonly MaterializedTaskRunFacts[];
+  readonly taskFacts: readonly MaterializedTaskFacts[];
 };
 
 export type MaterializeWorkflowRunTaskFactsCommand = {
@@ -85,11 +84,11 @@ export type MaterializeWorkflowRunTaskFactsCommand = {
 
 export type WorkflowRunTaskMaterializationFactsResult =
   | { readonly ok: true; readonly value: WorkflowRunTaskMaterializationFacts }
-  | { readonly ok: false; readonly error: TaskRunInputMaterializationError };
+  | { readonly ok: false; readonly error: TaskInputMaterializationError };
 
-export function materializeTaskRunInput(
-  command: MaterializeTaskRunInputCommand,
-): TaskRunInputMaterializationResult {
+export function materializeTaskInput(
+  command: MaterializeTaskInputCommand,
+): TaskInputMaterializationResult {
   const workflowDefinition = toWorkflowDefinitionGraphDocument(
     command.document,
   );
@@ -112,17 +111,16 @@ export function materializeTaskRunInput(
     if (taskFacts?.error) {
       return { error: taskFacts.error, ok: false };
     }
-    const snapshot = buildTaskRunInputSnapshot({
-      attempt: command.attempt,
+    const snapshot = buildTaskInputSnapshot({
       documentRevision: command.documentRevision,
-      itemIndex: command.itemIndex,
+      branchIndex: command.branchIndex,
       materializedInputFacts:
         command.materializedInputFacts ?? taskFacts?.providerInputFacts,
-      nodeExecutionId: command.nodeExecutionId,
+      nodeRunId: command.nodeRunId,
       nodeId: command.nodeId,
-      resolvedParentTaskRuns: [],
+      resolvedParentTasks: [],
       targetNodeConfig,
-      taskRunId: command.taskRunId,
+      taskId: command.taskId,
       workflowDefinition,
     });
     if (snapshot.providerInput.kind === "non-executable-node") {
@@ -137,12 +135,12 @@ export function materializeTaskRunInput(
     return materializationError(
       cause instanceof Error && cause.message.length > 0
         ? cause.message
-        : "Task Run Input Materialization failed.",
+        : "Task Input Materialization failed.",
     );
   }
 }
 
-function materializeSingleTaskFacts(command: MaterializeTaskRunInputCommand) {
+function materializeSingleTaskFacts(command: MaterializeTaskInputCommand) {
   const facts = materializeWorkflowRunTaskFacts({
     document: command.document,
     targetNodeIds: [command.nodeId],
@@ -152,7 +150,8 @@ function materializeSingleTaskFacts(command: MaterializeTaskRunInputCommand) {
   }
   return facts.value.taskFacts.find(
     (fact) =>
-      fact.nodeId === command.nodeId && fact.itemIndex === command.itemIndex,
+      fact.nodeId === command.nodeId &&
+      fact.branchIndex === command.branchIndex,
   );
 }
 
@@ -163,7 +162,7 @@ export function materializeWorkflowRunTaskFacts(
     const workflowDefinition = toWorkflowDefinitionGraphDocument(
       command.document,
     );
-    const schedulingPlan = planTaskRunMaterialization({
+    const schedulingPlan = planTaskMaterialization({
       document: command.document,
       targetNodeIds: command.targetNodeIds,
     });
@@ -184,8 +183,8 @@ export function materializeWorkflowRunTaskFacts(
       ]),
     );
     const taskFacts = executableNodeIds.flatMap((nodeId) =>
-      Array.from({ length: itemCountByNodeId[nodeId] ?? 1 }, (_, itemIndex) =>
-        materializeTaskFactsSafely(context, nodeId, itemIndex),
+      Array.from({ length: itemCountByNodeId[nodeId] ?? 1 }, (_, branchIndex) =>
+        materializeTaskFactsSafely(context, nodeId, branchIndex),
       ),
     );
 
@@ -202,17 +201,16 @@ export function materializeWorkflowRunTaskFacts(
     return materializationError(
       cause instanceof Error && cause.message.length > 0
         ? cause.message
-        : "Task Run Input Materialization failed.",
+        : "Task Input Materialization failed.",
     );
   }
 }
 
 function materializationError(
   message: string,
-): TaskRunInputMaterializationResult &
-  WorkflowRunTaskMaterializationFactsResult {
+): TaskInputMaterializationResult & WorkflowRunTaskMaterializationFactsResult {
   return {
-    error: { _tag: "TaskRunInputMaterializationError", message },
+    error: { _tag: "TaskInputMaterializationError", message },
     ok: false,
   };
 }
@@ -233,8 +231,8 @@ type MaterializedRuntimeValue = RuntimeValue & {
 function materializeTaskFacts(
   context: MaterializationTraversalContext,
   nodeId: string,
-  itemIndex: number,
-): MaterializedTaskRunFacts {
+  branchIndex: number,
+): MaterializedTaskFacts {
   const textInput = materializeTextHandle(
     context,
     nodeId,
@@ -248,23 +246,23 @@ function materializeTaskFacts(
   const imageInputsByHandle = materializeImageInputsByHandle(
     context,
     nodeId,
-    itemIndex,
+    branchIndex,
   );
   const dependencyAddresses = uniqueDependencyAddresses([
-    ...dependenciesForItem(textInput, itemIndex),
-    ...dependenciesForItem(systemPromptInput, itemIndex),
+    ...dependenciesForItem(textInput, branchIndex),
+    ...dependenciesForItem(systemPromptInput, branchIndex),
     ...Object.values(imageInputsByHandle.dependenciesByHandle).flat(),
   ]);
 
   return {
     dependencyAddresses,
-    itemIndex,
+    branchIndex,
     nodeId,
     providerInputFacts: {
       dependencyAddresses,
       imageInputsByHandle: imageInputsByHandle.assetsByHandle,
-      prompt: textForItem(textInput, itemIndex),
-      systemPrompt: textForItem(systemPromptInput, itemIndex) || null,
+      prompt: textForItem(textInput, branchIndex),
+      systemPrompt: textForItem(systemPromptInput, branchIndex) || null,
     },
   };
 }
@@ -272,22 +270,22 @@ function materializeTaskFacts(
 function materializeTaskFactsSafely(
   context: MaterializationTraversalContext,
   nodeId: string,
-  itemIndex: number,
-): MaterializedTaskRunFacts {
+  branchIndex: number,
+): MaterializedTaskFacts {
   try {
-    return materializeTaskFacts(context, nodeId, itemIndex);
+    return materializeTaskFacts(context, nodeId, branchIndex);
   } catch (cause) {
     const error = {
-      _tag: "TaskRunInputMaterializationError" as const,
+      _tag: "TaskInputMaterializationError" as const,
       message:
         cause instanceof Error && cause.message.length > 0
           ? cause.message
-          : "Task Run Input Materialization failed.",
+          : "Task Input Materialization failed.",
     };
     return {
       dependencyAddresses: [],
       error,
-      itemIndex,
+      branchIndex,
       nodeId,
       providerInputFacts: {
         dependencyAddresses: [],
@@ -312,7 +310,7 @@ function materializeTextHandle(
     const value = materializeRuntimeValue({
       context,
       edge,
-      itemIndex: 0,
+      branchIndex: 0,
       path: new Set(),
       targetHandle: edge.targetHandle,
       targetNodeId: edge.target,
@@ -346,7 +344,7 @@ function materializeTextHandle(
 function materializeImageInputsByHandle(
   context: MaterializationTraversalContext,
   nodeId: string,
-  itemIndex: number,
+  branchIndex: number,
 ) {
   const assetsByHandle: Record<string, WorkflowAsset[]> = {};
   const dependenciesByHandle: Record<string, ProviderDependencyAddress[]> = {};
@@ -354,7 +352,7 @@ function materializeImageInputsByHandle(
     const value = materializeRuntimeValue({
       context,
       edge,
-      itemIndex,
+      branchIndex,
       path: new Set(),
       targetHandle: edge.targetHandle,
       targetNodeId: edge.target,
@@ -362,7 +360,7 @@ function materializeImageInputsByHandle(
     if (value?.type !== "image" || !edge.targetHandle) {
       continue;
     }
-    const assets = getBroadcastOutput(value.items, itemIndex) ?? [];
+    const assets = getBroadcastOutput(value.items, branchIndex) ?? [];
     if (assets.length) {
       assetsByHandle[edge.targetHandle] = [
         ...(assetsByHandle[edge.targetHandle] ?? []),
@@ -371,7 +369,7 @@ function materializeImageInputsByHandle(
     }
     dependenciesByHandle[edge.targetHandle] = [
       ...(dependenciesByHandle[edge.targetHandle] ?? []),
-      ...dependenciesForItem(value, itemIndex),
+      ...dependenciesForItem(value, branchIndex),
     ];
   }
   return { assetsByHandle, dependenciesByHandle };
@@ -380,7 +378,7 @@ function materializeImageInputsByHandle(
 function materializeRuntimeValue(input: {
   readonly context: MaterializationTraversalContext;
   readonly edge?: WorkflowDocumentEdge;
-  readonly itemIndex: number;
+  readonly branchIndex: number;
   readonly nodeId?: string;
   readonly path: ReadonlySet<string>;
   readonly sourceHandle?: string | null;
@@ -438,7 +436,7 @@ function materializeRuntimeValue(input: {
           { length: outputCount },
           (_, index) => [
             {
-              parentItemIndex: outputCount === 1 ? 0 : index,
+              parentBranchIndex: outputCount === 1 ? 0 : index,
               parentNodeId: node.id,
               sourceHandle:
                 input.edge?.sourceHandle ?? input.sourceHandle ?? null,
@@ -518,7 +516,7 @@ function materializeOutputReorderValue(
   node: Extract<WorkflowDocumentNode, { kind: "outputReorder" }>,
   path: ReadonlySet<string>,
   input: {
-    readonly itemIndex: number;
+    readonly branchIndex: number;
     readonly targetHandle?: string | null;
     readonly targetNodeId: string;
   },
@@ -544,10 +542,10 @@ function materializeOutputReorderValue(
   const value = materializeRuntimeValue({
     context,
     edge,
-    itemIndex:
+    branchIndex:
       sourceOutputCount === 1
         ? 0
-        : (permutation[input.itemIndex] ?? input.itemIndex),
+        : (permutation[input.branchIndex] ?? input.branchIndex),
     path,
     targetHandle: input.targetHandle,
     targetNodeId: input.targetNodeId,
@@ -566,23 +564,23 @@ function materializeOutputReorderValue(
 
 function textForItem(
   value: MaterializedRuntimeValue | null,
-  itemIndex: number,
+  branchIndex: number,
 ) {
   return value?.type === "text"
-    ? (getBroadcastOutput(value.items, itemIndex) ?? "")
+    ? (getBroadcastOutput(value.items, branchIndex) ?? "")
     : "";
 }
 
 function dependenciesForItem(
   value: MaterializedRuntimeValue | null,
-  itemIndex: number,
+  branchIndex: number,
 ) {
   if (!value) {
     return [];
   }
   return value.dependencyAddressesByItem.length === 1
     ? (value.dependencyAddressesByItem[0] ?? [])
-    : (value.dependencyAddressesByItem[itemIndex] ?? []);
+    : (value.dependencyAddressesByItem[branchIndex] ?? []);
 }
 
 function uniqueDependencyAddresses(

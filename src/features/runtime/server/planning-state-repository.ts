@@ -3,15 +3,15 @@ import { desc, inArray, isNotNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
 
 import type {
-  ExistingNodeExecution,
-  ExistingTaskRun,
+  ExistingNodeRun,
+  ExistingTask,
 } from "~/features/runtime/planning/workflow-run-planner";
 import * as schema from "~/server/database/schema";
 import { DatabaseService } from "~/server/services/database";
 
 export type RuntimePlanningState = {
-  readonly latestNodeExecutions: readonly ExistingNodeExecution[];
-  readonly latestTaskRuns: readonly ExistingTaskRun[];
+  readonly latestNodeRuns: readonly ExistingNodeRun[];
+  readonly latestTasks: readonly ExistingTask[];
 };
 
 export function getPlanningStateForWorkflow(params: {
@@ -20,66 +20,60 @@ export function getPlanningStateForWorkflow(params: {
 }) {
   const query = Effect.gen(function* () {
     const db = yield* PgDrizzle.PgDrizzle;
-    const latestNodeExecutions = yield* db
-      .selectDistinctOn([schema.nodeExecutions.nodeId], {
-        id: schema.nodeExecutions.id,
-        nodeId: schema.nodeExecutions.nodeId,
+    const latestNodeRuns = yield* db
+      .selectDistinctOn([schema.nodeRuns.nodeId], {
+        id: schema.nodeRuns.id,
+        nodeId: schema.nodeRuns.nodeId,
       })
-      .from(schema.nodeExecutions)
+      .from(schema.nodeRuns)
       .where(
-        sql`${schema.nodeExecutions.workflowId} = ${params.workflowId}
-          and ${schema.nodeExecutions.ownerUserId} = ${params.ownerUserId}`,
+        sql`${schema.nodeRuns.workflowId} = ${params.workflowId}
+          and ${schema.nodeRuns.ownerUserId} = ${params.ownerUserId}`,
       )
       .orderBy(
-        schema.nodeExecutions.nodeId,
-        desc(schema.nodeExecutions.createdAt),
-        desc(schema.nodeExecutions.id),
+        schema.nodeRuns.nodeId,
+        desc(schema.nodeRuns.createdAt),
+        desc(schema.nodeRuns.id),
       );
 
-    if (!latestNodeExecutions.length) {
-      return { latestNodeExecutions, latestTaskRuns: [] };
+    if (!latestNodeRuns.length) {
+      return { latestNodeRuns, latestTasks: [] };
     }
 
-    const latestNodeExecutionIds = latestNodeExecutions.map(({ id }) => id);
-    const latestTaskRuns = yield* db
-      .selectDistinctOn(
-        [schema.taskRuns.nodeExecutionId, schema.taskRuns.itemIndex],
-        {
-          attempt: schema.taskRuns.attempt,
-          creditCost: schema.taskRuns.creditCost,
-          id: schema.taskRuns.id,
-          itemIndex: schema.taskRuns.itemIndex,
-          nodeExecutionId: schema.taskRuns.nodeExecutionId,
-          nodeId: schema.taskRuns.nodeId,
-          status: schema.taskRuns.runtimeStatus,
-        },
-      )
-      .from(schema.taskRuns)
+    const latestNodeRunIds = latestNodeRuns.map(({ id }) => id);
+    const latestTasks = yield* db
+      .selectDistinctOn([schema.tasks.nodeRunId, schema.tasks.branchIndex], {
+        creditCost: schema.tasks.creditCost,
+        id: schema.tasks.id,
+        branchIndex: schema.tasks.branchIndex,
+        nodeRunId: schema.tasks.nodeRunId,
+        nodeId: schema.tasks.nodeId,
+        status: schema.tasks.runtimeStatus,
+      })
+      .from(schema.tasks)
       .where(
-        sql`${schema.taskRuns.workflowId} = ${params.workflowId}
-          and ${schema.taskRuns.ownerUserId} = ${params.ownerUserId}
-          and ${inArray(schema.taskRuns.nodeExecutionId, latestNodeExecutionIds)}
-          and ${isNotNull(schema.taskRuns.runtimeStatus)}
-          and ${isNotNull(schema.taskRuns.itemIndex)}
-          and ${isNotNull(schema.taskRuns.attempt)}`,
+        sql`${schema.tasks.workflowId} = ${params.workflowId}
+          and ${schema.tasks.ownerUserId} = ${params.ownerUserId}
+          and ${inArray(schema.tasks.nodeRunId, latestNodeRunIds)}
+          and ${isNotNull(schema.tasks.runtimeStatus)}
+          and ${isNotNull(schema.tasks.branchIndex)}`,
       )
       .orderBy(
-        schema.taskRuns.nodeExecutionId,
-        schema.taskRuns.itemIndex,
-        desc(schema.taskRuns.attempt),
-        desc(schema.taskRuns.id),
+        schema.tasks.nodeRunId,
+        schema.tasks.branchIndex,
+        desc(schema.tasks.createdAt),
+        desc(schema.tasks.id),
       );
 
     return {
-      latestNodeExecutions,
-      latestTaskRuns: latestTaskRuns.map((row) => ({
-        attempt: requireNumber(row.attempt),
+      latestNodeRuns,
+      latestTasks: latestTasks.map((row) => ({
         creditCost: requireNumber(row.creditCost),
         id: row.id,
-        itemIndex: requireNumber(row.itemIndex),
-        nodeExecutionId: row.nodeExecutionId,
+        branchIndex: requireNumber(row.branchIndex),
+        nodeRunId: row.nodeRunId,
         nodeId: row.nodeId,
-        status: requireTaskRunStatus(row.status),
+        status: requireTaskStatus(row.status),
       })),
     };
   });
@@ -94,9 +88,9 @@ function requireNumber(value: number | null): number {
   throw new TypeError("Expected integer database number value");
 }
 
-function requireTaskRunStatus(value: ExistingTaskRun["status"] | null) {
+function requireTaskStatus(value: ExistingTask["status"] | null) {
   if (value) {
     return value;
   }
-  throw new TypeError("Expected Task Run runtime status database value");
+  throw new TypeError("Expected Task runtime status database value");
 }

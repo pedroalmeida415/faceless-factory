@@ -10,11 +10,11 @@ import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import type { WorkflowCreditsSummary } from "~/features/billing/billing";
-import { collectTaskRunMaterializationNodeIds } from "~/features/runtime/materialization/subgraph";
+import { collectTaskMaterializationNodeIds } from "~/features/runtime/materialization/subgraph";
 import {
-  applyTaskRunStudioProjection,
-  type TaskRunStudioProjectionSlot,
-} from "~/features/runtime/task-run-studio-projection";
+  applyTaskStudioProjection,
+  type TaskStudioProjectionSlot,
+} from "~/features/runtime/task-studio-projection";
 import { WorkflowPersistenceService } from "~/features/workflow/client/workflow-persistence-service";
 import {
   hydrateWorkflowGraphDocument,
@@ -288,7 +288,7 @@ function getLockedExecutionNodeIds(
   lockedTargetNodeIds: string[],
 ) {
   return lockedTargetNodeIds.length
-    ? collectTaskRunMaterializationNodeIds(document, lockedTargetNodeIds)
+    ? collectTaskMaterializationNodeIds(document, lockedTargetNodeIds)
     : new Set<string>();
 }
 
@@ -393,7 +393,7 @@ type WorkflowStudioState = {
   ready: boolean;
   hydrate: (view: WorkflowStudioView) => void;
   applyRuntimeTaskProjection: (
-    slots: readonly TaskRunStudioProjectionSlot[],
+    slots: readonly TaskStudioProjectionSlot[],
   ) => void;
   clearExecutionStreaming: () => void;
   setProjectPersistence: (
@@ -518,7 +518,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
             document,
             DEFAULT_WORKFLOW_ACTIVITY,
           );
-          const projection = applyTaskRunStudioProjection({
+          const projection = applyTaskStudioProjection({
             document: nextSnapshot.document,
             runtime: nextSnapshot.runtime,
             slots: runtimeTaskProjection,
@@ -560,7 +560,7 @@ export const useWorkflowStudioStore = create<WorkflowStudioState>()(
     applyRuntimeTaskProjection: (slots) => {
       set((state) => {
         const currentSnapshot = snapshotFromState(state);
-        const projection = applyTaskRunStudioProjection({
+        const projection = applyTaskStudioProjection({
           document: currentSnapshot.document,
           runtime: currentSnapshot.runtime,
           slots,

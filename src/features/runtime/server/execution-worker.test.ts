@@ -2,9 +2,9 @@ import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
 import { Effect } from "effect";
 import type { TaskStatusEvent } from "~/features/runtime/events/task-status-events";
-import type { ExecutableTaskRunInputSnapshot } from "~/features/runtime/execution/task-run-input-snapshot";
+import type { ExecutableTaskInputSnapshot } from "~/features/runtime/execution/task-input-snapshot";
 import {
-  type ClaimQueuedTaskRunForExecutionResult,
+  type ClaimQueuedTaskForExecutionResult,
   createRuntimeExecutionWorker,
   type EventPublisherServiceForWorker,
   type ProviderExecutionResult,
@@ -21,7 +21,7 @@ import type {
 } from "~/server/services/queue";
 
 describe("RuntimeExecutionWorker", () => {
-  test("does not execute or settle a Task Run when the queued attempt is not claimed", async () => {
+  test("does not execute or settle a Task when the queued Task is not claimed", async () => {
     const repository = new FakeRepository({ claimed: false });
     const providerExecutor = new FakeProviderExecutor({
       ok: true,
@@ -43,7 +43,7 @@ describe("RuntimeExecutionWorker", () => {
       status: "ignored",
     });
     assert.deepEqual(repository.claimCommands, [
-      { attempt: 0, ownerUserId: "owner-1", taskRunId: "task-run-1" },
+      { ownerUserId: "owner-1", taskId: "task-run-1" },
     ]);
     assert.deepEqual(providerExecutor.commands, []);
     assert.deepEqual(eventPublisher.published, []);
@@ -53,13 +53,12 @@ describe("RuntimeExecutionWorker", () => {
 
   test("publishes Running before executing the claimed input snapshot", async () => {
     const sideEffects: string[] = [];
-    const snapshot = inputSnapshot("task-run-1", 0);
+    const snapshot = inputSnapshot("task-run-1");
     const runningEvent = {
-      attempt: 0,
-      itemIndex: 0,
-      nodeExecutionId: "node-execution-1",
+      branchIndex: 0,
+      nodeRunId: "node-execution-1",
       status: "RUNNING" as const,
-      taskRunId: "task-run-1",
+      taskId: "task-run-1",
     };
     const repository = new FakeRepository({
       claimed: true,
@@ -97,13 +96,12 @@ describe("RuntimeExecutionWorker", () => {
     ]);
     assert.deepEqual(settlementQueue.completions, [
       {
-        attempt: 0,
         providerCostCredits: 2,
         generatedAsset: providerCompletion().generatedAsset,
-        jobId: "task-run~task-run-1~attempt~0~orchestrator~completion",
+        jobId: "task~task-run-1~orchestrator~completion",
         ownerUserId: "owner-1",
         reviewRequired: false,
-        taskRunId: "task-run-1",
+        taskId: "task-run-1",
         workflowId: "workflow-1",
       },
     ]);
@@ -125,7 +123,7 @@ describe("RuntimeExecutionWorker", () => {
             type: "PROVIDER_FAILED",
           },
           failureSource: {
-            taskRunDebitRefundable: true,
+            taskDebitRefundable: true,
             type: "PROVIDER",
           },
           providerCostCredits: 1,
@@ -140,16 +138,15 @@ describe("RuntimeExecutionWorker", () => {
 
     assert.deepEqual(settlementQueue.failures, [
       {
-        attempt: 0,
         failureReason: { message: "provider timeout", type: "PROVIDER_FAILED" },
         failureSource: {
-          taskRunDebitRefundable: true,
+          taskDebitRefundable: true,
           type: "PROVIDER",
         },
         providerCostCredits: 1,
-        jobId: "task-run~task-run-1~attempt~0~orchestrator~failure",
+        jobId: "task~task-run-1~orchestrator~failure",
         ownerUserId: "owner-1",
-        taskRunId: "task-run-1",
+        taskId: "task-run-1",
         workflowId: "workflow-1",
       },
     ]);
@@ -161,7 +158,7 @@ describe("RuntimeExecutionWorker", () => {
       error: {
         failureReason: { message: "sdk exploded", type: "PROVIDER_FAILED" },
         failureSource: {
-          taskRunDebitRefundable: false,
+          taskDebitRefundable: false,
           type: "POST_PROVIDER_INFRASTRUCTURE",
         },
       },
@@ -179,15 +176,14 @@ describe("RuntimeExecutionWorker", () => {
 
     assert.deepEqual(settlementQueue.failures, [
       {
-        attempt: 0,
         failureReason: { message: "sdk exploded", type: "PROVIDER_FAILED" },
         failureSource: {
-          taskRunDebitRefundable: false,
+          taskDebitRefundable: false,
           type: "POST_PROVIDER_INFRASTRUCTURE",
         },
-        jobId: "task-run~task-run-1~attempt~0~orchestrator~failure",
+        jobId: "task~task-run-1~orchestrator~failure",
         ownerUserId: "owner-1",
-        taskRunId: "task-run-1",
+        taskId: "task-run-1",
         workflowId: "workflow-1",
       },
     ]);
@@ -227,8 +223,7 @@ describe("RuntimeExecutionWorker", () => {
 
     const result = await worker.execute({
       ...executionJob(),
-      attempt: 1,
-      jobId: "task-run~task-run-1~attempt~1~execute",
+      jobId: "task~task-run-1~execute",
     });
 
     assert.deepEqual(result, {
@@ -246,10 +241,9 @@ describe("RuntimeExecutionWorker", () => {
     });
     const repository = new FakeRepository(claimedResult());
     repository.claimFailure = {
-      _tag: "StaleTaskRunTransition" as const,
-      attempt: 1,
-      operation: "claimQueuedTaskRun",
-      taskRunId: "task-run-1",
+      _tag: "StaleTaskTransition" as const,
+      operation: "claimQueuedTask",
+      taskId: "task-run-1",
     };
     const eventPublisher = new FakeEventPublisher();
     const worker = createRuntimeExecutionWorker({
@@ -261,8 +255,7 @@ describe("RuntimeExecutionWorker", () => {
 
     const result = await worker.execute({
       ...executionJob(),
-      attempt: 1,
-      jobId: "task-run~task-run-1~attempt~1~execute",
+      jobId: "task~task-run-1~execute",
     });
 
     assert.deepEqual(result, {
@@ -276,18 +269,16 @@ describe("RuntimeExecutionWorker", () => {
 
 class FakeRepository implements RuntimeExecutionWorkerRepository {
   readonly claimCommands: Parameters<
-    RuntimeExecutionWorkerRepository["claimQueuedTaskRun"]
+    RuntimeExecutionWorkerRepository["claimQueuedTask"]
   >[0][] = [];
   claimFailure: RuntimeRepositoryFailure | null = null;
 
   constructor(
-    private readonly claimResult: ClaimQueuedTaskRunForExecutionResult,
+    private readonly claimResult: ClaimQueuedTaskForExecutionResult,
   ) {}
 
-  claimQueuedTaskRun(
-    command: Parameters<
-      RuntimeExecutionWorkerRepository["claimQueuedTaskRun"]
-    >[0],
+  claimQueuedTask(
+    command: Parameters<RuntimeExecutionWorkerRepository["claimQueuedTask"]>[0],
   ) {
     this.claimCommands.push(command);
     if (this.claimFailure) {
@@ -326,7 +317,7 @@ class FakeEventPublisher implements EventPublisherServiceForWorker {
       EventPublisherServiceForWorker["publishTaskStatusEvent"]
     >[1],
   ) {
-    this.sideEffects?.push(`publish:${event.taskRunId}:${event.status}`);
+    this.sideEffects?.push(`publish:${event.taskId}:${event.status}`);
     this.published.push({ event, workflowId });
 
     return Effect.void;
@@ -366,12 +357,11 @@ class FakeSettlementQueue implements RuntimeSettlementQueueForWorker {
 
 function executionJob(): RuntimeExecutionJobPayload {
   return {
-    attempt: 0,
-    itemIndex: 0,
-    jobId: "task-run~task-run-1~attempt~0~execute",
-    nodeExecutionId: "node-execution-1",
+    branchIndex: 0,
+    jobId: "task~task-run-1~execute",
+    nodeRunId: "node-execution-1",
     ownerUserId: "owner-1",
-    taskRunId: "task-run-1",
+    taskId: "task-run-1",
     workflowId: "workflow-1",
   };
 }
@@ -392,40 +382,35 @@ function providerCompletion() {
   };
 }
 
-function claimedResult(): ClaimQueuedTaskRunForExecutionResult {
+function claimedResult(): ClaimQueuedTaskForExecutionResult {
   return {
     claimed: true,
     event: {
-      attempt: 0,
-      itemIndex: 0,
-      nodeExecutionId: "node-execution-1",
+      branchIndex: 0,
+      nodeRunId: "node-execution-1",
       status: "RUNNING",
-      taskRunId: "task-run-1",
+      taskId: "task-run-1",
     },
-    inputSnapshot: inputSnapshot("task-run-1", 0),
+    inputSnapshot: inputSnapshot("task-run-1"),
   };
 }
 
-function inputSnapshot(
-  taskRunId: string,
-  attempt: number,
-): ExecutableTaskRunInputSnapshot {
+function inputSnapshot(taskId: string): ExecutableTaskInputSnapshot {
   const targetNodeConfig = {
     ...createWorkflowNode("llmGenerator", 0),
     id: "node-1",
   };
   return {
-    attempt,
     documentRevision: null,
-    idempotencyKey: `task_run:${taskRunId}:attempt:${attempt}`,
-    itemIndex: 0,
-    kind: "task-run-input-snapshot",
-    nodeExecutionId: "node-execution-1",
+    idempotencyKey: `task:${taskId}`,
+    branchIndex: 0,
+    kind: "task-input-snapshot",
+    nodeRunId: "node-execution-1",
     nodeId: "node-1",
     providerInput: {
       kind: "llm-generation-request",
       request: {
-        idempotencyKey: `task_run:${taskRunId}:attempt:${attempt}`,
+        idempotencyKey: `task:${taskId}`,
         maxOutputTokens: 2048,
         mode: null,
         model: "gemini-3-flash-preview",
@@ -436,9 +421,9 @@ function inputSnapshot(
         thinkingLevel: "LOW",
       },
     },
-    resolvedParentTaskRuns: [],
+    resolvedParentTasks: [],
     targetNodeConfig,
-    taskRunId,
+    taskId,
     version: 1,
     workflowDefinition: {
       edges: [],

@@ -5,7 +5,10 @@ import {
   RuntimeIdGenerator,
 } from "~/features/runtime/server/commands";
 import { RuntimePostCommitWork } from "~/features/runtime/server/post-commit-work";
-import { RuntimeRepositoryLive } from "~/features/runtime/server/repository";
+import {
+  RuntimeRepositoryLive,
+  RuntimeRepositoryTest,
+} from "~/features/runtime/server/repository";
 import { createWorkflowEventPublisher } from "~/features/runtime/server/task-status-event-stream";
 import { getRedisClient } from "~/server/redis";
 import { CreditsService } from "~/server/services/credits";
@@ -39,8 +42,25 @@ const RuntimeDependenciesLive = Layer.mergeAll(
   RuntimeIdGenerator.Live,
 );
 
+const RuntimeDependenciesTest = Layer.mergeAll(
+  RuntimeRepositoryTest.pipe(Layer.provide(DatabaseServiceTest)),
+  QueueService.Test,
+  EventPublisherService.Test,
+  RuntimeIdGenerator.Test,
+);
+
 const RuntimePostCommitWorkLive = RuntimePostCommitWork.Live.pipe(
   Layer.provide(Layer.mergeAll(RuntimeDependenciesLive, TelemetryService.Live)),
+);
+
+const RuntimePostCommitWorkTest = RuntimePostCommitWork.Test.pipe(
+  Layer.provide(Layer.mergeAll(RuntimeDependenciesTest, TelemetryService.Test)),
+);
+
+const RuntimeCommandsTest = RuntimeCommands.Test.pipe(
+  Layer.provide(
+    Layer.mergeAll(RuntimeDependenciesTest, RuntimePostCommitWorkTest),
+  ),
 );
 
 const StorageServiceLive = StorageService.Live.pipe(
@@ -67,4 +87,12 @@ export const ServerRuntime = ManagedRuntime.make(
     ),
   ),
 );
-export const ServerTestRuntime = ManagedRuntime.make(DatabaseServiceTest);
+export const ServerTestRuntime = ManagedRuntime.make(
+  Layer.mergeAll(
+    DatabaseServiceTest,
+    RuntimeDependenciesTest,
+    TelemetryService.Test,
+    RuntimePostCommitWorkTest,
+    RuntimeCommandsTest,
+  ),
+);

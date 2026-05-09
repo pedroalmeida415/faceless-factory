@@ -13,9 +13,9 @@ import postgres from "postgres";
 
 import { env } from "~/env";
 import {
-  taskRunFailureReasonTypeValues,
-  taskRunStatusValues,
-} from "~/features/runtime/domain/task-run-state";
+  taskFailureReasonTypeValues,
+  taskStatusValues,
+} from "~/features/runtime/domain/task-state";
 import * as schema from "~/server/database/schema";
 
 const globalForDb = globalThis as unknown as {
@@ -23,6 +23,7 @@ const globalForDb = globalThis as unknown as {
 };
 
 const conn = globalForDb.conn ?? postgres(env.DATABASE_URL);
+
 if (env.NODE_ENV !== "production") {
   globalForDb.conn = conn;
 }
@@ -209,8 +210,8 @@ function makePgliteConnection(pglite: PGlite): Connection {
 }
 
 const runtimeTestSchemaSql = `
-create type task_run_runtime_status as enum (${taskRunStatusValues.map(sqlString).join(", ")});
-create type task_run_failure_reason as enum (${taskRunFailureReasonTypeValues.map(sqlString).join(", ")});
+create type task_runtime_status as enum (${taskStatusValues.map(sqlString).join(", ")});
+create type task_failure_reason as enum (${taskFailureReasonTypeValues.map(sqlString).join(", ")});
 
 create table "user" (
   id text primary key,
@@ -235,7 +236,7 @@ create table workflows (
   last_opened_at timestamp
 );
 
-create table node_executions (
+create table node_runs (
   id text primary key,
   workflow_id text not null references workflows(id) on delete cascade,
   owner_user_id text not null references "user"(id) on delete cascade,
@@ -250,20 +251,19 @@ create table node_executions (
   updated_at timestamp not null default now()
 );
 
-create table task_runs (
+create table tasks (
   id text primary key,
-  node_execution_id text not null references node_executions(id) on delete cascade,
+  node_run_id text not null references node_runs(id) on delete cascade,
   workflow_id text not null references workflows(id) on delete cascade,
   owner_user_id text not null references "user"(id) on delete cascade,
   node_id text not null,
   output_index bigint not null,
   version bigint not null,
-  item_index bigint,
-  attempt bigint,
+  branch_index bigint,
   execution_id text not null,
   job_id text not null unique,
   status text not null,
-  runtime_status task_run_runtime_status,
+  runtime_status task_runtime_status,
   target_reason text not null,
   value_type text,
   text_value text,
@@ -277,34 +277,33 @@ create table task_runs (
   review_status text,
   error text,
   credit_cost bigint not null,
-  failure_reason task_run_failure_reason,
+  failure_reason task_failure_reason,
   document_revision bigint,
   queued_at timestamp,
   started_at timestamp,
   finished_at timestamp,
   failed_at timestamp,
   created_at timestamp not null default now(),
-  updated_at timestamp not null default now(),
-  unique (node_execution_id, output_index, version)
+  updated_at timestamp not null default now()
 );
 
-create unique index task_runs_runtime_active_slot_unique
-  on task_runs (node_execution_id, item_index)
+create unique index tasks_runtime_active_slot_unique
+  on tasks (node_run_id, branch_index)
   where runtime_status in ('WAITING_UPSTREAM', 'QUEUED', 'RUNNING', 'PENDING_REVIEW');
 
 create table task_dependencies (
   id text primary key,
-  child_task_run_id text not null references task_runs(id) on delete cascade,
-  required_parent_node_execution_id text not null references node_executions(id) on delete cascade,
+  child_task_id text not null references tasks(id) on delete cascade,
+  required_parent_node_run_id text not null references node_runs(id) on delete cascade,
   required_parent_node_id text not null,
-  required_parent_item_index bigint not null,
+  required_parent_branch_index bigint not null,
   source_handle text,
   target_handle text,
   target_node_id text not null,
-  resolved_parent_task_run_id text references task_runs(id) on delete set null,
+  resolved_parent_task_id text references tasks(id) on delete set null,
   created_at timestamp not null default now(),
   resolved_at timestamp,
-  unique (child_task_run_id, required_parent_node_execution_id, required_parent_item_index, source_handle, target_handle)
+  unique (child_task_id, required_parent_node_run_id, required_parent_branch_index, source_handle, target_handle)
 );
 
 create table credit_ledger_entries (
@@ -348,7 +347,7 @@ create table assets (
   workflow_id text not null references workflows(id) on delete cascade,
   source text not null,
   kind text not null,
-  task_run_id text references task_runs(id) on delete set null,
+  task_id text references tasks(id) on delete set null,
   storage_provider text not null,
   storage_key text,
   cdn_url text,

@@ -1,67 +1,64 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { buildTaskRunInputSnapshot } from "~/features/runtime/execution/task-run-input-snapshot";
+import { buildTaskInputSnapshot } from "~/features/runtime/execution/task-input-snapshot";
 import {
-  recordDirectTaskRunFailure,
-  type TaskRunGatekeeperDependency,
-  type TaskRunGatekeeperState,
-  type TaskRunGatekeeperTaskRun,
-  wakeUpTaskRunChildren,
-} from "~/features/runtime/gatekeeper/task-run-gatekeeper";
+  recordDirectTaskFailure,
+  type TaskGatekeeperDependency,
+  type TaskGatekeeperState,
+  type TaskGatekeeperTask,
+  wakeUpTaskChildren,
+} from "~/features/runtime/gatekeeper/task-gatekeeper";
 import { createWorkflowNode } from "~/features/workflow/document";
 
-describe("TaskRunGatekeeper", () => {
-  test("queues a waiting child only after every latest required Attempt is approved", () => {
-    const parentA = taskRun({
-      attempt: 1,
-      id: "parent-a-attempt-1",
-      nodeExecutionId: "parent-node-a",
+describe("TaskGatekeeper", () => {
+  test("queues a waiting child only after every latest required Task is approved", () => {
+    const parentA = task({
+      id: "parent-a-latest-task",
+      nodeRunId: "parent-node-a",
       status: "APPROVED",
     });
-    const parentB = taskRun({
-      attempt: 2,
-      id: "parent-b-attempt-2",
-      nodeExecutionId: "parent-node-b",
+    const parentB = task({
+      id: "parent-b-latest-task",
+      nodeRunId: "parent-node-b",
       status: "APPROVED",
     });
-    const child = taskRun({
+    const child = task({
       creditCost: 30,
       id: "child-task-run",
-      nodeExecutionId: "child-node",
+      nodeRunId: "child-node",
       status: "WAITING_UPSTREAM",
     });
     const state = gatekeeperState({
       creditBalance: 100,
       dependencies: [dependency(child, parentA), dependency(child, parentB)],
-      taskRuns: [parentA, parentB, child],
+      tasks: [parentA, parentB, child],
     });
 
-    const result = wakeUpTaskRunChildren(state, {
-      settledParentTaskRunId: parentA.id,
+    const result = wakeUpTaskChildren(state, {
+      settledParentTaskId: parentA.id,
     });
-    const queuedChild = requireTaskRun(result.state, child.id);
+    const queuedChild = requireTask(result.state, child.id);
 
     assert.equal(queuedChild.status, "QUEUED");
     assert.equal(queuedChild.creditCost, 30);
     assert.equal(result.state.creditBalance, 100);
     assert.deepEqual(
       result.state.dependencies.map(
-        (candidate) => candidate.resolvedParentTaskRunId,
+        (candidate) => candidate.resolvedParentTaskId,
       ),
       [parentA.id, parentB.id],
     );
     assert.deepEqual(queuedChild.inputSnapshot, {
-      attempt: 0,
       documentRevision: null,
-      idempotencyKey: "task_run:child-task-run:attempt:0",
-      itemIndex: 0,
-      kind: "task-run-input-snapshot",
-      nodeExecutionId: "child-node",
+      idempotencyKey: "task:child-task-run",
+      branchIndex: 0,
+      kind: "task-input-snapshot",
+      nodeRunId: "child-node",
       nodeId: "node-child-task-run",
       providerInput: {
         kind: "llm-generation-request",
         request: {
-          idempotencyKey: "task_run:child-task-run:attempt:0",
+          idempotencyKey: "task:child-task-run",
           maxOutputTokens: 2048,
           mode: null,
           model: "gemini-3-flash-preview",
@@ -72,62 +69,58 @@ describe("TaskRunGatekeeper", () => {
           thinkingLevel: "LOW",
         },
       },
-      resolvedParentTaskRuns: [
+      resolvedParentTasks: [
         {
           address: {
-            parentItemIndex: 0,
+            parentBranchIndex: 0,
             parentNodeId: parentA.nodeId,
             sourceHandle: null,
             targetHandle: null,
             targetNodeId: child.nodeId,
           },
-          attempt: 1,
-          itemIndex: 0,
-          nodeExecutionId: "parent-node-a",
-          taskRunId: parentA.id,
+          branchIndex: 0,
+          nodeRunId: "parent-node-a",
+          taskId: parentA.id,
         },
         {
           address: {
-            parentItemIndex: 0,
+            parentBranchIndex: 0,
             parentNodeId: parentB.nodeId,
             sourceHandle: null,
             targetHandle: null,
             targetNodeId: child.nodeId,
           },
-          attempt: 2,
-          itemIndex: 0,
-          nodeExecutionId: "parent-node-b",
-          taskRunId: parentB.id,
+          branchIndex: 0,
+          nodeRunId: "parent-node-b",
+          taskId: parentB.id,
         },
       ],
       targetNodeConfig: child.targetNodeConfig,
-      taskRunId: child.id,
+      taskId: child.id,
       version: 1,
       workflowDefinition: child.inputSnapshot?.workflowDefinition,
     });
     assert.deepEqual(result.executionJobs, [
       {
-        attempt: 0,
-        id: "task-run~child-task-run~attempt~0~execute",
+        id: "task~child-task-run~execute",
         inputSnapshot: queuedChild.inputSnapshot,
-        taskRunId: child.id,
+        taskId: child.id,
       },
     ]);
     assert.deepEqual(result.taskStatusEvents, [
       {
-        attempt: 0,
-        itemIndex: 0,
-        nodeExecutionId: "child-node",
+        branchIndex: 0,
+        nodeRunId: "child-node",
         status: "QUEUED",
-        taskRunId: child.id,
+        taskId: child.id,
       },
     ]);
   });
 
   test("Wake-Up Calls preserve the Waiting Upstream frozen input snapshot metadata", () => {
-    const parent = taskRun({
+    const parent = task({
       id: "parent-approved",
-      nodeExecutionId: "parent-node",
+      nodeRunId: "parent-node",
       output: {
         assetId: "asset-parent-approved",
         kind: "inline-text-asset",
@@ -135,34 +128,33 @@ describe("TaskRunGatekeeper", () => {
       },
       status: "APPROVED",
     });
-    const child = taskRun({
+    const child = task({
       id: "child-waiting-frozen",
-      inputSnapshot: buildTaskRunInputSnapshot({
-        attempt: 0,
+      inputSnapshot: buildTaskInputSnapshot({
         documentRevision: 123,
-        itemIndex: 0,
-        nodeExecutionId: "child-node",
+        branchIndex: 0,
+        nodeRunId: "child-node",
         nodeId: "node-child-waiting-frozen",
-        resolvedParentTaskRuns: [],
+        resolvedParentTasks: [],
         targetNodeConfig: {
           ...llmGeneratorNode("node-child-waiting-frozen"),
           config: { maxOutputTokens: 512, temperature: 0.4 },
           reviewEnabled: true,
         },
-        taskRunId: "child-waiting-frozen",
+        taskId: "child-waiting-frozen",
       }),
-      nodeExecutionId: "child-node",
+      nodeRunId: "child-node",
       status: "WAITING_UPSTREAM",
     });
-    const result = wakeUpTaskRunChildren(
+    const result = wakeUpTaskChildren(
       gatekeeperState({
         dependencies: [dependency(child, parent)],
-        taskRuns: [parent, child],
+        tasks: [parent, child],
       }),
-      { settledParentTaskRunId: parent.id },
+      { settledParentTaskId: parent.id },
     );
 
-    const queuedChild = requireTaskRun(result.state, child.id);
+    const queuedChild = requireTask(result.state, child.id);
     assert.equal(queuedChild.status, "QUEUED");
     assert.equal(queuedChild.inputSnapshot?.documentRevision, 123);
     assert.equal(
@@ -177,71 +169,66 @@ describe("TaskRunGatekeeper", () => {
         : null,
       { maxOutputTokens: 512, temperature: 0.4 },
     );
-    assert.deepEqual(queuedChild.inputSnapshot?.resolvedParentTaskRuns, [
+    assert.deepEqual(queuedChild.inputSnapshot?.resolvedParentTasks, [
       {
         address: {
-          parentItemIndex: 0,
+          parentBranchIndex: 0,
           parentNodeId: parent.nodeId,
           sourceHandle: null,
           targetHandle: null,
           targetNodeId: child.nodeId,
         },
-        attempt: 0,
-        itemIndex: 0,
-        nodeExecutionId: parent.nodeExecutionId,
+        branchIndex: 0,
+        nodeRunId: parent.nodeRunId,
         output: parent.output,
-        taskRunId: parent.id,
+        taskId: parent.id,
       },
     ]);
   });
 
-  test("does not treat Pending Review or older approved Attempts as dependency satisfaction", () => {
-    const olderApprovedParent = taskRun({
-      attempt: 0,
-      id: "parent-attempt-0",
-      nodeExecutionId: "parent-node",
+  test("does not treat Pending Review or older approved Tasks as dependency satisfaction", () => {
+    const olderApprovedParent = task({
+      id: "parent-older-approved-task",
+      nodeRunId: "parent-node",
       status: "APPROVED",
     });
-    const latestPendingParent = taskRun({
-      attempt: 1,
-      id: "parent-attempt-1",
-      nodeExecutionId: "parent-node",
+    const latestPendingParent = task({
+      id: "parent-latest-pending-task",
+      nodeRunId: "parent-node",
       status: "PENDING_REVIEW",
     });
-    const child = taskRun({
+    const child = task({
       id: "child-task-run",
-      nodeExecutionId: "child-node",
+      nodeRunId: "child-node",
       status: "WAITING_UPSTREAM",
     });
     const state = gatekeeperState({
       dependencies: [dependency(child, latestPendingParent)],
-      taskRuns: [olderApprovedParent, latestPendingParent, child],
+      tasks: [olderApprovedParent, latestPendingParent, child],
     });
 
-    const result = wakeUpTaskRunChildren(state, {
-      settledParentTaskRunId: latestPendingParent.id,
+    const result = wakeUpTaskChildren(state, {
+      settledParentTaskId: latestPendingParent.id,
     });
 
     assert.equal(
-      requireTaskRun(result.state, child.id).status,
+      requireTask(result.state, child.id).status,
       "WAITING_UPSTREAM",
     );
-    assert.equal(result.state.dependencies[0]?.resolvedParentTaskRunId, null);
+    assert.equal(result.state.dependencies[0]?.resolvedParentTaskId, null);
     assert.deepEqual(result.executionJobs, []);
     assert.deepEqual(result.taskStatusEvents, []);
   });
 
-  test("stale Wake-Up Calls resolve waiting children from the latest approved Attempt", () => {
-    const staleParent = taskRun({
-      attempt: 0,
-      id: "parent-attempt-0-stale",
-      nodeExecutionId: "parent-node-stale-wake",
+  test("stale Wake-Up Calls resolve waiting children from the latest approved Task", () => {
+    const staleParent = task({
+      id: "parent-stale-task",
+      nodeRunId: "parent-node-stale-wake",
       status: "APPROVED",
     });
-    const latestParent = taskRun({
-      attempt: 1,
-      id: "parent-attempt-1-latest",
-      nodeExecutionId: "parent-node-stale-wake",
+    const latestParent = task({
+      id: "parent-latest-approved-task",
+      nodeRunId: "parent-node-stale-wake",
       output: {
         assetId: "latest-parent-output",
         kind: "inline-text-asset",
@@ -249,105 +236,97 @@ describe("TaskRunGatekeeper", () => {
       },
       status: "APPROVED",
     });
-    const child = taskRun({
+    const child = task({
       id: "child-stale-wake-resolves-latest",
-      nodeExecutionId: "child-node-stale-wake",
+      nodeRunId: "child-node-stale-wake",
       status: "WAITING_UPSTREAM",
     });
 
-    const result = wakeUpTaskRunChildren(
+    const result = wakeUpTaskChildren(
       gatekeeperState({
         dependencies: [dependency(child, staleParent)],
-        taskRuns: [staleParent, latestParent, child],
+        tasks: [staleParent, latestParent, child],
       }),
-      { settledParentTaskRunId: staleParent.id },
+      { settledParentTaskId: staleParent.id },
     );
-    const queuedChild = requireTaskRun(result.state, child.id);
+    const queuedChild = requireTask(result.state, child.id);
 
     assert.equal(queuedChild.status, "QUEUED");
     assert.equal(
-      result.state.dependencies[0]?.resolvedParentTaskRunId,
+      result.state.dependencies[0]?.resolvedParentTaskId,
       latestParent.id,
     );
-    assert.deepEqual(queuedChild.inputSnapshot?.resolvedParentTaskRuns, [
+    assert.deepEqual(queuedChild.inputSnapshot?.resolvedParentTasks, [
       {
         address: {
-          parentItemIndex: 0,
+          parentBranchIndex: 0,
           parentNodeId: staleParent.nodeId,
           sourceHandle: null,
           targetHandle: null,
           targetNodeId: child.nodeId,
         },
-        attempt: 1,
-        itemIndex: 0,
-        nodeExecutionId: latestParent.nodeExecutionId,
+        branchIndex: 0,
+        nodeRunId: latestParent.nodeRunId,
         output: latestParent.output,
-        taskRunId: latestParent.id,
+        taskId: latestParent.id,
       },
     ]);
     assert.deepEqual(result.executionJobs, [
       {
-        attempt: 0,
-        id: "task-run~child-stale-wake-resolves-latest~attempt~0~execute",
+        id: "task~child-stale-wake-resolves-latest~execute",
         inputSnapshot: queuedChild.inputSnapshot,
-        taskRunId: child.id,
+        taskId: child.id,
       },
     ]);
   });
 
-  test("stale Wake-Up Calls cascade waiting children from the latest failed Attempt", () => {
-    const staleParent = taskRun({
-      attempt: 0,
-      id: "parent-attempt-0-before-failure",
-      nodeExecutionId: "parent-node-stale-failure",
+  test("stale Wake-Up Calls cascade waiting children from the latest failed Task", () => {
+    const staleParent = task({
+      id: "parent-stale-task-before-failure",
+      nodeRunId: "parent-node-stale-failure",
       status: "APPROVED",
     });
-    const latestParent = taskRun({
-      attempt: 1,
+    const latestParent = task({
       failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
-      id: "parent-attempt-1-failed",
-      nodeExecutionId: "parent-node-stale-failure",
+      id: "parent-latest-failed-task",
+      nodeRunId: "parent-node-stale-failure",
       status: "FAILED",
     });
-    const child = taskRun({
+    const child = task({
       id: "child-stale-wake-cascades-latest-failure",
-      nodeExecutionId: "child-node-stale-failure",
+      nodeRunId: "child-node-stale-failure",
       status: "WAITING_UPSTREAM",
     });
 
-    const result = wakeUpTaskRunChildren(
+    const result = wakeUpTaskChildren(
       gatekeeperState({
         dependencies: [dependency(child, staleParent)],
-        taskRuns: [staleParent, latestParent, child],
+        tasks: [staleParent, latestParent, child],
       }),
-      { settledParentTaskRunId: staleParent.id },
+      { settledParentTaskId: staleParent.id },
     );
 
-    assert.equal(
-      requireTaskRun(result.state, child.id).status,
-      "UPSTREAM_FAILED",
-    );
-    assert.deepEqual(requireTaskRun(result.state, child.id).failureReason, {
-      failedParentTaskRunId: latestParent.id,
+    assert.equal(requireTask(result.state, child.id).status, "UPSTREAM_FAILED");
+    assert.deepEqual(requireTask(result.state, child.id).failureReason, {
+      failedParentTaskId: latestParent.id,
       type: "UPSTREAM_FAILED",
     });
     assert.deepEqual(result.executionJobs, []);
     assert.deepEqual(result.taskStatusEvents, [
       {
-        attempt: 0,
         failureReason: "UPSTREAM_FAILED",
-        itemIndex: 0,
-        nodeExecutionId: child.nodeExecutionId,
+        branchIndex: 0,
+        nodeRunId: child.nodeRunId,
         status: "UPSTREAM_FAILED",
-        taskRunId: child.id,
+        taskId: child.id,
       },
     ]);
   });
 
   test("keeps non-waiting children immutable and makes duplicate wake-ups idempotent", () => {
-    const parent = taskRun({
+    const parent = task({
       id: "parent-task-run",
-      nodeExecutionId: "parent-node",
+      nodeRunId: "parent-node",
       status: "APPROVED",
     });
     const nonWaitingChildren = (
@@ -362,15 +341,15 @@ describe("TaskRunGatekeeper", () => {
         "UPSTREAM_FAILED",
       ] as const
     ).map((status) =>
-      taskRun({
+      task({
         id: `already-${status.toLowerCase()}-child`,
-        nodeExecutionId: `child-node-${status.toLowerCase()}`,
+        nodeRunId: `child-node-${status.toLowerCase()}`,
         status,
       }),
     );
-    const waitingChild = taskRun({
+    const waitingChild = task({
       id: "waiting-child",
-      nodeExecutionId: "waiting-child-node",
+      nodeRunId: "waiting-child-node",
       status: "WAITING_UPSTREAM",
     });
     const state = gatekeeperState({
@@ -378,43 +357,40 @@ describe("TaskRunGatekeeper", () => {
         ...nonWaitingChildren.map((child) => dependency(child, parent)),
         dependency(waitingChild, parent),
       ],
-      taskRuns: [parent, ...nonWaitingChildren, waitingChild],
+      tasks: [parent, ...nonWaitingChildren, waitingChild],
     });
 
-    const first = wakeUpTaskRunChildren(state, {
-      settledParentTaskRunId: parent.id,
+    const first = wakeUpTaskChildren(state, {
+      settledParentTaskId: parent.id,
     });
-    const second = wakeUpTaskRunChildren(first.state, {
-      settledParentTaskRunId: parent.id,
+    const second = wakeUpTaskChildren(first.state, {
+      settledParentTaskId: parent.id,
     });
 
     for (const child of nonWaitingChildren) {
-      assert.deepEqual(requireTaskRun(first.state, child.id), child);
+      assert.deepEqual(requireTask(first.state, child.id), child);
     }
     assert.equal(first.executionJobs.length, 1);
-    assert.equal(first.executionJobs[0]?.taskRunId, waitingChild.id);
+    assert.equal(first.executionJobs[0]?.taskId, waitingChild.id);
     assert.deepEqual(second.executionJobs, []);
     assert.deepEqual(second.taskStatusEvents, []);
-    assert.equal(
-      requireTaskRun(second.state, waitingChild.id).status,
-      "QUEUED",
-    );
+    assert.equal(requireTask(second.state, waitingChild.id).status, "QUEUED");
   });
 
   test("cascades direct Failed parents to waiting descendants", () => {
-    const rootParent = taskRun({
+    const rootParent = task({
       id: "root-parent",
-      nodeExecutionId: "root-node",
+      nodeRunId: "root-node",
       status: "RUNNING",
     });
-    const child = taskRun({
+    const child = task({
       id: "child-task-run",
-      nodeExecutionId: "child-node",
+      nodeRunId: "child-node",
       status: "WAITING_UPSTREAM",
     });
-    const grandchild = taskRun({
+    const grandchild = task({
       id: "grandchild-task-run",
-      nodeExecutionId: "grandchild-node",
+      nodeRunId: "grandchild-node",
       status: "WAITING_UPSTREAM",
     });
     const state = gatekeeperState({
@@ -422,25 +398,22 @@ describe("TaskRunGatekeeper", () => {
         dependency(child, rootParent),
         dependency(grandchild, child),
       ],
-      taskRuns: [rootParent, child, grandchild],
+      tasks: [rootParent, child, grandchild],
     });
 
-    const result = recordDirectTaskRunFailure(state, {
+    const result = recordDirectTaskFailure(state, {
       failureReason: { message: "provider timeout", type: "PROVIDER_FAILED" },
-      taskRunId: rootParent.id,
+      taskId: rootParent.id,
     });
 
-    assert.equal(requireTaskRun(result.state, rootParent.id).status, "FAILED");
-    assert.equal(
-      requireTaskRun(result.state, child.id).status,
-      "UPSTREAM_FAILED",
-    );
-    assert.deepEqual(requireTaskRun(result.state, child.id).failureReason, {
-      failedParentTaskRunId: rootParent.id,
+    assert.equal(requireTask(result.state, rootParent.id).status, "FAILED");
+    assert.equal(requireTask(result.state, child.id).status, "UPSTREAM_FAILED");
+    assert.deepEqual(requireTask(result.state, child.id).failureReason, {
+      failedParentTaskId: rootParent.id,
       type: "UPSTREAM_FAILED",
     });
     assert.equal(
-      requireTaskRun(result.state, grandchild.id).status,
+      requireTask(result.state, grandchild.id).status,
       "UPSTREAM_FAILED",
     );
     assert.deepEqual(result.executionJobs, []);
@@ -448,29 +421,29 @@ describe("TaskRunGatekeeper", () => {
       result.taskStatusEvents.map((event) => ({
         failureReason: event.failureReason,
         status: event.status,
-        taskRunId: event.taskRunId,
+        taskId: event.taskId,
       })),
       [
         {
           failureReason: "PROVIDER_FAILED",
           status: "FAILED",
-          taskRunId: rootParent.id,
+          taskId: rootParent.id,
         },
         {
           failureReason: "UPSTREAM_FAILED",
           status: "UPSTREAM_FAILED",
-          taskRunId: child.id,
+          taskId: child.id,
         },
         {
           failureReason: "UPSTREAM_FAILED",
           status: "UPSTREAM_FAILED",
-          taskRunId: grandchild.id,
+          taskId: grandchild.id,
         },
       ],
     );
   });
 
-  test("does not mutate terminal Task Runs when direct failure is recorded", () => {
+  test("does not mutate terminal Tasks when direct failure is recorded", () => {
     for (const status of [
       "APPROVED",
       "REJECTED",
@@ -478,23 +451,23 @@ describe("TaskRunGatekeeper", () => {
       "FAILED",
       "UPSTREAM_FAILED",
     ] as const) {
-      const terminalTaskRun = taskRun({
+      const terminalTask = task({
         failureReason:
           status === "FAILED" ? { type: "INSUFFICIENT_CREDITS" } : undefined,
         id: `${status.toLowerCase()}-task-run`,
-        nodeExecutionId: `${status.toLowerCase()}-node`,
+        nodeRunId: `${status.toLowerCase()}-node`,
         status,
       });
-      const state = gatekeeperState({ taskRuns: [terminalTaskRun] });
+      const state = gatekeeperState({ tasks: [terminalTask] });
 
-      const result = recordDirectTaskRunFailure(state, {
+      const result = recordDirectTaskFailure(state, {
         failureReason: { message: "provider timeout", type: "PROVIDER_FAILED" },
-        taskRunId: terminalTaskRun.id,
+        taskId: terminalTask.id,
       });
 
       assert.deepEqual(
-        requireTaskRun(result.state, terminalTaskRun.id),
-        terminalTaskRun,
+        requireTask(result.state, terminalTask.id),
+        terminalTask,
       );
       assert.deepEqual(result.executionJobs, []);
       assert.deepEqual(result.taskStatusEvents, []);
@@ -503,124 +476,120 @@ describe("TaskRunGatekeeper", () => {
 
   test("cascades Cancelled and Upstream Failed parent wake-ups to waiting children", () => {
     for (const status of ["CANCELLED", "UPSTREAM_FAILED"] as const) {
-      const parent = taskRun({
+      const parent = task({
         id: `${status.toLowerCase()}-parent`,
-        nodeExecutionId: `${status.toLowerCase()}-parent-node`,
+        nodeRunId: `${status.toLowerCase()}-parent-node`,
         status,
       });
-      const child = taskRun({
+      const child = task({
         id: `${status.toLowerCase()}-child`,
-        nodeExecutionId: `${status.toLowerCase()}-child-node`,
+        nodeRunId: `${status.toLowerCase()}-child-node`,
         status: "WAITING_UPSTREAM",
       });
       const state = gatekeeperState({
         dependencies: [dependency(child, parent)],
-        taskRuns: [parent, child],
+        tasks: [parent, child],
       });
 
-      const result = wakeUpTaskRunChildren(state, {
-        settledParentTaskRunId: parent.id,
+      const result = wakeUpTaskChildren(state, {
+        settledParentTaskId: parent.id,
       });
 
       assert.equal(
-        requireTaskRun(result.state, child.id).status,
+        requireTask(result.state, child.id).status,
         "UPSTREAM_FAILED",
       );
-      assert.deepEqual(requireTaskRun(result.state, child.id).failureReason, {
-        failedParentTaskRunId: parent.id,
+      assert.deepEqual(requireTask(result.state, child.id).failureReason, {
+        failedParentTaskId: parent.id,
         type: "UPSTREAM_FAILED",
       });
       assert.deepEqual(result.executionJobs, []);
       assert.deepEqual(result.taskStatusEvents, [
         {
-          attempt: 0,
           failureReason: "UPSTREAM_FAILED",
-          itemIndex: 0,
-          nodeExecutionId: child.nodeExecutionId,
+          branchIndex: 0,
+          nodeRunId: child.nodeRunId,
           status: "UPSTREAM_FAILED",
-          taskRunId: child.id,
+          taskId: child.id,
         },
       ]);
     }
   });
 
   test("queues a ready child without using future credit balance as a readiness check", () => {
-    const parent = taskRun({
+    const parent = task({
       id: "approved-parent",
-      nodeExecutionId: "parent-node",
+      nodeRunId: "parent-node",
       status: "APPROVED",
     });
-    const child = taskRun({
+    const child = task({
       creditCost: 50,
       id: "expensive-child",
-      nodeExecutionId: "child-node",
+      nodeRunId: "child-node",
       status: "WAITING_UPSTREAM",
     });
-    const grandchild = taskRun({
+    const grandchild = task({
       id: "grandchild-task-run",
-      nodeExecutionId: "grandchild-node",
+      nodeRunId: "grandchild-node",
       status: "WAITING_UPSTREAM",
     });
     const state = gatekeeperState({
       creditBalance: 10,
       dependencies: [dependency(child, parent), dependency(grandchild, child)],
-      taskRuns: [parent, child, grandchild],
+      tasks: [parent, child, grandchild],
     });
 
-    const result = wakeUpTaskRunChildren(state, {
-      settledParentTaskRunId: parent.id,
+    const result = wakeUpTaskChildren(state, {
+      settledParentTaskId: parent.id,
     });
 
-    assert.equal(requireTaskRun(result.state, child.id).status, "QUEUED");
-    assert.equal(requireTaskRun(result.state, child.id).creditCost, 50);
+    assert.equal(requireTask(result.state, child.id).status, "QUEUED");
+    assert.equal(requireTask(result.state, child.id).creditCost, 50);
     assert.equal(result.state.creditBalance, 10);
     assert.equal(
-      requireTaskRun(result.state, grandchild.id).status,
+      requireTask(result.state, grandchild.id).status,
       "WAITING_UPSTREAM",
     );
     assert.deepEqual(result.executionJobs, [
       {
-        attempt: 0,
-        id: "task-run~expensive-child~attempt~0~execute",
-        inputSnapshot: requireTaskRun(result.state, child.id).inputSnapshot,
-        taskRunId: child.id,
+        id: "task~expensive-child~execute",
+        inputSnapshot: requireTask(result.state, child.id).inputSnapshot,
+        taskId: child.id,
       },
     ]);
     assert.deepEqual(
       result.taskStatusEvents.map((event) => ({
         failureReason: event.failureReason,
         status: event.status,
-        taskRunId: event.taskRunId,
+        taskId: event.taskId,
       })),
       [
         {
           failureReason: undefined,
           status: "QUEUED",
-          taskRunId: child.id,
+          taskId: child.id,
         },
       ],
     );
   });
 });
 
-function taskRun(
-  overrides: Partial<TaskRunGatekeeperTaskRun> &
-    Pick<TaskRunGatekeeperTaskRun, "id" | "nodeExecutionId" | "status">,
-): TaskRunGatekeeperTaskRun {
+function task(
+  overrides: Partial<TaskGatekeeperTask> &
+    Pick<TaskGatekeeperTask, "id" | "nodeRunId" | "status">,
+): TaskGatekeeperTask {
   const targetNodeConfig = llmGeneratorNode(`node-${overrides.id}`);
   return {
-    attempt: 0,
     creditCost: 1,
-    inputSnapshot: buildTaskRunInputSnapshot({
-      attempt: 0,
-      itemIndex: 0,
-      nodeExecutionId: overrides.nodeExecutionId,
+    inputSnapshot: buildTaskInputSnapshot({
+      branchIndex: 0,
+      nodeRunId: overrides.nodeRunId,
       nodeId: targetNodeConfig.id,
-      resolvedParentTaskRuns: [],
+      resolvedParentTasks: [],
       targetNodeConfig,
-      taskRunId: overrides.id,
+      taskId: overrides.id,
     }),
-    itemIndex: 0,
+    branchIndex: 0,
     nodeId: `node-${overrides.id}`,
     targetNodeConfig,
     ...overrides,
@@ -637,37 +606,35 @@ function llmGeneratorNode(id: string) {
 }
 
 function dependency(
-  child: TaskRunGatekeeperTaskRun,
-  parent: TaskRunGatekeeperTaskRun,
-): TaskRunGatekeeperDependency {
+  child: TaskGatekeeperTask,
+  parent: TaskGatekeeperTask,
+): TaskGatekeeperDependency {
   return {
-    childTaskRunId: child.id,
-    requiredParentItemIndex: parent.itemIndex,
+    childTaskId: child.id,
+    requiredParentBranchIndex: parent.branchIndex,
     requiredParentNodeId: parent.nodeId,
-    requiredParentNodeExecutionId: parent.nodeExecutionId,
-    resolvedParentTaskRunId: null,
+    requiredParentNodeRunId: parent.nodeRunId,
+    resolvedParentTaskId: null,
     targetNodeId: child.nodeId,
   };
 }
 
 function gatekeeperState(
-  overrides: Partial<TaskRunGatekeeperState>,
-): TaskRunGatekeeperState {
+  overrides: Partial<TaskGatekeeperState>,
+): TaskGatekeeperState {
   return {
     creditBalance: 100,
     dependencies: [],
-    taskRuns: [],
+    tasks: [],
     ...overrides,
   };
 }
 
-function requireTaskRun(
-  state: TaskRunGatekeeperState,
-  taskRunId: string,
-): TaskRunGatekeeperTaskRun {
-  const taskRun = state.taskRuns.find(
-    (candidate) => candidate.id === taskRunId,
-  );
-  assert.ok(taskRun);
-  return taskRun;
+function requireTask(
+  state: TaskGatekeeperState,
+  taskId: string,
+): TaskGatekeeperTask {
+  const task = state.tasks.find((candidate) => candidate.id === taskId);
+  assert.ok(task);
+  return task;
 }

@@ -505,7 +505,7 @@ function LlmEstimatePanel({ nodeId }: { nodeId: string }) {
     <NodeFieldCard label="Estimated cost">
       <p className="text-sm">
         {priceQuote
-          ? `${priceQuote.isEstimate ? "~" : ""}${formatCredits(priceQuote.creditCostPerSlot)} per Task Run slot`
+          ? `${priceQuote.isEstimate ? "~" : ""}${formatCredits(priceQuote.creditCostPerSlot)} per Task slot`
           : "Unavailable"}
       </p>
     </NodeFieldCard>

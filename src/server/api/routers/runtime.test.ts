@@ -8,11 +8,11 @@ describe("runtimeRouter adapter outcome mapping", () => {
     assert.deepEqual(
       toRuntimeTransportOutcome({
         status: "committed",
-        value: { taskRunId: "task-run-1" },
+        value: { taskId: "task-run-1" },
       }),
       {
         status: "committed",
-        value: { taskRunId: "task-run-1" },
+        value: { taskId: "task-run-1" },
       },
     );
   });
@@ -22,16 +22,16 @@ describe("runtimeRouter adapter outcome mapping", () => {
       status: "committed",
       value: {
         decided: true,
-        event: { type: "task-run-status-changed" },
-        executionJob: { jobId: "execution-job-1", taskRunId: "task-run-2" },
+        event: { type: "task-status-changed" },
+        executionJob: { jobId: "execution-job-1", taskId: "task-run-2" },
         executionJobs: [{ jobId: "execution-job-2" }],
         nested: {
-          taskRunId: "task-run-1",
-          taskStatusEvents: [{ type: "task-run-status-changed" }],
+          taskId: "task-run-1",
+          taskStatusEvents: [{ type: "task-status-changed" }],
           wakeUpJob: { jobId: "wake-up-job-1" },
           wakeUpJobs: [{ jobId: "wake-up-job-2" }],
         },
-        taskStatusEvents: [{ type: "task-run-status-changed" }],
+        taskStatusEvents: [{ type: "task-status-changed" }],
       },
     });
 
@@ -39,7 +39,7 @@ describe("runtimeRouter adapter outcome mapping", () => {
       status: "committed",
       value: {
         decided: true,
-        nested: { taskRunId: "task-run-1" },
+        nested: { taskId: "task-run-1" },
       },
     });
     assertNoPostCommitTransportKeys(outcome);
@@ -50,7 +50,7 @@ describe("runtimeRouter adapter outcome mapping", () => {
       status: "committed",
       value: {
         executionJobs: [{ jobId: "execution-job-1" }],
-        taskStatusEvents: [{ type: "task-run-status-changed" }],
+        taskStatusEvents: [{ type: "task-status-changed" }],
         wakeUpJobs: [{ jobId: "wake-up-job-1" }],
       },
     });

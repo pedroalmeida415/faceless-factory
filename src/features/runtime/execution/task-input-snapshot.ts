@@ -2,14 +2,14 @@ import {
   isProviderDependencyAddress,
   type ProviderDependencyAddress,
 } from "~/features/runtime/domain/provider-dependency-address";
-import { buildTaskRunIdempotencyKey } from "~/features/runtime/domain/task-run-state";
+import { buildTaskIdempotencyKey } from "~/features/runtime/domain/task-state";
 import type { RenderableTaskOutput } from "~/features/runtime/events/task-status-events";
 import {
-  type RenderedTaskRunProviderInput,
-  renderTaskRunProviderInput,
-  type TaskRunProviderInput,
+  type RenderedTaskProviderInput,
+  renderTaskProviderInput,
+  type TaskProviderInput,
 } from "~/features/runtime/execution/provider-input-rendering";
-import type { MaterializedProviderInputFacts } from "~/features/runtime/materialization/task-run-input-materialization";
+import type { MaterializedProviderInputFacts } from "~/features/runtime/materialization/task-input-materialization";
 import {
   WORKFLOW_DOCUMENT_VERSION,
   type WorkflowDefinitionDocumentNode,
@@ -17,105 +17,99 @@ import {
 } from "~/features/workflow/document";
 import type { WorkflowAsset } from "~/features/workflow/types";
 
-export type { RenderedTaskRunProviderInput, TaskRunProviderInput };
+export type { RenderedTaskProviderInput, TaskProviderInput };
 
-export type ResolvedParentTaskRunInputSnapshot = {
-  readonly taskRunId: string;
-  readonly nodeExecutionId: string;
-  readonly itemIndex: number;
-  readonly attempt: number;
+export type ResolvedParentTaskInputSnapshot = {
+  readonly taskId: string;
+  readonly nodeRunId: string;
+  readonly branchIndex: number;
   readonly address: ProviderDependencyAddress;
   readonly asset?: WorkflowAsset;
   readonly output?: RenderableTaskOutput;
 };
 
-export type TaskRunInputSnapshot = {
-  readonly kind: "task-run-input-snapshot";
+export type TaskInputSnapshot = {
+  readonly kind: "task-input-snapshot";
   readonly version: 1;
   readonly documentRevision: number | null;
-  readonly taskRunId: string;
-  readonly nodeExecutionId: string;
+  readonly taskId: string;
+  readonly nodeRunId: string;
   readonly nodeId: string;
-  readonly itemIndex: number;
-  readonly attempt: number;
+  readonly branchIndex: number;
   readonly idempotencyKey: string;
   readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
   readonly workflowDefinition: WorkflowDefinitionGraphDocument;
-  readonly resolvedParentTaskRuns: readonly ResolvedParentTaskRunInputSnapshot[];
-  readonly providerInput: TaskRunProviderInput;
+  readonly resolvedParentTasks: readonly ResolvedParentTaskInputSnapshot[];
+  readonly providerInput: TaskProviderInput;
 };
 
-export type ExecutableTaskRunInputSnapshot = TaskRunInputSnapshot & {
-  readonly providerInput: RenderedTaskRunProviderInput;
+export type ExecutableTaskInputSnapshot = TaskInputSnapshot & {
+  readonly providerInput: RenderedTaskProviderInput;
 };
 
-export function buildTaskRunInputSnapshot(input: {
-  readonly taskRunId: string;
-  readonly nodeExecutionId: string;
+export function buildTaskInputSnapshot(input: {
+  readonly taskId: string;
+  readonly nodeRunId: string;
   readonly nodeId: string;
-  readonly itemIndex: number;
-  readonly attempt: number;
+  readonly branchIndex: number;
   readonly documentRevision?: number | null;
   readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
   readonly workflowDefinition?: WorkflowDefinitionGraphDocument;
-  readonly resolvedParentTaskRuns: readonly ResolvedParentTaskRunInputSnapshot[];
+  readonly resolvedParentTasks: readonly ResolvedParentTaskInputSnapshot[];
   readonly materializedInputFacts?: MaterializedProviderInputFacts;
-}): TaskRunInputSnapshot {
-  const idempotencyKey = buildTaskRunIdempotencyKey({
-    attempt: input.attempt,
-    taskRunId: input.taskRunId,
+}): TaskInputSnapshot {
+  const idempotencyKey = buildTaskIdempotencyKey({
+    taskId: input.taskId,
   });
   const targetNodeConfig = structuredClone(input.targetNodeConfig);
   const workflowDefinition =
     input.workflowDefinition !== undefined
       ? structuredClone(input.workflowDefinition)
       : workflowDefinitionFromTarget(targetNodeConfig);
-  const resolvedParentTaskRuns = structuredClone(input.resolvedParentTaskRuns);
+  const resolvedParentTasks = structuredClone(input.resolvedParentTasks);
 
   return {
-    attempt: input.attempt,
     documentRevision: input.documentRevision ?? null,
     idempotencyKey,
-    itemIndex: input.itemIndex,
-    kind: "task-run-input-snapshot",
-    nodeExecutionId: input.nodeExecutionId,
+    branchIndex: input.branchIndex,
+    kind: "task-input-snapshot",
+    nodeRunId: input.nodeRunId,
     nodeId: input.nodeId,
-    providerInput: renderTaskRunProviderInput({
+    providerInput: renderTaskProviderInput({
       idempotencyKey,
-      itemIndex: input.itemIndex,
+      branchIndex: input.branchIndex,
       materializedInputFacts: input.materializedInputFacts,
-      resolvedParentTaskRuns,
+      resolvedParentTasks,
       targetNodeConfig,
       workflowDefinition,
     }).providerInput,
-    resolvedParentTaskRuns,
+    resolvedParentTasks,
     targetNodeConfig,
-    taskRunId: input.taskRunId,
+    taskId: input.taskId,
     version: 1,
     workflowDefinition,
   };
 }
 
-export function isTaskRunInputSnapshot(
+export function isTaskInputSnapshot(
   value: unknown,
-): value is TaskRunInputSnapshot {
+): value is TaskInputSnapshot {
   return (
     isRecord(value) &&
-    value.kind === "task-run-input-snapshot" &&
+    value.kind === "task-input-snapshot" &&
     value.version === 1 &&
     (value.documentRevision === null ||
       typeof value.documentRevision === "number") &&
     typeof value.idempotencyKey === "string" &&
-    typeof value.taskRunId === "string" &&
-    typeof value.nodeExecutionId === "string" &&
+    typeof value.taskId === "string" &&
+    typeof value.nodeRunId === "string" &&
     typeof value.nodeId === "string" &&
-    typeof value.itemIndex === "number" &&
-    typeof value.attempt === "number" &&
+    typeof value.branchIndex === "number" &&
     isWorkflowDefinitionDocumentNode(value.targetNodeConfig) &&
     isWorkflowDefinitionGraphDocument(value.workflowDefinition) &&
-    Array.isArray(value.resolvedParentTaskRuns) &&
-    value.resolvedParentTaskRuns.every(isResolvedParentTaskRunInputSnapshot) &&
-    isTaskRunProviderInput(value.providerInput)
+    Array.isArray(value.resolvedParentTasks) &&
+    value.resolvedParentTasks.every(isResolvedParentTaskInputSnapshot) &&
+    isTaskProviderInput(value.providerInput)
   );
 }
 
@@ -141,13 +135,12 @@ function isWorkflowDefinitionGraphDocument(
   );
 }
 
-function isResolvedParentTaskRunInputSnapshot(value: unknown): boolean {
+function isResolvedParentTaskInputSnapshot(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.taskRunId === "string" &&
-    typeof value.nodeExecutionId === "string" &&
-    typeof value.itemIndex === "number" &&
-    typeof value.attempt === "number" &&
+    typeof value.taskId === "string" &&
+    typeof value.nodeRunId === "string" &&
+    typeof value.branchIndex === "number" &&
     isProviderDependencyAddress(value.address) &&
     (value.output === undefined || isRenderableTaskOutput(value.output)) &&
     (value.asset === undefined || isWorkflowAsset(value.asset))
@@ -173,7 +166,7 @@ function isWorkflowAsset(value: unknown): boolean {
   );
 }
 
-function isTaskRunProviderInput(value: unknown): boolean {
+function isTaskProviderInput(value: unknown): boolean {
   if (!isRecord(value) || typeof value.kind !== "string") {
     return false;
   }

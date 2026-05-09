@@ -5,9 +5,41 @@ import { join, relative } from "node:path";
 
 const rawDatabaseImport =
   /import\s+\{[^}]*\bdb\b[^}]*\}\s+from\s+["']~\/server\/services\/database["']/;
+const testLiveDatabasePatterns = [
+  {
+    name: "ServerRuntime",
+    pattern:
+      /import\s+\{[^}]*\bServerRuntime\b[^}]*\}\s+from\s+["']~\/server\/effect["']/,
+  },
+  {
+    name: "DatabaseServiceLive",
+    pattern:
+      /import\s+\{[^}]*\bDatabaseServiceLive\b[^}]*\}\s+from\s+["']~\/server\/services\/database["']/,
+  },
+  {
+    name: "raw db",
+    pattern: rawDatabaseImport,
+  },
+  {
+    name: "DATABASE_URL",
+    pattern: /\bDATABASE_URL\b|\benv\.DATABASE_URL\b/,
+  },
+  {
+    name: "direct postgres client",
+    pattern: /\bpostgres\(|\bdrizzlePostgres\b|\bPgClient\.layer\b/,
+  },
+  {
+    name: "Live layer",
+    pattern: /\.Live\b|\b[A-Za-z0-9]+Live\b/,
+  },
+];
 
 const allowedRawDatabaseImportFiles = new Set([
   "src/features/auth/server/config.ts",
+]);
+const allowedLiveDatabasePatternTestFiles = new Set([
+  "src/server/services/database-import-guard.test.ts",
+  "src/server/services/database.test.ts",
 ]);
 
 describe("database service import guard", () => {
@@ -23,6 +55,30 @@ describe("database service import guard", () => {
 
       if (rawDatabaseImport.test(await readFile(filePath, "utf8"))) {
         offenders.push(projectPath);
+      }
+    }
+
+    assert.deepEqual(offenders, []);
+  });
+
+  test("keeps tests on PGlite-backed database layers", async () => {
+    const root = process.cwd();
+    const offenders: string[] = [];
+
+    for (const filePath of await listTypeScriptFiles(join(root, "src"))) {
+      const projectPath = relative(root, filePath);
+      if (!projectPath.endsWith(".test.ts")) {
+        continue;
+      }
+      if (allowedLiveDatabasePatternTestFiles.has(projectPath)) {
+        continue;
+      }
+
+      const content = await readFile(filePath, "utf8");
+      for (const { name, pattern } of testLiveDatabasePatterns) {
+        if (pattern.test(content)) {
+          offenders.push(`${projectPath}: ${name}`);
+        }
       }
     }
 

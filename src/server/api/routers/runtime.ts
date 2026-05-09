@@ -14,7 +14,7 @@ import {
   type RuntimeCommandsService,
 } from "~/features/runtime/server/commands";
 import { getPlanningStateForWorkflow } from "~/features/runtime/server/planning-state-repository";
-import { getTaskRunProjectionForWorkflow } from "~/features/runtime/server/task-projection-repository";
+import { getTaskProjectionForWorkflow } from "~/features/runtime/server/task-projection-repository";
 import {
   parseTaskStatusEventPayloadEffect,
   workflowEventChannel,
@@ -25,29 +25,28 @@ import {
   getWorkflowProject,
 } from "~/features/workflow/server/projects";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
-import { taskRuns, user } from "~/server/database/schema";
+import { tasks, user } from "~/server/database/schema";
 import { ServerRuntime } from "~/server/effect";
 import { createRedisSubscriber } from "~/server/redis";
 import { DatabaseService } from "~/server/services/database";
 
-const runTaskSlotTargetSchema = z.object({
-  itemIndex: z.number().int().nonnegative(),
-  nodeExecutionId: z.string().min(1),
-  type: z.literal("task-slot"),
+const runTaskTargetSchema = z.object({
+  branchIndex: z.number().int().nonnegative(),
+  nodeRunId: z.string().min(1),
+  type: z.literal("task"),
 });
 
 const runInputSchema = z.object({
   projectId: z.string().min(1),
   target: z.discriminatedUnion("type", [
     z.object({ nodeId: z.string().min(1), type: z.literal("node") }),
-    runTaskSlotTargetSchema,
+    runTaskTargetSchema,
   ]),
 });
 
-const taskRunDecisionInputSchema = z.object({
-  attempt: z.number().int().nonnegative(),
+const taskDecisionInputSchema = z.object({
   projectId: z.string().min(1),
-  taskRunId: z.string().min(1),
+  taskId: z.string().min(1),
 });
 
 const taskEventsInputSchema = z.object({
@@ -90,9 +89,9 @@ export const runtimeRouter = createTRPCRouter({
           input.target.type === "node"
             ? { nodeId: input.target.nodeId, type: "run-node" }
             : {
-                itemIndex: input.target.itemIndex,
-                nodeExecutionId: input.target.nodeExecutionId,
-                type: "run-task-slot",
+                branchIndex: input.target.branchIndex,
+                nodeRunId: input.target.nodeRunId,
+                type: "run-task",
               },
         document: project.document,
         ownerId: ownerUserId,
@@ -143,9 +142,9 @@ export const runtimeRouter = createTRPCRouter({
             input.target.type === "node"
               ? { nodeId: input.target.nodeId, type: "run-node" }
               : {
-                  itemIndex: input.target.itemIndex,
-                  nodeExecutionId: input.target.nodeExecutionId,
-                  type: "run-task-slot",
+                  branchIndex: input.target.branchIndex,
+                  nodeRunId: input.target.nodeRunId,
+                  type: "run-task",
                 },
           document: project.document,
           ownerId: ownerUserId,
@@ -156,22 +155,22 @@ export const runtimeRouter = createTRPCRouter({
       return unwrapRuntimeOutcome(result);
     }),
 
-  approveTaskRun: protectedProcedure
-    .input(taskRunDecisionInputSchema)
+  approveTask: protectedProcedure
+    .input(taskDecisionInputSchema)
     .mutation(async ({ ctx, input }) =>
-      decideTaskRun(ctx.session.user.id, input, "approve"),
+      decideTask(ctx.session.user.id, input, "approve"),
     ),
 
-  rejectTaskRun: protectedProcedure
-    .input(taskRunDecisionInputSchema)
+  rejectTask: protectedProcedure
+    .input(taskDecisionInputSchema)
     .mutation(async ({ ctx, input }) =>
-      decideTaskRun(ctx.session.user.id, input, "reject"),
+      decideTask(ctx.session.user.id, input, "reject"),
     ),
 
-  cancelTaskRun: protectedProcedure
-    .input(taskRunDecisionInputSchema)
+  cancelTask: protectedProcedure
+    .input(taskDecisionInputSchema)
     .mutation(async ({ ctx, input }) =>
-      decideTaskRun(ctx.session.user.id, input, "cancel"),
+      decideTask(ctx.session.user.id, input, "cancel"),
     ),
 
   taskEvents: protectedProcedure
@@ -240,7 +239,7 @@ export const runtimeRouter = createTRPCRouter({
       ).catch(throwTRPCError);
 
       return ServerRuntime.runPromise(
-        getTaskRunProjectionForWorkflow({
+        getTaskProjectionForWorkflow({
           ownerUserId,
           workflowId: input.projectId,
         }),
@@ -248,9 +247,9 @@ export const runtimeRouter = createTRPCRouter({
     }),
 });
 
-async function decideTaskRun(
+async function decideTask(
   ownerUserId: string,
-  input: z.infer<typeof taskRunDecisionInputSchema>,
+  input: z.infer<typeof taskDecisionInputSchema>,
   decision: "approve" | "cancel" | "reject",
 ) {
   await ServerRuntime.runPromise(
@@ -260,42 +259,39 @@ async function decideTaskRun(
     }),
   ).catch(throwTRPCError);
   await ServerRuntime.runPromise(
-    assertTaskRunBelongsToProject({
-      attempt: input.attempt,
+    assertTaskBelongsToProject({
       ownerUserId,
-      taskRunId: input.taskRunId,
+      taskId: input.taskId,
       workflowId: input.projectId,
     }),
   ).catch(throwTRPCError);
 
   const command = {
-    attempt: input.attempt,
     ownerUserId,
-    taskRunId: input.taskRunId,
+    taskId: input.taskId,
     workflowId: input.projectId,
   };
 
   if (decision === "approve") {
     return unwrapRuntimeOutcome(
-      await runRuntimeCommand((commands) => commands.approveTaskRun(command)),
+      await runRuntimeCommand((commands) => commands.approveTask(command)),
     );
   }
 
   if (decision === "cancel") {
     return unwrapRuntimeOutcome(
-      await runRuntimeCommand((commands) => commands.cancelTaskRun(command)),
+      await runRuntimeCommand((commands) => commands.cancelTask(command)),
     );
   }
 
   return unwrapRuntimeOutcome(
-    await runRuntimeCommand((commands) => commands.rejectTaskRun(command)),
+    await runRuntimeCommand((commands) => commands.rejectTask(command)),
   );
 }
 
-function assertTaskRunBelongsToProject(input: {
-  readonly attempt: number;
+function assertTaskBelongsToProject(input: {
   readonly ownerUserId: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 }) {
   return Effect.gen(function* () {
@@ -304,14 +300,13 @@ function assertTaskRunBelongsToProject(input: {
       Effect.gen(function* () {
         const db = yield* PgDrizzle.PgDrizzle;
         return yield* db
-          .select({ id: taskRuns.id })
-          .from(taskRuns)
+          .select({ id: tasks.id })
+          .from(tasks)
           .where(
             and(
-              eq(taskRuns.id, input.taskRunId),
-              eq(taskRuns.ownerUserId, input.ownerUserId),
-              eq(taskRuns.workflowId, input.workflowId),
-              eq(taskRuns.attempt, input.attempt),
+              eq(tasks.id, input.taskId),
+              eq(tasks.ownerUserId, input.ownerUserId),
+              eq(tasks.workflowId, input.workflowId),
             ),
           )
           .limit(1);
@@ -322,10 +317,12 @@ function assertTaskRunBelongsToProject(input: {
       return yield* Effect.fail(
         new TRPCError({
           code: "NOT_FOUND",
-          message: "Task Run was not found for this workflow.",
+          message: "Task was not found for this workflow.",
         }),
       );
     }
+
+    return rows[0];
   });
 }
 
@@ -350,7 +347,7 @@ function commandErrorToTRPCError(error: RuntimeCommandError) {
     return new TRPCError({ code: "BAD_REQUEST", message: error.message });
   }
 
-  if (error._tag === "TaskRunCancellationBlockedError") {
+  if (error._tag === "TaskCancellationBlockedError") {
     return new TRPCError({
       code: "BAD_REQUEST",
       message: error.message,

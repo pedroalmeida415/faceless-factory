@@ -2,9 +2,9 @@ import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
 
 import {
-  taskRunFailureReasonTypeValues,
-  taskRunStatusValues,
-} from "~/features/runtime/domain/task-run-state";
+  taskFailureReasonTypeValues,
+  taskStatusValues,
+} from "~/features/runtime/domain/task-state";
 import {
   buildExecutionJobId,
   buildOrchestratorEventId,
@@ -18,69 +18,64 @@ import {
 } from "~/features/runtime/events/task-status-events";
 
 describe("runtime Task Status Event contracts", () => {
-  test("uses canonical Task Run statuses and failure reason types", () => {
-    assert.equal(taskStatusEventStatusValues, taskRunStatusValues);
+  test("uses canonical Task statuses and failure reason types", () => {
+    assert.equal(taskStatusEventStatusValues, taskStatusValues);
     assert.equal(
       taskStatusEventFailureReasonValues,
-      taskRunFailureReasonTypeValues,
+      taskFailureReasonTypeValues,
     );
 
-    for (const status of taskRunStatusValues) {
+    for (const status of taskStatusValues) {
       const event = buildTaskStatusEvent({
-        attempt: 0,
-        itemIndex: 0,
-        nodeExecutionId: "node-execution-status-contract",
+        branchIndex: 0,
+        nodeRunId: "node-execution-status-contract",
         status,
-        taskRunId: `task-run-${status.toLowerCase()}`,
+        taskId: `task-run-${status.toLowerCase()}`,
       });
 
       assert.equal(event.status, status);
     }
   });
 
-  test("builds deterministic queue job identities from concrete Task Run attempts", () => {
+  test("builds deterministic queue job identities from concrete Tasks", () => {
     assert.equal(
-      buildExecutionJobId({ attempt: 2, taskRunId: "task-run-123" }),
-      "task-run~task-run-123~attempt~2~execute",
+      buildExecutionJobId({ taskId: "task-run-123" }),
+      "task~task-run-123~execute",
     );
     assert.equal(
-      buildWakeUpJobId({ parentTaskRunId: "parent-456" }),
+      buildWakeUpJobId({ parentTaskId: "parent-456" }),
       "wake-up~parent-456",
     );
   });
 
-  test("builds deterministic orchestrator event ids scoped to Task Run attempt", () => {
+  test("builds deterministic orchestrator event ids scoped to Task", () => {
     assert.equal(
       buildOrchestratorEventId({
-        attempt: 3,
         kind: "completion",
-        taskRunId: "task-run-789",
+        taskId: "task-run-789",
       }),
-      "task-run~task-run-789~attempt~3~orchestrator~completion",
+      "task~task-run-789~orchestrator~completion",
     );
     assert.equal(
       buildOrchestratorEventId({
-        attempt: 3,
         kind: "failure",
-        taskRunId: "task-run-789",
+        taskId: "task-run-789",
       }),
-      "task-run~task-run-789~attempt~3~orchestrator~failure",
+      "task~task-run-789~orchestrator~failure",
     );
     assert.equal(
       buildOrchestratorEventId({
-        attempt: 3,
         kind: "review",
-        taskRunId: "task-run-789",
+        taskId: "task-run-789",
       }),
-      "task-run~task-run-789~attempt~3~orchestrator~review",
+      "task~task-run-789~orchestrator~review",
     );
   });
 
   test("creates and validates Task Status Events with CDN asset output", () => {
     const event = buildTaskStatusEvent({
-      attempt: 1,
-      itemIndex: 0,
-      nodeExecutionId: "node-execution-1",
+      branchIndex: 0,
+      nodeRunId: "node-execution-1",
       output: {
         assetId: "asset-1",
         cdnUrl: "https://cdn.example.com/workflow/asset-1.png",
@@ -88,7 +83,7 @@ describe("runtime Task Status Event contracts", () => {
         kind: "cdn-asset",
       },
       status: "PENDING_REVIEW",
-      taskRunId: "task-run-1",
+      taskId: "task-run-1",
     });
 
     assert.deepEqual(TaskStatusEventSchema.parse(event), event);
@@ -97,9 +92,8 @@ describe("runtime Task Status Event contracts", () => {
 
   test("accepts app-relative renderable asset URLs", () => {
     const event = buildTaskStatusEvent({
-      attempt: 1,
-      itemIndex: 0,
-      nodeExecutionId: "node-execution-1",
+      branchIndex: 0,
+      nodeRunId: "node-execution-1",
       output: {
         assetId: "asset-1",
         cdnUrl: "/api/assets/asset-1",
@@ -107,7 +101,7 @@ describe("runtime Task Status Event contracts", () => {
         kind: "cdn-asset",
       },
       status: "APPROVED",
-      taskRunId: "task-run-1",
+      taskId: "task-run-1",
     });
 
     assert.deepEqual(TaskStatusEventSchema.parse(event), event);
@@ -115,49 +109,48 @@ describe("runtime Task Status Event contracts", () => {
 
   test("creates and validates Task Status Events with inline text output and failure reasons", () => {
     const approved = buildTaskStatusEvent({
-      attempt: 2,
-      itemIndex: 4,
-      nodeExecutionId: "node-execution-2",
+      branchIndex: 4,
+      nodeRunId: "node-execution-2",
       output: {
         assetId: "asset-text-1",
         kind: "inline-text-asset",
         text: "Generated caption",
       },
       status: "APPROVED",
-      taskRunId: "task-run-2",
+      taskId: "task-run-2",
     });
     const failed = buildTaskStatusEvent({
-      attempt: 2,
       failureReason: "INSUFFICIENT_CREDITS",
-      itemIndex: 4,
-      nodeExecutionId: "node-execution-2",
+      branchIndex: 4,
+      nodeRunId: "node-execution-2",
       status: "FAILED",
-      taskRunId: "task-run-2",
+      taskId: "task-run-2",
     });
 
     assert.deepEqual(TaskStatusEventSchema.parse(approved), approved);
     assert.deepEqual(TaskStatusEventSchema.parse(failed), failed);
   });
 
-  test("guards rendered item indexes from stale lower-attempt events", () => {
+  test("guards rendered branch indexes from stale events", () => {
     const event = {
-      attempt: 2,
-      itemIndex: 0,
-      nodeExecutionId: "node-execution-1",
+      branchIndex: 0,
+      nodeRunId: "node-execution-1",
       status: "RUNNING",
-      taskRunId: "task-run-1",
+      taskId: "task-run-1",
     } satisfies TaskStatusEvent;
 
     assert.equal(
-      shouldApplyTaskStatusEvent({ currentRenderedAttempt: 1, event }),
+      shouldApplyTaskStatusEvent({
+        currentRenderedTaskId: "task-run-0",
+        event,
+      }),
       true,
     );
     assert.equal(
-      shouldApplyTaskStatusEvent({ currentRenderedAttempt: 2, event }),
-      true,
-    );
-    assert.equal(
-      shouldApplyTaskStatusEvent({ currentRenderedAttempt: 3, event }),
+      shouldApplyTaskStatusEvent({
+        currentRenderedTaskId: "task-run-1",
+        event,
+      }),
       false,
     );
   });

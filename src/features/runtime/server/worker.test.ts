@@ -26,7 +26,7 @@ describe("RuntimeWorker", () => {
     assert.deepEqual(orchestrator.wakeUps, [
       {
         ownerUserId: "owner-1",
-        settledParentTaskRunId: "parent-task-run-1",
+        settledParentTaskId: "parent-task-run-1",
         workflowId: "workflow-1",
       },
     ]);
@@ -65,17 +65,17 @@ describe("RuntimeWorker", () => {
       completionOutcome: {
         status: "committed" as const,
         value: {
-          event: { type: "task-run-status-changed" },
+          event: { type: "task-status-changed" },
           executionJob: { jobId: "execution-job-1" },
           executionJobs: [{ jobId: "execution-job-2" }],
           nested: {
-            settledTaskRunId: "task-run-1",
-            taskStatusEvents: [{ type: "task-run-status-changed" }],
+            settledTaskId: "task-run-1",
+            taskStatusEvents: [{ type: "task-status-changed" }],
             wakeUpJob: { jobId: "wake-up-job-1" },
             wakeUpJobs: [{ jobId: "wake-up-job-2" }],
           },
           settled: true as const,
-          taskStatusEvents: [{ type: "task-run-status-changed" }],
+          taskStatusEvents: [{ type: "task-status-changed" }],
         },
       },
     });
@@ -91,7 +91,7 @@ describe("RuntimeWorker", () => {
     assert.deepEqual(outcome, {
       status: "committed",
       value: {
-        nested: { settledTaskRunId: "task-run-1" },
+        nested: { settledTaskId: "task-run-1" },
         settled: true,
       },
     });
@@ -103,8 +103,8 @@ describe("RuntimeWorker", () => {
       status: "committed" as const,
       value: {
         settlement: {
-          jobId: "task-run~task-run-1~attempt~0~orchestrator~completion",
-          taskRunId: "task-run-1",
+          jobId: "task~task-run-1~orchestrator~completion",
+          taskId: "task-run-1",
         },
       },
     };
@@ -188,21 +188,19 @@ function assertNoPostCommitTransportKeys(value: unknown) {
   }
 }
 
-function executionJob(taskRunId = "task-run-1", attempt = 0) {
+function executionJob(taskId = "task-run-1", branchIndex = 0) {
   return {
-    attempt,
-    itemIndex: attempt,
-    jobId: `task-run~${taskRunId}~attempt~${attempt}~execute`,
-    nodeExecutionId: `node-execution-${attempt}`,
+    branchIndex,
+    jobId: `task~${taskId}~execute`,
+    nodeRunId: `node-execution-${branchIndex}`,
     ownerUserId: "owner-1",
-    taskRunId,
+    taskId,
     workflowId: "workflow-1",
   };
 }
 
 function completionJob() {
   return {
-    attempt: 0,
     providerCostCredits: 2,
     generatedAsset: {
       assetId: "asset-1",
@@ -213,28 +211,27 @@ function completionJob() {
       storageProvider: "inline",
       text: "hello",
     },
-    jobId: "task-run~task-run-1~attempt~0~orchestrator~completion",
+    jobId: "task~task-run-1~orchestrator~completion",
     ownerUserId: "owner-1",
     reviewRequired: false,
-    taskRunId: "task-run-1",
+    taskId: "task-run-1",
     workflowId: "workflow-1",
   };
 }
 
 function failureJob() {
   return {
-    attempt: 0,
     failureReason: {
       message: "provider failed",
       type: "PROVIDER_FAILED" as const,
     },
     failureSource: {
-      taskRunDebitRefundable: false,
+      taskDebitRefundable: false,
       type: "PROVIDER" as const,
     },
-    jobId: "task-run~task-run-1~attempt~0~orchestrator~failure",
+    jobId: "task~task-run-1~orchestrator~failure",
     ownerUserId: "owner-1",
-    taskRunId: "task-run-1",
+    taskId: "task-run-1",
     workflowId: "workflow-1",
   };
 }
@@ -243,7 +240,7 @@ function wakeUpJob() {
   return {
     jobId: "wake-up~parent-task-run-1",
     ownerUserId: "owner-1",
-    parentTaskRunId: "parent-task-run-1",
+    parentTaskId: "parent-task-run-1",
     workflowId: "workflow-1",
   };
 }

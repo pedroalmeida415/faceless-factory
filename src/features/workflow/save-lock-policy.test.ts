@@ -7,7 +7,7 @@ import {
   type WorkflowDocument,
 } from "~/features/workflow/document";
 import { WorkflowValidationError } from "~/features/workflow/errors";
-import { assertActiveTaskRunSaveAllowed } from "~/features/workflow/save-lock-policy";
+import { assertActiveTaskSaveAllowed } from "~/features/workflow/save-lock-policy";
 
 function imageGeneratorNode(id: string) {
   const node = createWorkflowNode("imageGenerator", 0, { x: 0, y: 0 });
@@ -28,7 +28,7 @@ function documentWithActiveGenerator(): WorkflowDocument {
   };
 }
 
-describe("active Task Run save-lock policy", () => {
+describe("active Task save-lock policy", () => {
   test("allows non-semantic node position edits in the active materialization slice", () => {
     const currentDocument = documentWithActiveGenerator();
     const nextDocument = {
@@ -40,7 +40,7 @@ describe("active Task Run save-lock policy", () => {
     };
 
     assert.doesNotThrow(() =>
-      assertActiveTaskRunSaveAllowed({
+      assertActiveTaskSaveAllowed({
         activeTargetNodeIds: ["generator-active"],
         currentDocument,
         nextDocument,
@@ -64,7 +64,7 @@ describe("active Task Run save-lock policy", () => {
     } as WorkflowDocument;
 
     assert.doesNotThrow(() =>
-      assertActiveTaskRunSaveAllowed({
+      assertActiveTaskSaveAllowed({
         activeTargetNodeIds: ["generator-active"],
         currentDocument,
         nextDocument,
@@ -84,7 +84,7 @@ describe("active Task Run save-lock policy", () => {
 
     assert.throws(
       () =>
-        assertActiveTaskRunSaveAllowed({
+        assertActiveTaskSaveAllowed({
           activeTargetNodeIds: ["generator-active"],
           currentDocument,
           nextDocument,

@@ -11,32 +11,29 @@ import {
 } from "~/server/services/queue";
 
 describe("WorkflowQueueAdapter", () => {
-  test("builds deterministic execution job payloads for concrete Task Run attempts", () => {
+  test("builds deterministic execution job payloads for concrete Tasks", () => {
     assert.deepEqual(
       buildRuntimeExecutionJobPayload({
-        attempt: 2,
-        itemIndex: 4,
-        nodeExecutionId: "node-execution-1",
+        branchIndex: 4,
+        nodeRunId: "node-execution-1",
         ownerUserId: "owner-user-1",
-        taskRunId: "task-run-1",
+        taskId: "task-run-1",
         workflowId: "workflow-1",
       }),
       {
-        attempt: 2,
-        itemIndex: 4,
-        jobId: "task-run~task-run-1~attempt~2~execute",
-        nodeExecutionId: "node-execution-1",
+        branchIndex: 4,
+        jobId: "task~task-run-1~execute",
+        nodeRunId: "node-execution-1",
         ownerUserId: "owner-user-1",
-        taskRunId: "task-run-1",
+        taskId: "task-run-1",
         workflowId: "workflow-1",
       },
     );
   });
 
-  test("builds deterministic completion settlement payloads for concrete Task Run attempts", () => {
+  test("builds deterministic completion settlement payloads for concrete Tasks", () => {
     assert.deepEqual(
       buildRuntimeCompletionSettlementJobPayload({
-        attempt: 2,
         providerCostCredits: 3,
         generatedAsset: {
           assetId: "asset-1",
@@ -49,11 +46,10 @@ describe("WorkflowQueueAdapter", () => {
         },
         ownerUserId: "owner-user-1",
         reviewRequired: false,
-        taskRunId: "task-run-1",
+        taskId: "task-run-1",
         workflowId: "workflow-1",
       }),
       {
-        attempt: 2,
         providerCostCredits: 3,
         generatedAsset: {
           assetId: "asset-1",
@@ -64,48 +60,46 @@ describe("WorkflowQueueAdapter", () => {
           storageProvider: "inline",
           text: "hello",
         },
-        jobId: "task-run~task-run-1~attempt~2~orchestrator~completion",
+        jobId: "task~task-run-1~orchestrator~completion",
         ownerUserId: "owner-user-1",
         reviewRequired: false,
-        taskRunId: "task-run-1",
+        taskId: "task-run-1",
         workflowId: "workflow-1",
       },
     );
   });
 
-  test("builds deterministic failure settlement payloads for concrete Task Run attempts", () => {
+  test("builds deterministic failure settlement payloads for concrete Tasks", () => {
     assert.deepEqual(
       buildRuntimeFailureSettlementJobPayload({
-        attempt: 2,
         failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
         failureSource: nonRefundableProviderFailureSource(),
         ownerUserId: "owner-user-1",
-        taskRunId: "task-run-1",
+        taskId: "task-run-1",
         workflowId: "workflow-1",
       }),
       {
-        attempt: 2,
         failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
         failureSource: nonRefundableProviderFailureSource(),
-        jobId: "task-run~task-run-1~attempt~2~orchestrator~failure",
+        jobId: "task~task-run-1~orchestrator~failure",
         ownerUserId: "owner-user-1",
-        taskRunId: "task-run-1",
+        taskId: "task-run-1",
         workflowId: "workflow-1",
       },
     );
   });
 
-  test("builds deterministic Wake-Up Call payloads from settled parent Task Runs", () => {
+  test("builds deterministic Wake-Up Call payloads from settled parent Tasks", () => {
     assert.deepEqual(
       buildRuntimeWakeUpJobPayload({
         ownerUserId: "owner-user-1",
-        parentTaskRunId: "parent-task-run-1",
+        parentTaskId: "parent-task-run-1",
         workflowId: "workflow-1",
       }),
       {
         jobId: "wake-up~parent-task-run-1",
         ownerUserId: "owner-user-1",
-        parentTaskRunId: "parent-task-run-1",
+        parentTaskId: "parent-task-run-1",
         workflowId: "workflow-1",
       },
     );
@@ -115,11 +109,10 @@ describe("WorkflowQueueAdapter", () => {
     const queue = new FakeQueueLike();
     const adapter = createWorkflowQueueAdapter(queue);
     const job = buildRuntimeExecutionJobPayload({
-      attempt: 1,
-      itemIndex: 0,
-      nodeExecutionId: "node-execution-1",
+      branchIndex: 0,
+      nodeRunId: "node-execution-1",
       ownerUserId: "owner-user-1",
-      taskRunId: "task-run-1",
+      taskId: "task-run-1",
       workflowId: "workflow-1",
     });
 
@@ -130,7 +123,7 @@ describe("WorkflowQueueAdapter", () => {
     assert.deepEqual(queue.added, [
       {
         name: "execute-task-run",
-        options: { jobId: "task-run~task-run-1~attempt~1~execute" },
+        options: { jobId: "task~task-run-1~execute" },
         payload: job,
       },
     ]);
@@ -140,11 +133,10 @@ describe("WorkflowQueueAdapter", () => {
     const queue = new FakeQueueLike();
     const adapter = createWorkflowQueueAdapter(queue);
     const job = buildRuntimeExecutionJobPayload({
-      attempt: 1,
-      itemIndex: 0,
-      nodeExecutionId: "node-execution-1",
+      branchIndex: 0,
+      nodeRunId: "node-execution-1",
       ownerUserId: "owner-user-1",
-      taskRunId: "task-run-1",
+      taskId: "task-run-1",
       workflowId: "workflow-1",
     });
 
@@ -153,7 +145,7 @@ describe("WorkflowQueueAdapter", () => {
     assert.deepEqual(queue.added, [
       {
         name: "execute-task-run",
-        options: { jobId: "task-run~task-run-1~attempt~1~execute" },
+        options: { jobId: "task~task-run-1~execute" },
         payload: job,
       },
     ]);
@@ -164,14 +156,13 @@ describe("WorkflowQueueAdapter", () => {
     const adapter = createWorkflowQueueAdapter(queue);
     const job = {
       ...buildRuntimeExecutionJobPayload({
-        attempt: 1,
-        itemIndex: 0,
-        nodeExecutionId: "node-execution-1",
+        branchIndex: 0,
+        nodeRunId: "node-execution-1",
         ownerUserId: "owner-user-1",
-        taskRunId: "task-run-1",
+        taskId: "task-run-1",
         workflowId: "workflow-1",
       }),
-      jobId: "task-run:task-run-1:attempt:1:execute",
+      jobId: "task-run:task-run-1:execute",
     };
 
     await Effect.runPromiseExit(adapter.enqueueExecutionJob(job)).then(
@@ -187,11 +178,10 @@ describe("WorkflowQueueAdapter", () => {
     const queue = new FakeQueueLike({ failAdds: true });
     const adapter = createWorkflowQueueAdapter(queue);
     const job = buildRuntimeExecutionJobPayload({
-      attempt: 1,
-      itemIndex: 0,
-      nodeExecutionId: "node-execution-1",
+      branchIndex: 0,
+      nodeRunId: "node-execution-1",
       ownerUserId: "owner-user-1",
-      taskRunId: "task-run-1",
+      taskId: "task-run-1",
       workflowId: "workflow-1",
     });
 
@@ -212,7 +202,7 @@ describe("WorkflowQueueAdapter", () => {
     const adapter = createWorkflowQueueAdapter(queue);
     const job = buildRuntimeWakeUpJobPayload({
       ownerUserId: "owner-user-1",
-      parentTaskRunId: "parent-task-run-1",
+      parentTaskId: "parent-task-run-1",
       workflowId: "workflow-1",
     });
 
@@ -232,7 +222,7 @@ describe("WorkflowQueueAdapter", () => {
     const adapter = createWorkflowQueueAdapter(queue);
     const job = buildRuntimeWakeUpJobPayload({
       ownerUserId: "owner-user-1",
-      parentTaskRunId: "parent-task-run-1",
+      parentTaskId: "parent-task-run-1",
       workflowId: "workflow-1",
     });
 
@@ -251,7 +241,6 @@ describe("WorkflowQueueAdapter", () => {
     const queue = new FakeQueueLike();
     const adapter = createWorkflowQueueAdapter(queue);
     const job = buildRuntimeCompletionSettlementJobPayload({
-      attempt: 1,
       providerCostCredits: 2,
       generatedAsset: {
         assetId: "asset-1",
@@ -264,7 +253,7 @@ describe("WorkflowQueueAdapter", () => {
       },
       ownerUserId: "owner-user-1",
       reviewRequired: false,
-      taskRunId: "task-run-1",
+      taskId: "task-run-1",
       workflowId: "workflow-1",
     });
 
@@ -274,7 +263,7 @@ describe("WorkflowQueueAdapter", () => {
       {
         name: "settle-task-run-completion",
         options: {
-          jobId: "task-run~task-run-1~attempt~1~orchestrator~completion",
+          jobId: "task~task-run-1~orchestrator~completion",
         },
         payload: job,
       },
@@ -285,11 +274,10 @@ describe("WorkflowQueueAdapter", () => {
     const queue = new FakeQueueLike();
     const adapter = createWorkflowQueueAdapter(queue);
     const job = buildRuntimeFailureSettlementJobPayload({
-      attempt: 1,
       failureReason: { message: "provider failed", type: "PROVIDER_FAILED" },
       failureSource: nonRefundableProviderFailureSource(),
       ownerUserId: "owner-user-1",
-      taskRunId: "task-run-1",
+      taskId: "task-run-1",
       workflowId: "workflow-1",
     });
 
@@ -299,7 +287,7 @@ describe("WorkflowQueueAdapter", () => {
       {
         name: "settle-task-run-failure",
         options: {
-          jobId: "task-run~task-run-1~attempt~1~orchestrator~failure",
+          jobId: "task~task-run-1~orchestrator~failure",
         },
         payload: job,
       },
@@ -331,7 +319,7 @@ class FakeQueueLike {
 
 function nonRefundableProviderFailureSource() {
   return {
-    taskRunDebitRefundable: false,
+    taskDebitRefundable: false,
     type: "PROVIDER" as const,
   };
 }

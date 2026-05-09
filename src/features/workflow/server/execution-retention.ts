@@ -2,7 +2,7 @@ import * as PgDrizzle from "@effect/sql-drizzle/Pg";
 import { lt } from "drizzle-orm";
 import { Effect } from "effect";
 
-import { nodeExecutions } from "~/server/database/schema";
+import { nodeRuns } from "~/server/database/schema";
 import { DatabaseService } from "~/server/services/database";
 
 const DEFAULT_EXECUTION_RETENTION_DAYS = 90;
@@ -20,9 +20,9 @@ export function cleanupRetainedWorkflowExecutions(
           Date.now() - retentionDays * 24 * 60 * 60 * 1000,
         );
         const deleted = yield* db
-          .delete(nodeExecutions)
-          .where(lt(nodeExecutions.updatedAt, cutoff))
-          .returning({ id: nodeExecutions.id });
+          .delete(nodeRuns)
+          .where(lt(nodeRuns.updatedAt, cutoff))
+          .returning({ id: nodeRuns.id });
 
         return deleted.length;
       }),

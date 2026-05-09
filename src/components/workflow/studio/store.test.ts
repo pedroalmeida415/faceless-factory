@@ -62,7 +62,7 @@ describe("workflow studio save-lock policy", () => {
     });
   });
 
-  test("allows node position changes while a Task Run is active", () => {
+  test("allows node position changes while a Task is active", () => {
     useWorkflowStudioStore
       .getState()
       .setNodePosition("generator-active", { x: 125, y: 210 });
@@ -76,7 +76,7 @@ describe("workflow studio save-lock policy", () => {
     assert.equal(useWorkflowStudioStore.getState().localDocumentVersion, 1);
   });
 
-  test("allows React Flow drag-stop position changes while a Task Run is active", () => {
+  test("allows React Flow drag-stop position changes while a Task is active", () => {
     useWorkflowStudioStore.getState().applyNodeChanges([
       {
         dragging: false,
@@ -95,7 +95,7 @@ describe("workflow studio save-lock policy", () => {
     assert.equal(useWorkflowStudioStore.getState().localDocumentVersion, 1);
   });
 
-  test("allows selection-only editor changes while a Task Run is active", () => {
+  test("allows selection-only editor changes while a Task is active", () => {
     useWorkflowStudioStore.getState().applyNodeChanges([
       {
         id: "generator-active",
@@ -110,7 +110,7 @@ describe("workflow studio save-lock policy", () => {
     assert.equal(useWorkflowStudioStore.getState().localDocumentVersion, 0);
   });
 
-  test("blocks semantic generator edits while a Task Run is active", () => {
+  test("blocks semantic generator edits while a Task is active", () => {
     useWorkflowStudioStore
       .getState()
       .setGeneratorReviewEnabled("generator-active", true);

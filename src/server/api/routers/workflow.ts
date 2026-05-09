@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { z } from "zod";
-import { getTaskRunProjectionForWorkflow } from "~/features/runtime/server/task-projection-repository";
+import { getTaskProjectionForWorkflow } from "~/features/runtime/server/task-projection-repository";
 import {
   deserializeStoredWorkflowGraphDocument,
   type WorkflowGraphDocument,
@@ -82,7 +82,7 @@ export const workflowRouter = createTRPCRouter({
           ...new Set(
             (
               await ServerRuntime.runPromise(
-                getTaskRunProjectionForWorkflow({
+                getTaskProjectionForWorkflow({
                   ownerUserId: ctx.session.user.id,
                   workflowId: input.projectId,
                 }),

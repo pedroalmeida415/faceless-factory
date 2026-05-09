@@ -12,11 +12,11 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import {
-  type TaskRunFailureReasonType,
-  type TaskRunStatus,
-  taskRunFailureReasonTypeValues,
-  taskRunStatusValues,
-} from "~/features/runtime/domain/task-run-state";
+  type TaskFailureReasonType,
+  type TaskStatus,
+  taskFailureReasonTypeValues,
+  taskStatusValues,
+} from "~/features/runtime/domain/task-state";
 import type { WorkflowDefinitionGraphDocument } from "~/features/workflow/document";
 import type {
   AssetKind,
@@ -25,14 +25,14 @@ import type {
   WorkflowOutputReviewStatus,
 } from "~/features/workflow/types";
 
-export const taskRunRuntimeStatusEnum = pgEnum(
-  "task_run_runtime_status",
-  taskRunStatusValues,
+export const taskRuntimeStatusEnum = pgEnum(
+  "task_runtime_status",
+  taskStatusValues,
 );
 
-export const taskRunFailureReasonEnum = pgEnum(
-  "task_run_failure_reason",
-  taskRunFailureReasonTypeValues,
+export const taskFailureReasonEnum = pgEnum(
+  "task_failure_reason",
+  taskFailureReasonTypeValues,
 );
 
 type CreditLedgerEntryKind =
@@ -42,7 +42,7 @@ type CreditLedgerEntryKind =
   | "purchase"
   | "adjustment";
 
-type NodeExecutionStatus = "pending" | "dispatched";
+type NodeRunStatus = "pending" | "dispatched";
 type WorkflowExecutionTargetReason =
   | "node_run"
   | "workflow_run"
@@ -159,7 +159,7 @@ export const assets = pgTable(
       .references(() => workflows.id, { onDelete: "cascade" }),
     source: text("source").$type<AssetSource>().notNull(),
     kind: text("kind").$type<AssetKind>().notNull(),
-    taskRunId: text("task_run_id").references((): AnyPgColumn => taskRuns.id, {
+    taskId: text("task_id").references((): AnyPgColumn => tasks.id, {
       onDelete: "set null",
     }),
     storageProvider: text("storage_provider").notNull(),
@@ -185,12 +185,12 @@ export const assets = pgTable(
       table.workflowId,
       table.createdAt,
     ),
-    taskRunIdx: index("assets_task_run_idx").on(table.taskRunId),
+    taskIdx: index("assets_task_idx").on(table.taskId),
   }),
 );
 
-export const nodeExecutions = pgTable(
-  "node_executions",
+export const nodeRuns = pgTable(
+  "node_runs",
   {
     id: text("id").primaryKey(),
     workflowId: text("workflow_id")
@@ -202,7 +202,7 @@ export const nodeExecutions = pgTable(
     nodeId: text("node_id").notNull(),
     executionId: text("execution_id").notNull(),
     documentRevision: bigint("document_revision", { mode: "number" }),
-    status: text("status").$type<NodeExecutionStatus>().notNull(),
+    status: text("status").$type<NodeRunStatus>().notNull(),
     outputCount: bigint("output_count", { mode: "number" }).notNull(),
     targetReason: text("target_reason")
       .$type<WorkflowExecutionTargetReason>()
@@ -216,30 +216,35 @@ export const nodeExecutions = pgTable(
       .notNull(),
   },
   (table) => ({
-    workflowNodeCreatedIdx: index(
-      "node_executions_workflow_node_created_idx",
-    ).on(table.workflowId, table.nodeId, table.createdAt, table.id),
-    workflowStatusUpdatedIdx: index(
-      "node_executions_workflow_status_updated_idx",
-    ).on(table.workflowId, table.status, table.updatedAt),
-    ownerUpdatedAtIdx: index("node_executions_owner_updated_at_idx").on(
+    workflowNodeCreatedIdx: index("node_runs_workflow_node_created_idx").on(
+      table.workflowId,
+      table.nodeId,
+      table.createdAt,
+      table.id,
+    ),
+    workflowStatusUpdatedIdx: index("node_runs_workflow_status_updated_idx").on(
+      table.workflowId,
+      table.status,
+      table.updatedAt,
+    ),
+    ownerUpdatedAtIdx: index("node_runs_owner_updated_at_idx").on(
       table.ownerUserId,
       table.updatedAt,
     ),
     workflowExecutionNodeUnique: uniqueIndex(
-      "node_executions_workflow_execution_node_unique",
+      "node_runs_workflow_execution_node_unique",
     ).on(table.workflowId, table.executionId, table.nodeId),
-    executionIdx: index("node_executions_execution_idx").on(table.executionId),
+    executionIdx: index("node_runs_execution_idx").on(table.executionId),
   }),
 );
 
-export const taskRuns = pgTable(
-  "task_runs",
+export const tasks = pgTable(
+  "tasks",
   {
     id: text("id").primaryKey(),
-    nodeExecutionId: text("node_execution_id")
+    nodeRunId: text("node_run_id")
       .notNull()
-      .references(() => nodeExecutions.id, { onDelete: "cascade" }),
+      .references(() => nodeRuns.id, { onDelete: "cascade" }),
     workflowId: text("workflow_id")
       .notNull()
       .references(() => workflows.id, { onDelete: "cascade" }),
@@ -249,13 +254,11 @@ export const taskRuns = pgTable(
     nodeId: text("node_id").notNull(),
     outputIndex: bigint("output_index", { mode: "number" }).notNull(),
     version: bigint("version", { mode: "number" }).notNull(),
-    itemIndex: bigint("item_index", { mode: "number" }),
-    attempt: bigint("attempt", { mode: "number" }),
+    branchIndex: bigint("branch_index", { mode: "number" }),
     executionId: text("execution_id").notNull(),
     jobId: text("job_id").notNull(),
     status: text("status").notNull(),
-    runtimeStatus:
-      taskRunRuntimeStatusEnum("runtime_status").$type<TaskRunStatus>(),
+    runtimeStatus: taskRuntimeStatusEnum("runtime_status").$type<TaskStatus>(),
     targetReason: text("target_reason")
       .$type<WorkflowExecutionTargetReason>()
       .notNull(),
@@ -273,9 +276,7 @@ export const taskRuns = pgTable(
     error: text("error"),
     creditCost: bigint("credit_cost", { mode: "number" }).notNull(),
     failureReason:
-      taskRunFailureReasonEnum(
-        "failure_reason",
-      ).$type<TaskRunFailureReasonType>(),
+      taskFailureReasonEnum("failure_reason").$type<TaskFailureReasonType>(),
     documentRevision: bigint("document_revision", { mode: "number" }),
     queuedAt: timestamp("queued_at"),
     startedAt: timestamp("started_at"),
@@ -289,36 +290,36 @@ export const taskRuns = pgTable(
       .notNull(),
   },
   (table) => ({
-    nodeExecutionOutputVersionUnique: uniqueIndex(
-      "task_runs_node_execution_output_version_unique",
-    ).on(table.nodeExecutionId, table.outputIndex, table.version),
-    idempotencyKeyUnique: uniqueIndex("task_runs_idempotency_key_unique").on(
+    idempotencyKeyUnique: uniqueIndex("tasks_idempotency_key_unique").on(
       table.idempotencyKey,
     ),
-    jobIdUnique: uniqueIndex("task_runs_job_id_unique").on(table.jobId),
-    nodeExecutionOutputVersionIdx: index(
-      "task_runs_node_execution_output_version_idx",
-    ).on(table.nodeExecutionId, table.outputIndex, table.version),
+    jobIdUnique: uniqueIndex("tasks_job_id_unique").on(table.jobId),
+    nodeRunOutputVersionIdx: index("tasks_node_run_output_version_idx").on(
+      table.nodeRunId,
+      table.outputIndex,
+      table.version,
+    ),
     workflowTaskOutputCreatedIdx: index(
-      "task_runs_workflow_task_output_created_idx",
+      "tasks_workflow_task_output_created_idx",
     ).on(table.workflowId, table.nodeId, table.outputIndex, table.createdAt),
-    workflowStatusUpdatedIdx: index("task_runs_workflow_status_updated_idx").on(
+    workflowStatusUpdatedIdx: index("tasks_workflow_status_updated_idx").on(
       table.workflowId,
       table.status,
       table.updatedAt,
     ),
-    executionIdx: index("task_runs_execution_idx").on(table.executionId),
-    runtimeActiveSlotUnique: uniqueIndex("task_runs_runtime_active_slot_unique")
-      .on(table.nodeExecutionId, table.itemIndex)
+    executionIdx: index("tasks_execution_idx").on(table.executionId),
+    runtimeActiveSlotUnique: uniqueIndex("tasks_runtime_active_slot_unique")
+      .on(table.nodeRunId, table.branchIndex)
       .where(
         sql`${table.runtimeStatus} in ('WAITING_UPSTREAM', 'QUEUED', 'RUNNING', 'PENDING_REVIEW')`,
       ),
-    runtimeSlotAttemptIdx: index("task_runs_runtime_slot_attempt_idx").on(
-      table.nodeExecutionId,
-      table.itemIndex,
-      table.attempt,
+    runtimeBranchCreatedIdx: index("tasks_runtime_branch_created_idx").on(
+      table.nodeRunId,
+      table.branchIndex,
+      table.createdAt,
+      table.id,
     ),
-    runtimeStatusUpdatedIdx: index("task_runs_runtime_status_updated_idx").on(
+    runtimeStatusUpdatedIdx: index("tasks_runtime_status_updated_idx").on(
       table.runtimeStatus,
       table.updatedAt,
     ),
@@ -329,21 +330,21 @@ export const taskDependencies = pgTable(
   "task_dependencies",
   {
     id: text("id").primaryKey(),
-    childTaskRunId: text("child_task_run_id")
+    childTaskId: text("child_task_id")
       .notNull()
-      .references(() => taskRuns.id, { onDelete: "cascade" }),
-    requiredParentNodeExecutionId: text("required_parent_node_execution_id")
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    requiredParentNodeRunId: text("required_parent_node_run_id")
       .notNull()
-      .references(() => nodeExecutions.id, { onDelete: "cascade" }),
+      .references(() => nodeRuns.id, { onDelete: "cascade" }),
     requiredParentNodeId: text("required_parent_node_id").notNull(),
-    requiredParentItemIndex: bigint("required_parent_item_index", {
+    requiredParentBranchIndex: bigint("required_parent_branch_index", {
       mode: "number",
     }).notNull(),
     sourceHandle: text("source_handle"),
     targetHandle: text("target_handle"),
     targetNodeId: text("target_node_id").notNull(),
-    resolvedParentTaskRunId: text("resolved_parent_task_run_id").references(
-      () => taskRuns.id,
+    resolvedParentTaskId: text("resolved_parent_task_id").references(
+      () => tasks.id,
       { onDelete: "set null" },
     ),
     createdAt: timestamp("created_at")
@@ -352,24 +353,24 @@ export const taskDependencies = pgTable(
     resolvedAt: timestamp("resolved_at"),
   },
   (table) => ({
-    childTaskRunIdx: index("task_dependencies_child_task_run_idx").on(
-      table.childTaskRunId,
+    childTaskIdx: index("task_dependencies_child_task_idx").on(
+      table.childTaskId,
     ),
     requiredParentSlotIdx: index(
       "task_dependencies_required_parent_slot_idx",
-    ).on(table.requiredParentNodeExecutionId, table.requiredParentItemIndex),
+    ).on(table.requiredParentNodeRunId, table.requiredParentBranchIndex),
     childParentSlotUnique: uniqueIndex(
       "task_dependencies_child_parent_slot_unique",
     ).on(
-      table.childTaskRunId,
-      table.requiredParentNodeExecutionId,
-      table.requiredParentItemIndex,
+      table.childTaskId,
+      table.requiredParentNodeRunId,
+      table.requiredParentBranchIndex,
       table.sourceHandle,
       table.targetHandle,
     ),
-    resolvedParentTaskRunIdx: index(
-      "task_dependencies_resolved_parent_task_run_idx",
-    ).on(table.resolvedParentTaskRunId),
+    resolvedParentTaskIdx: index(
+      "task_dependencies_resolved_parent_task_idx",
+    ).on(table.resolvedParentTaskId),
   }),
 );
 
@@ -439,7 +440,7 @@ export const userRelations = relations(user, ({ many }) => ({
   account: many(account),
   assets: many(assets),
   creditLedgerEntries: many(creditLedgerEntries),
-  nodeExecutions: many(nodeExecutions),
+  nodeRuns: many(nodeRuns),
   session: many(session),
   subscriptions: many(subscription),
   workflows: many(workflows),
@@ -455,8 +456,8 @@ export const sessionRelations = relations(session, ({ one }) => ({
 
 export const workflowsRelations = relations(workflows, ({ many, one }) => ({
   assets: many(assets),
-  nodeExecutions: many(nodeExecutions),
-  taskRuns: many(taskRuns),
+  nodeRuns: many(nodeRuns),
+  tasks: many(tasks),
   owner: one(user, {
     fields: [workflows.ownerUserId],
     references: [user.id],
@@ -472,66 +473,63 @@ export const assetsRelations = relations(assets, ({ one }) => ({
     fields: [assets.workflowId],
     references: [workflows.id],
   }),
-  producingTaskRun: one(taskRuns, {
-    fields: [assets.taskRunId],
-    references: [taskRuns.id],
+  producingTask: one(tasks, {
+    fields: [assets.taskId],
+    references: [tasks.id],
   }),
 }));
 
-export const nodeExecutionsRelations = relations(
-  nodeExecutions,
-  ({ many, one }) => ({
-    owner: one(user, {
-      fields: [nodeExecutions.ownerUserId],
-      references: [user.id],
-    }),
-    workflow: one(workflows, {
-      fields: [nodeExecutions.workflowId],
-      references: [workflows.id],
-    }),
-    requiredTaskDependencies: many(taskDependencies),
-    taskRuns: many(taskRuns),
-  }),
-);
-
-export const taskRunsRelations = relations(taskRuns, ({ many, one }) => ({
-  childTaskRunDependencies: many(taskDependencies, {
-    relationName: "childTaskRunDependencies",
-  }),
-  generatedAssets: many(assets),
-  nodeExecution: one(nodeExecutions, {
-    fields: [taskRuns.nodeExecutionId],
-    references: [nodeExecutions.id],
-  }),
+export const nodeRunsRelations = relations(nodeRuns, ({ many, one }) => ({
   owner: one(user, {
-    fields: [taskRuns.ownerUserId],
+    fields: [nodeRuns.ownerUserId],
     references: [user.id],
   }),
   workflow: one(workflows, {
-    fields: [taskRuns.workflowId],
+    fields: [nodeRuns.workflowId],
     references: [workflows.id],
   }),
-  resolvedParentTaskRunDependencies: many(taskDependencies, {
-    relationName: "resolvedParentTaskRunDependencies",
+  requiredTaskDependencies: many(taskDependencies),
+  tasks: many(tasks),
+}));
+
+export const tasksRelations = relations(tasks, ({ many, one }) => ({
+  childTaskDependencies: many(taskDependencies, {
+    relationName: "childTaskDependencies",
+  }),
+  generatedAssets: many(assets),
+  nodeRun: one(nodeRuns, {
+    fields: [tasks.nodeRunId],
+    references: [nodeRuns.id],
+  }),
+  owner: one(user, {
+    fields: [tasks.ownerUserId],
+    references: [user.id],
+  }),
+  workflow: one(workflows, {
+    fields: [tasks.workflowId],
+    references: [workflows.id],
+  }),
+  resolvedParentTaskDependencies: many(taskDependencies, {
+    relationName: "resolvedParentTaskDependencies",
   }),
 }));
 
 export const taskDependenciesRelations = relations(
   taskDependencies,
   ({ one }) => ({
-    childTaskRun: one(taskRuns, {
-      fields: [taskDependencies.childTaskRunId],
-      references: [taskRuns.id],
-      relationName: "childTaskRunDependencies",
+    childTask: one(tasks, {
+      fields: [taskDependencies.childTaskId],
+      references: [tasks.id],
+      relationName: "childTaskDependencies",
     }),
-    requiredParentNodeExecution: one(nodeExecutions, {
-      fields: [taskDependencies.requiredParentNodeExecutionId],
-      references: [nodeExecutions.id],
+    requiredParentNodeRun: one(nodeRuns, {
+      fields: [taskDependencies.requiredParentNodeRunId],
+      references: [nodeRuns.id],
     }),
-    resolvedParentTaskRun: one(taskRuns, {
-      fields: [taskDependencies.resolvedParentTaskRunId],
-      references: [taskRuns.id],
-      relationName: "resolvedParentTaskRunDependencies",
+    resolvedParentTask: one(tasks, {
+      fields: [taskDependencies.resolvedParentTaskId],
+      references: [tasks.id],
+      relationName: "resolvedParentTaskDependencies",
     }),
   }),
 );

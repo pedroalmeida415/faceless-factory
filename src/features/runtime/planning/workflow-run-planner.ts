@@ -1,15 +1,15 @@
 import type { ProviderDependencyAddress } from "~/features/runtime/domain/provider-dependency-address";
 import {
-  isActiveTaskRunStatus,
+  isActiveTaskStatus,
   isRecoverableByDownstreamPlanningStatus,
-  isTaskRunDependencySatisfiedStatus,
-  type TaskRunStatus,
-} from "~/features/runtime/domain/task-run-state";
-import type { TaskRunInputSnapshot } from "~/features/runtime/execution/task-run-input-snapshot";
+  isTaskDependencySatisfiedStatus,
+  type TaskStatus,
+} from "~/features/runtime/domain/task-state";
+import type { TaskInputSnapshot } from "~/features/runtime/execution/task-input-snapshot";
 import {
-  materializeTaskRunInput,
+  materializeTaskInput,
   materializeWorkflowRunTaskFacts,
-} from "~/features/runtime/materialization/task-run-input-materialization";
+} from "~/features/runtime/materialization/task-input-materialization";
 import { parseWorkflowBlueprint } from "~/features/workflow/blueprint/parser";
 import {
   toWorkflowDefinitionGraphDocument,
@@ -18,100 +18,97 @@ import {
   type WorkflowDocument,
 } from "~/features/workflow/document";
 import { WorkflowValidationError } from "~/features/workflow/errors";
-import { getRuntimeTaskRunCreditCostByNodeId } from "~/features/workflow/server/pricing-catalog";
+import { getRuntimeTaskCreditCostByNodeId } from "~/features/workflow/server/pricing-catalog";
 import { isGeneratorNodeKind } from "~/features/workflow/types";
 
 export type WorkflowRunPlannerCommand =
   | { readonly type: "run-node"; readonly nodeId: string }
   | {
-      readonly type: "run-task-slot";
-      readonly nodeExecutionId: string;
-      readonly itemIndex: number;
+      readonly type: "run-task";
+      readonly nodeRunId: string;
+      readonly branchIndex: number;
     };
 
-export type ExistingNodeExecution = {
+export type ExistingNodeRun = {
   readonly id: string;
   readonly nodeId: string;
 };
 
-export type ExistingTaskRun = {
+export type ExistingTask = {
   readonly id: string;
   readonly creditCost?: number;
-  readonly nodeExecutionId: string;
+  readonly nodeRunId: string;
   readonly nodeId?: string;
-  readonly itemIndex: number;
-  readonly attempt: number;
-  readonly status: TaskRunStatus;
+  readonly branchIndex: number;
+  readonly status: TaskStatus;
 };
 
 export type WorkflowRunPlannerInput = {
   readonly command: WorkflowRunPlannerCommand;
-  readonly createNodeExecutionId?: () => string;
-  readonly createTaskRunId?: () => string;
+  readonly createNodeRunId?: () => string;
+  readonly createTaskId?: () => string;
   readonly document: WorkflowDocument;
   readonly documentRevision?: number | null;
-  readonly latestNodeExecutions: readonly ExistingNodeExecution[];
-  readonly latestTaskRuns: readonly ExistingTaskRun[];
+  readonly latestNodeRuns: readonly ExistingNodeRun[];
+  readonly latestTasks: readonly ExistingTask[];
   readonly ownerId: string;
   readonly workflowId: string;
   readonly plannedItemCountByNodeId?: Readonly<Record<string, number>>;
 };
 
-export type PlannedNodeExecution = {
+export type PlannedNodeRun = {
   readonly id: string;
   readonly nodeId: string;
   readonly ownerId: string;
   readonly workflowId: string;
 };
 
-export type ReusedNodeExecution = {
+export type ReusedNodeRun = {
   readonly id: string;
   readonly nodeId: string;
 };
 
-export type PlannedTaskRun = {
+export type PlannedTask = {
   readonly id: string;
-  readonly nodeExecutionId: string;
+  readonly nodeRunId: string;
   readonly nodeId: string;
   readonly targetNodeConfig: WorkflowDefinitionDocumentNode;
-  readonly itemIndex: number;
-  readonly attempt: number;
+  readonly branchIndex: number;
   readonly creditCost: number;
   readonly failureReason?: "EXECUTION_FAILED";
-  readonly inputSnapshot?: TaskRunInputSnapshot;
+  readonly inputSnapshot?: TaskInputSnapshot;
   readonly status: Extract<
-    TaskRunStatus,
+    TaskStatus,
     "FAILED" | "QUEUED" | "WAITING_UPSTREAM"
   >;
 };
 
 export type PlannedTaskDependency = {
-  readonly childTaskRunId: string;
-  readonly childNodeExecutionId: string;
+  readonly childTaskId: string;
+  readonly childNodeRunId: string;
   readonly childNodeId: string;
-  readonly parentNodeExecutionId: string;
+  readonly parentNodeRunId: string;
   readonly parentNodeId: string;
-  readonly parentItemIndex: number;
+  readonly parentBranchIndex: number;
   readonly sourceHandle?: string | null;
   readonly targetHandle?: string | null;
   readonly targetNodeId: string;
 };
 
 export type RunCostPreviewItem = {
-  readonly attempt: number;
   readonly creditCost: number;
   readonly debitTiming:
     | "queued-immediately"
     | "waiting-upstream"
     | "excluded-existing"
     | "failed-before-queue";
-  readonly itemIndex: number;
-  readonly nodeExecutionId: string;
+  readonly branchIndex: number;
+  readonly nodeRunId: string;
   readonly nodeId: string;
   readonly role: "target" | "upstream";
   readonly source: "planned" | "stored";
-  readonly status: TaskRunStatus;
-  readonly taskRunId: string;
+  readonly status: TaskStatus;
+  readonly taskId: string;
 };
 
 export type RunCostPreview = {
@@ -138,10 +135,10 @@ export type RunCostPreview = {
 
 export type WorkflowRunPlan = {
   readonly workflowDefinition: WorkflowDefinitionGraphDocument;
-  readonly nodeExecutionsToCreate: readonly PlannedNodeExecution[];
-  readonly nodeExecutionsToReuse: readonly ReusedNodeExecution[];
+  readonly nodeRunsToCreate: readonly PlannedNodeRun[];
+  readonly nodeRunsToReuse: readonly ReusedNodeRun[];
   readonly runCostPreview: RunCostPreview;
-  readonly taskRunsToCreate: readonly PlannedTaskRun[];
+  readonly tasksToCreate: readonly PlannedTask[];
   readonly taskDependenciesToCreate: readonly PlannedTaskDependency[];
 };
 
@@ -158,11 +155,11 @@ function plannerError(message: string): WorkflowRunPlannerResult {
   return { error: { _tag: "WorkflowRunPlannerError", message }, ok: false };
 }
 
-function taskRunSlotKey(input: {
-  readonly nodeExecutionId: string;
-  readonly itemIndex: number;
+function taskKey(input: {
+  readonly nodeRunId: string;
+  readonly branchIndex: number;
 }) {
-  return `${input.nodeExecutionId}:${input.itemIndex}`;
+  return `${input.nodeRunId}:${input.branchIndex}`;
 }
 
 function isProviderBackedNode(
@@ -203,39 +200,36 @@ export function planWorkflowRun(
     return plannerError(creditCostByNodeIdResult.error.message);
   }
   const creditCostByNodeId = creditCostByNodeIdResult.value;
-  const latestNodeExecutionByNodeId = new Map(
-    input.latestNodeExecutions.map((execution) => [
-      execution.nodeId,
-      execution,
-    ]),
+  const latestNodeRunByNodeId = new Map(
+    input.latestNodeRuns.map((execution) => [execution.nodeId, execution]),
   );
-  const nodeExecutionById = new Map(
-    input.latestNodeExecutions.map((execution) => [execution.id, execution]),
+  const nodeRunById = new Map(
+    input.latestNodeRuns.map((execution) => [execution.id, execution]),
   );
-  const taskSlotNodeExecution =
-    input.command.type === "run-task-slot"
-      ? nodeExecutionById.get(input.command.nodeExecutionId)
+  const taskNodeRun =
+    input.command.type === "run-task"
+      ? nodeRunById.get(input.command.nodeRunId)
       : undefined;
-  if (input.command.type === "run-task-slot") {
+  if (input.command.type === "run-task") {
     if (
-      !Number.isInteger(input.command.itemIndex) ||
-      input.command.itemIndex < 0
+      !Number.isInteger(input.command.branchIndex) ||
+      input.command.branchIndex < 0
     ) {
       return plannerError(
-        `Cannot run invalid Item Index ${input.command.itemIndex} for Node Execution ${input.command.nodeExecutionId}.`,
+        `Cannot run invalid Branch Index ${input.command.branchIndex} for Node Run ${input.command.nodeRunId}.`,
       );
     }
   }
-  if (input.command.type === "run-task-slot" && !taskSlotNodeExecution) {
+  if (input.command.type === "run-task" && !taskNodeRun) {
     return plannerError(
-      `Cannot run Task Run slot for missing Node Execution ${input.command.nodeExecutionId}.`,
+      `Cannot run Task slot for missing Node Run ${input.command.nodeRunId}.`,
     );
   }
   const schedulingTargetNodeIds =
     input.command.type === "run-node"
       ? [input.command.nodeId]
-      : taskSlotNodeExecution
-        ? [taskSlotNodeExecution.nodeId]
+      : taskNodeRun
+        ? [taskNodeRun.nodeId]
         : [];
   const materializationFacts = materializeWorkflowRunTaskFacts({
     document: input.document,
@@ -247,76 +241,75 @@ export function planWorkflowRun(
   }
   const materializedTaskFactsBySlot = new Map(
     materializationFacts.value.taskFacts.map((fact) => [
-      taskRunSlotKey({
-        itemIndex: fact.itemIndex,
-        nodeExecutionId: fact.nodeId,
+      taskKey({
+        branchIndex: fact.branchIndex,
+        nodeRunId: fact.nodeId,
       }),
       fact,
     ]),
   );
-  const latestTaskRunBySlot = new Map<string, ExistingTaskRun>();
+  const latestTaskBySlot = new Map<string, ExistingTask>();
 
-  for (const taskRun of input.latestTaskRuns) {
-    const key = taskRunSlotKey(taskRun);
-    const existing = latestTaskRunBySlot.get(key);
-    if (!existing || taskRun.attempt > existing.attempt) {
-      latestTaskRunBySlot.set(key, taskRun);
+  for (const task of input.latestTasks) {
+    const key = taskKey(task);
+    const existing = latestTaskBySlot.get(key);
+    if (!existing) {
+      latestTaskBySlot.set(key, task);
     }
   }
 
-  let nextNodeExecutionId = 1;
-  let nextTaskRunId = 1;
-  const createNodeExecutionId =
-    input.createNodeExecutionId ??
-    (() => `planned-node-execution-${nextNodeExecutionId++}`);
-  const createTaskRunId =
-    input.createTaskRunId ?? (() => `planned-task-run-${nextTaskRunId++}`);
-  const nodeExecutionsToCreate: PlannedNodeExecution[] = [];
-  const nodeExecutionsToReuse: ReusedNodeExecution[] = [];
-  const taskRunsToCreate: PlannedTaskRun[] = [];
+  let nextNodeRunId = 1;
+  let nextTaskId = 1;
+  const createNodeRunId =
+    input.createNodeRunId ??
+    (() => `planned-node-execution-${nextNodeRunId++}`);
+  const createTaskId =
+    input.createTaskId ?? (() => `planned-task-run-${nextTaskId++}`);
+  const nodeRunsToCreate: PlannedNodeRun[] = [];
+  const nodeRunsToReuse: ReusedNodeRun[] = [];
+  const tasksToCreate: PlannedTask[] = [];
   const taskDependenciesToCreate: PlannedTaskDependency[] = [];
   const storedPreviewItems: RunCostPreviewItem[] = [];
   const storedPreviewItemKeys = new Set<string>();
   const executionIdByNodeId = new Map<string, string>();
-  const plannedTaskRunBySlot = new Map<string, PlannedTaskRun>();
+  const plannedTaskBySlot = new Map<string, PlannedTask>();
   const targetNodeId = schedulingTargetNodeIds[0] ?? null;
 
-  const latestTaskRun = (nodeExecutionId: string, itemIndex: number) =>
-    latestTaskRunBySlot.get(taskRunSlotKey({ itemIndex, nodeExecutionId }));
+  const latestTask = (nodeRunId: string, branchIndex: number) =>
+    latestTaskBySlot.get(taskKey({ branchIndex, nodeRunId }));
 
-  const plannedItemIndexesForNode = (nodeId: string) => {
+  const plannedBranchIndexesForNode = (nodeId: string) => {
     const count = materializationFacts.value.itemCountByNodeId[nodeId] ?? 1;
     return Array.from({ length: Math.max(1, count) }, (_, index) => index);
   };
 
-  const latestNodeExecutionHasActiveTaskRuns = (nodeId: string) => {
-    const execution = latestNodeExecutionByNodeId.get(nodeId);
+  const latestNodeRunHasActiveTasks = (nodeId: string) => {
+    const execution = latestNodeRunByNodeId.get(nodeId);
     return Boolean(
       execution &&
-        input.latestTaskRuns.some(
-          (taskRun) =>
-            taskRun.nodeExecutionId === execution.id &&
-            isActiveTaskRunStatus(taskRun.status),
+        input.latestTasks.some(
+          (task) =>
+            task.nodeRunId === execution.id && isActiveTaskStatus(task.status),
         ),
     );
   };
 
-  const ensureNodeExecution = (nodeId: string) => {
+  const ensureNodeRun = (nodeId: string) => {
     const existingId = executionIdByNodeId.get(nodeId);
     if (existingId) {
       return existingId;
     }
 
-    const latest = latestNodeExecutionByNodeId.get(nodeId);
+    const latest = latestNodeRunByNodeId.get(nodeId);
     if (latest) {
       executionIdByNodeId.set(nodeId, latest.id);
-      nodeExecutionsToReuse.push({ id: latest.id, nodeId });
+      nodeRunsToReuse.push({ id: latest.id, nodeId });
       return latest.id;
     }
 
-    const id = createNodeExecutionId();
+    const id = createNodeRunId();
     executionIdByNodeId.set(nodeId, id);
-    nodeExecutionsToCreate.push({
+    nodeRunsToCreate.push({
       id,
       nodeId,
       ownerId: input.ownerId,
@@ -325,10 +318,10 @@ export function planWorkflowRun(
     return id;
   };
 
-  const createNodeExecution = (nodeId: string) => {
-    const id = createNodeExecutionId();
+  const createNodeRun = (nodeId: string) => {
+    const id = createNodeRunId();
     executionIdByNodeId.set(nodeId, id);
-    nodeExecutionsToCreate.push({
+    nodeRunsToCreate.push({
       id,
       nodeId,
       ownerId: input.ownerId,
@@ -337,13 +330,12 @@ export function planWorkflowRun(
     return id;
   };
 
-  const parentDependencyAddresses = (nodeId: string, itemIndex: number) =>
+  const parentDependencyAddresses = (nodeId: string, branchIndex: number) =>
+    materializedTaskFactsBySlot.get(taskKey({ branchIndex, nodeRunId: nodeId }))
+      ?.dependencyAddresses ?? [];
+  const materializationTaskFact = (nodeId: string, branchIndex: number) =>
     materializedTaskFactsBySlot.get(
-      taskRunSlotKey({ itemIndex, nodeExecutionId: nodeId }),
-    )?.dependencyAddresses ?? [];
-  const materializationTaskFact = (nodeId: string, itemIndex: number) =>
-    materializedTaskFactsBySlot.get(
-      taskRunSlotKey({ itemIndex, nodeExecutionId: nodeId }),
+      taskKey({ branchIndex, nodeRunId: nodeId }),
     );
 
   const parentsSatisfied = (
@@ -354,52 +346,48 @@ export function planWorkflowRun(
     }
 
     return dependencies.every((dependency) => {
-      const parentNodeExecutionId = executionIdByNodeId.get(
-        dependency.parentNodeId,
-      );
-      if (!parentNodeExecutionId) {
+      const parentNodeRunId = executionIdByNodeId.get(dependency.parentNodeId);
+      if (!parentNodeRunId) {
         return false;
       }
 
       if (
-        plannedTaskRunBySlot.has(
-          taskRunSlotKey({
-            itemIndex: dependency.parentItemIndex,
-            nodeExecutionId: parentNodeExecutionId,
+        plannedTaskBySlot.has(
+          taskKey({
+            branchIndex: dependency.parentBranchIndex,
+            nodeRunId: parentNodeRunId,
           }),
         )
       ) {
         return false;
       }
 
-      const parentTaskRun = latestTaskRun(
-        parentNodeExecutionId,
-        dependency.parentItemIndex,
+      const parentTask = latestTask(
+        parentNodeRunId,
+        dependency.parentBranchIndex,
       );
-      return parentTaskRun
-        ? isTaskRunDependencySatisfiedStatus(parentTaskRun.status)
+      return parentTask
+        ? isTaskDependencySatisfiedStatus(parentTask.status)
         : false;
     });
   };
 
   const createTaskDependencies = (
-    taskRun: PlannedTaskRun,
+    task: PlannedTask,
     dependencyAddresses: readonly ProviderDependencyAddress[],
   ) => {
     for (const address of dependencyAddresses) {
-      const parentNodeExecutionId = executionIdByNodeId.get(
-        address.parentNodeId,
-      );
-      if (!parentNodeExecutionId) {
+      const parentNodeRunId = executionIdByNodeId.get(address.parentNodeId);
+      if (!parentNodeRunId) {
         return false;
       }
 
       taskDependenciesToCreate.push({
-        childNodeExecutionId: taskRun.nodeExecutionId,
-        childNodeId: taskRun.nodeId,
-        childTaskRunId: taskRun.id,
-        parentItemIndex: address.parentItemIndex,
-        parentNodeExecutionId,
+        childNodeRunId: task.nodeRunId,
+        childNodeId: task.nodeId,
+        childTaskId: task.id,
+        parentBranchIndex: address.parentBranchIndex,
+        parentNodeRunId,
         parentNodeId: address.parentNodeId,
         sourceHandle: address.sourceHandle,
         targetHandle: address.targetHandle,
@@ -410,44 +398,42 @@ export function planWorkflowRun(
     return true;
   };
 
-  const createTaskRun = (inputTaskRun: {
+  const createTask = (inputTask: {
     readonly nodeId: string;
-    readonly nodeExecutionId: string;
-    readonly itemIndex: number;
-    readonly attempt: number;
+    readonly nodeRunId: string;
+    readonly branchIndex: number;
   }) => {
-    const targetNodeConfig = targetNodeConfigByNodeId.get(inputTaskRun.nodeId);
+    const targetNodeConfig = targetNodeConfigByNodeId.get(inputTask.nodeId);
     if (!targetNodeConfig) {
       return false;
     }
     if (!isProviderBackedNode(targetNodeConfig)) {
       return false;
     }
-    const taskRunId = createTaskRunId();
+    const taskId = createTaskId();
     const dependencyAddresses = parentDependencyAddresses(
-      inputTaskRun.nodeId,
-      inputTaskRun.itemIndex,
+      inputTask.nodeId,
+      inputTask.branchIndex,
     );
     const taskFact = materializationTaskFact(
-      inputTaskRun.nodeId,
-      inputTaskRun.itemIndex,
+      inputTask.nodeId,
+      inputTask.branchIndex,
     );
     const status = parentsSatisfied(dependencyAddresses)
       ? "QUEUED"
       : "WAITING_UPSTREAM";
-    const materialization = materializeTaskRunInput({
-      attempt: inputTaskRun.attempt,
+    const materialization = materializeTaskInput({
       document: input.document,
       documentRevision: input.documentRevision ?? null,
-      itemIndex: inputTaskRun.itemIndex,
+      branchIndex: inputTask.branchIndex,
       materializedInputFacts: taskFact?.providerInputFacts,
-      nodeExecutionId: inputTaskRun.nodeExecutionId,
-      nodeId: inputTaskRun.nodeId,
-      taskRunId,
+      nodeRunId: inputTask.nodeRunId,
+      nodeId: inputTask.nodeId,
+      taskId,
     });
-    const taskRun: PlannedTaskRun = {
-      ...inputTaskRun,
-      creditCost: creditCostByNodeId[inputTaskRun.nodeId] ?? 0,
+    const task: PlannedTask = {
+      ...inputTask,
+      creditCost: creditCostByNodeId[inputTask.nodeId] ?? 0,
       ...(taskFact?.error
         ? { failureReason: "EXECUTION_FAILED" as const }
         : materialization?.ok
@@ -455,90 +441,86 @@ export function planWorkflowRun(
           : materialization
             ? { failureReason: "EXECUTION_FAILED" as const }
             : {}),
-      id: taskRunId,
+      id: taskId,
       status:
         taskFact?.error || (materialization && !materialization.ok)
           ? "FAILED"
           : status,
       targetNodeConfig,
     };
-    taskRunsToCreate.push(taskRun);
-    plannedTaskRunBySlot.set(taskRunSlotKey(taskRun), taskRun);
-    return createTaskDependencies(taskRun, dependencyAddresses);
+    tasksToCreate.push(task);
+    plannedTaskBySlot.set(taskKey(task), task);
+    return createTaskDependencies(task, dependencyAddresses);
   };
 
-  const planTaskRunIfNeeded = (params: {
+  const planTaskIfNeeded = (params: {
     readonly nodeId: string;
-    readonly nodeExecutionId: string;
-    readonly itemIndex: number;
+    readonly nodeRunId: string;
+    readonly branchIndex: number;
   }) => {
-    if (plannedTaskRunBySlot.has(taskRunSlotKey(params))) {
+    if (plannedTaskBySlot.has(taskKey(params))) {
       return true;
     }
-    const latest = latestTaskRun(params.nodeExecutionId, params.itemIndex);
+    const latest = latestTask(params.nodeRunId, params.branchIndex);
     if (!latest) {
-      return createTaskRun({ ...params, attempt: 0 });
+      return createTask(params);
     }
 
     if (isRecoverableByDownstreamPlanningStatus(latest.status)) {
-      return createTaskRun({ ...params, attempt: latest.attempt + 1 });
+      return createTask(params);
     }
 
-    const key = taskRunSlotKey(params);
+    const key = taskKey(params);
     if (!storedPreviewItemKeys.has(key)) {
       storedPreviewItemKeys.add(key);
       const nodeId = latest.nodeId ?? params.nodeId;
       storedPreviewItems.push({
-        attempt: latest.attempt,
         creditCost: latest.creditCost ?? 0,
         debitTiming: "excluded-existing",
-        itemIndex: latest.itemIndex,
-        nodeExecutionId: latest.nodeExecutionId,
+        branchIndex: latest.branchIndex,
+        nodeRunId: latest.nodeRunId,
         nodeId,
         role: nodeId === targetNodeId ? "target" : "upstream",
         source: "stored",
         status: latest.status,
-        taskRunId: latest.id,
+        taskId: latest.id,
       });
     }
 
     return true;
   };
 
-  const ensureProviderTaskRunSlot = (
-    nodeId: string,
-    itemIndex: number,
-  ): boolean => {
-    const nodeExecutionId = ensureNodeExecution(nodeId);
-    for (const dependency of parentDependencyAddresses(nodeId, itemIndex)) {
+  const ensureProviderTask = (nodeId: string, branchIndex: number): boolean => {
+    const nodeRunId = ensureNodeRun(nodeId);
+    for (const dependency of parentDependencyAddresses(nodeId, branchIndex)) {
       if (
         isProviderBackedNode(
           targetNodeConfigByNodeId.get(dependency.parentNodeId),
         ) &&
-        !ensureProviderTaskRunSlot(
+        !ensureProviderTask(
           dependency.parentNodeId,
-          dependency.parentItemIndex,
+          dependency.parentBranchIndex,
         )
       ) {
         return false;
       }
     }
-    return planTaskRunIfNeeded({ itemIndex, nodeExecutionId, nodeId });
+    return planTaskIfNeeded({ branchIndex, nodeRunId, nodeId });
   };
 
-  const ensureUpstreamProviderTaskRuns = (
+  const ensureUpstreamProviderTasks = (
     nodeId: string,
-    itemIndexes: readonly number[],
+    branchIndexes: readonly number[],
   ) => {
-    for (const itemIndex of itemIndexes) {
-      for (const dependency of parentDependencyAddresses(nodeId, itemIndex)) {
+    for (const branchIndex of branchIndexes) {
+      for (const dependency of parentDependencyAddresses(nodeId, branchIndex)) {
         if (
           isProviderBackedNode(
             targetNodeConfigByNodeId.get(dependency.parentNodeId),
           ) &&
-          !ensureProviderTaskRunSlot(
+          !ensureProviderTask(
             dependency.parentNodeId,
-            dependency.parentItemIndex,
+            dependency.parentBranchIndex,
           )
         ) {
           return false;
@@ -549,13 +531,13 @@ export function planWorkflowRun(
   };
 
   if (input.command.type === "run-node") {
-    if (latestNodeExecutionHasActiveTaskRuns(input.command.nodeId)) {
+    if (latestNodeRunHasActiveTasks(input.command.nodeId)) {
       return plannerError(
-        `Cannot run node ${input.command.nodeId} because its latest Node Execution has active Task Runs.`,
+        `Cannot run node ${input.command.nodeId} because its latest Node Run has active Tasks.`,
       );
     }
 
-    const latestTargetExecution = latestNodeExecutionByNodeId.get(
+    const latestTargetExecution = latestNodeRunByNodeId.get(
       input.command.nodeId,
     );
 
@@ -577,12 +559,12 @@ export function planWorkflowRun(
       );
 
       for (const nodeId of orderedNodeIds) {
-        const nodeExecutionId =
+        const nodeRunId =
           nodeId === input.command.nodeId
-            ? createNodeExecution(nodeId)
-            : ensureNodeExecution(nodeId);
-        for (const itemIndex of plannedItemIndexesForNode(nodeId)) {
-          if (!planTaskRunIfNeeded({ itemIndex, nodeExecutionId, nodeId })) {
+            ? createNodeRun(nodeId)
+            : ensureNodeRun(nodeId);
+        for (const branchIndex of plannedBranchIndexesForNode(nodeId)) {
+          if (!planTaskIfNeeded({ branchIndex, nodeRunId, nodeId })) {
             return plannerError(
               `Missing dependency information for ${nodeId}.`,
             );
@@ -594,32 +576,31 @@ export function planWorkflowRun(
         ok: true,
         value: {
           workflowDefinition,
-          nodeExecutionsToCreate,
-          nodeExecutionsToReuse,
+          nodeRunsToCreate,
+          nodeRunsToReuse,
           runCostPreview: buildRunCostPreview({
             storedPreviewItems,
             targetNodeId: input.command.nodeId,
-            taskRunsToCreate,
+            tasksToCreate,
           }),
           taskDependenciesToCreate,
-          taskRunsToCreate,
+          tasksToCreate,
         },
       };
     }
 
-    const nodeExecutionId = createNodeExecution(input.command.nodeId);
-    const itemIndexes = plannedItemIndexesForNode(input.command.nodeId);
-    if (!ensureUpstreamProviderTaskRuns(input.command.nodeId, itemIndexes)) {
+    const nodeRunId = createNodeRun(input.command.nodeId);
+    const branchIndexes = plannedBranchIndexesForNode(input.command.nodeId);
+    if (!ensureUpstreamProviderTasks(input.command.nodeId, branchIndexes)) {
       return plannerError(
         `Missing dependency information for ${input.command.nodeId}.`,
       );
     }
-    for (const itemIndex of itemIndexes) {
+    for (const branchIndex of branchIndexes) {
       if (
-        !createTaskRun({
-          attempt: 0,
-          itemIndex,
-          nodeExecutionId,
+        !createTask({
+          branchIndex,
+          nodeRunId,
           nodeId: input.command.nodeId,
         })
       ) {
@@ -633,61 +614,55 @@ export function planWorkflowRun(
       ok: true,
       value: {
         workflowDefinition,
-        nodeExecutionsToCreate,
-        nodeExecutionsToReuse,
+        nodeRunsToCreate,
+        nodeRunsToReuse,
         runCostPreview: buildRunCostPreview({
           storedPreviewItems,
           targetNodeId: input.command.nodeId,
-          taskRunsToCreate,
+          tasksToCreate,
         }),
         taskDependenciesToCreate,
-        taskRunsToCreate,
+        tasksToCreate,
       },
     };
   }
 
-  const nodeExecution = nodeExecutionById.get(input.command.nodeExecutionId);
-  if (!nodeExecution) {
+  const nodeRun = nodeRunById.get(input.command.nodeRunId);
+  if (!nodeRun) {
     return plannerError(
-      `Cannot run Task Run slot for missing Node Execution ${input.command.nodeExecutionId}.`,
+      `Cannot run Task slot for missing Node Run ${input.command.nodeRunId}.`,
     );
   }
 
-  const latest = latestTaskRun(
-    input.command.nodeExecutionId,
-    input.command.itemIndex,
-  );
-  if (latest && isActiveTaskRunStatus(latest.status)) {
+  const latest = latestTask(input.command.nodeRunId, input.command.branchIndex);
+  if (latest && isActiveTaskStatus(latest.status)) {
     return plannerError(
-      `Cannot run Item Index ${input.command.itemIndex} for Node Execution ${input.command.nodeExecutionId} because the latest Attempt is active.`,
+      `Cannot run Branch Index ${input.command.branchIndex} for Node Run ${input.command.nodeRunId} because the latest Task is active.`,
     );
   }
 
-  nodeExecutionsToReuse.push({
-    id: nodeExecution.id,
-    nodeId: nodeExecution.nodeId,
+  nodeRunsToReuse.push({
+    id: nodeRun.id,
+    nodeId: nodeRun.nodeId,
   });
-  executionIdByNodeId.set(nodeExecution.nodeId, nodeExecution.id);
+  executionIdByNodeId.set(nodeRun.nodeId, nodeRun.id);
   if (
-    !ensureUpstreamProviderTaskRuns(nodeExecution.nodeId, [
-      input.command.itemIndex,
-    ])
+    !ensureUpstreamProviderTasks(nodeRun.nodeId, [input.command.branchIndex])
   ) {
     return plannerError(
-      `Missing dependency information for ${nodeExecution.nodeId}.`,
+      `Missing dependency information for ${nodeRun.nodeId}.`,
     );
   }
 
   if (
-    !createTaskRun({
-      attempt: latest ? latest.attempt + 1 : 0,
-      itemIndex: input.command.itemIndex,
-      nodeExecutionId: input.command.nodeExecutionId,
-      nodeId: nodeExecution.nodeId,
+    !createTask({
+      branchIndex: input.command.branchIndex,
+      nodeRunId: input.command.nodeRunId,
+      nodeId: nodeRun.nodeId,
     })
   ) {
     return plannerError(
-      `Missing dependency information for ${nodeExecution.nodeId}.`,
+      `Missing dependency information for ${nodeRun.nodeId}.`,
     );
   }
 
@@ -695,15 +670,15 @@ export function planWorkflowRun(
     ok: true,
     value: {
       workflowDefinition,
-      nodeExecutionsToCreate,
-      nodeExecutionsToReuse,
+      nodeRunsToCreate,
+      nodeRunsToReuse,
       runCostPreview: buildRunCostPreview({
         storedPreviewItems,
-        targetNodeId: nodeExecution.nodeId,
-        taskRunsToCreate,
+        targetNodeId: nodeRun.nodeId,
+        tasksToCreate,
       }),
       taskDependenciesToCreate,
-      taskRunsToCreate,
+      tasksToCreate,
     },
   };
 }
@@ -711,25 +686,24 @@ export function planWorkflowRun(
 function buildRunCostPreview(input: {
   readonly storedPreviewItems: readonly RunCostPreviewItem[];
   readonly targetNodeId: string;
-  readonly taskRunsToCreate: readonly PlannedTaskRun[];
+  readonly tasksToCreate: readonly PlannedTask[];
 }): RunCostPreview {
-  const plannedItems = input.taskRunsToCreate.map(
-    (taskRun): RunCostPreviewItem => ({
-      attempt: taskRun.attempt,
-      creditCost: taskRun.creditCost,
+  const plannedItems = input.tasksToCreate.map(
+    (task): RunCostPreviewItem => ({
+      creditCost: task.creditCost,
       debitTiming:
-        taskRun.status === "QUEUED"
+        task.status === "QUEUED"
           ? "queued-immediately"
-          : taskRun.status === "WAITING_UPSTREAM"
+          : task.status === "WAITING_UPSTREAM"
             ? "waiting-upstream"
             : "failed-before-queue",
-      itemIndex: taskRun.itemIndex,
-      nodeExecutionId: taskRun.nodeExecutionId,
-      nodeId: taskRun.nodeId,
-      role: taskRun.nodeId === input.targetNodeId ? "target" : "upstream",
+      branchIndex: task.branchIndex,
+      nodeRunId: task.nodeRunId,
+      nodeId: task.nodeId,
+      role: task.nodeId === input.targetNodeId ? "target" : "upstream",
       source: "planned",
-      status: taskRun.status,
-      taskRunId: taskRun.id,
+      status: task.status,
+      taskId: task.id,
     }),
   );
   const items = [...input.storedPreviewItems, ...plannedItems];
@@ -772,13 +746,13 @@ function totalCreditCost(items: readonly RunCostPreviewItem[]) {
 function pricingCatalogCreditCosts(document: WorkflowDocument):
   | {
       readonly ok: true;
-      readonly value: ReturnType<typeof getRuntimeTaskRunCreditCostByNodeId>;
+      readonly value: ReturnType<typeof getRuntimeTaskCreditCostByNodeId>;
     }
   | { readonly ok: false; readonly error: WorkflowRunPlannerError } {
   try {
     return {
       ok: true,
-      value: getRuntimeTaskRunCreditCostByNodeId({ document }),
+      value: getRuntimeTaskCreditCostByNodeId({ document }),
     };
   } catch (error) {
     if (error instanceof WorkflowValidationError) {

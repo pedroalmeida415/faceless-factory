@@ -23,7 +23,7 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
     const pubSub = createFakePubSub();
     const publisher = createWorkflowEventPublisher(pubSub);
     const events = [
-      taskStatusEvent({ status: "RUNNING", taskRunId: "task-run-1" }),
+      taskStatusEvent({ status: "RUNNING", taskId: "task-run-1" }),
       taskStatusEvent({
         output: {
           assetId: "asset-1",
@@ -32,7 +32,7 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
           kind: "cdn-asset",
         },
         status: "PENDING_REVIEW",
-        taskRunId: "task-run-2",
+        taskId: "task-run-2",
       }),
     ] satisfies TaskStatusEvent[];
 
@@ -57,7 +57,7 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
     const publisher = createWorkflowEventPublisher(pubSub);
     const event = taskStatusEvent({
       status: "RUNNING",
-      taskRunId: "task-run-1",
+      taskId: "task-run-1",
     });
 
     await Effect.runPromise(
@@ -77,7 +77,7 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
     const publisher = createWorkflowEventPublisher(pubSub);
     const invalidEvent = {
       ...taskStatusEvent(),
-      attempt: -1,
+      branchIndex: -1,
     } as TaskStatusEvent;
 
     const publishExit = await Effect.runPromiseExit(
@@ -102,7 +102,7 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
     const pubSub = createFakePubSub({ failPublish: true });
     const publisher = createWorkflowEventPublisher(pubSub);
     const workflowId = "workflow-publish-failure-metric";
-    const event = taskStatusEvent({ taskRunId: "task-run-publish-failure" });
+    const event = taskStatusEvent({ taskId: "task-run-publish-failure" });
 
     const exit = await Effect.runPromiseExit(
       publisher
@@ -116,7 +116,7 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
       await metricCount(
         workflowEventStreamMetrics.publishFailures.pipe(
           Metric.tagged("channel", workflowEventChannel(workflowId)),
-          Metric.tagged("task_run_id", event.taskRunId),
+          Metric.tagged("task_id", event.taskId),
           Metric.tagged("workflow_id", workflowId),
         ),
       ),
@@ -189,7 +189,7 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
     const subscriber = createWorkflowEventSubscriber(redis);
     const event = taskStatusEvent({
       status: "RUNNING",
-      taskRunId: "task-run-1",
+      taskId: "task-run-1",
     });
 
     const eventsPromise = Effect.runPromise(
@@ -221,7 +221,11 @@ describe("runtime Task Status Event Pub/Sub seam", () => {
       (
         await Effect.runPromiseExit(
           parseTaskStatusEventPayloadEffect(
-            JSON.stringify({ ...event, attempt: -1, status: "not-a-status" }),
+            JSON.stringify({
+              ...event,
+              unexpectedField: -1,
+              status: "not-a-status",
+            }),
           ).pipe(Effect.provide(silentTestLogger)),
         )
       )._tag,
@@ -298,11 +302,10 @@ function taskStatusEvent(
   overrides: Partial<TaskStatusEvent> = {},
 ): TaskStatusEvent {
   return {
-    attempt: 0,
-    itemIndex: 0,
-    nodeExecutionId: "node-execution-1",
+    branchIndex: 0,
+    nodeRunId: "node-execution-1",
     status: "QUEUED",
-    taskRunId: "task-run-1",
+    taskId: "task-run-1",
     ...overrides,
   };
 }

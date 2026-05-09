@@ -20,7 +20,7 @@ import {
   type WorkflowProject,
   type WorkflowProjectSaveResponse,
 } from "~/features/workflow/project";
-import { assertActiveTaskRunSaveAllowed } from "~/features/workflow/save-lock-policy";
+import { assertActiveTaskSaveAllowed } from "~/features/workflow/save-lock-policy";
 import { WorkflowGraphValidator } from "~/features/workflow/workflow-graph-validator";
 import { workflows } from "~/server/database/schema";
 import { DatabaseService } from "~/server/services/database";
@@ -144,7 +144,7 @@ export function saveWorkflowProjectDocument(params: {
 
     yield* Effect.try({
       try: () =>
-        assertActiveTaskRunSaveAllowed({
+        assertActiveTaskSaveAllowed({
           activeTargetNodeIds: params.lockedNodeIds ?? [],
           currentDocument: currentProject.document,
           nextDocument,

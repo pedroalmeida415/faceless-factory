@@ -1,9 +1,9 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  materializeTaskRunInput,
+  materializeTaskInput,
   materializeWorkflowRunTaskFacts,
-} from "~/features/runtime/materialization/task-run-input-materialization";
+} from "~/features/runtime/materialization/task-input-materialization";
 import {
   createWorkflowNode,
   toWorkflowDefinitionGraphDocument,
@@ -11,7 +11,7 @@ import {
   type WorkflowDocument,
 } from "~/features/workflow/document";
 
-describe("Task Run Input Materialization", () => {
+describe("Task Input Materialization", () => {
   test("plans output reorder and broadcast generated-parent addresses through the materialization interface", () => {
     const facts = materializeWorkflowRunTaskFacts({
       document: reorderedGeneratedTextWorkflowDocument(),
@@ -30,58 +30,57 @@ describe("Task Run Input Materialization", () => {
         .filter((fact) => fact.nodeId === "script")
         .map((fact) => ({
           dependencyAddresses: fact.dependencyAddresses,
-          itemIndex: fact.itemIndex,
+          branchIndex: fact.branchIndex,
         })),
       [
         {
           dependencyAddresses: [
             {
-              parentItemIndex: 0,
+              parentBranchIndex: 0,
               parentNodeId: "source",
               sourceHandle: "text",
               targetHandle: "prompt",
               targetNodeId: "script",
             },
           ],
-          itemIndex: 0,
+          branchIndex: 0,
         },
         {
           dependencyAddresses: [
             {
-              parentItemIndex: 0,
+              parentBranchIndex: 0,
               parentNodeId: "source",
               sourceHandle: "text",
               targetHandle: "prompt",
               targetNodeId: "script",
             },
           ],
-          itemIndex: 1,
+          branchIndex: 1,
         },
         {
           dependencyAddresses: [
             {
-              parentItemIndex: 0,
+              parentBranchIndex: 0,
               parentNodeId: "source",
               sourceHandle: "text",
               targetHandle: "prompt",
               targetNodeId: "script",
             },
           ],
-          itemIndex: 2,
+          branchIndex: 2,
         },
       ],
     );
   });
 
-  test("materializes a direct runnable Task Run into an executable immutable input snapshot", () => {
-    const result = materializeTaskRunInput({
-      attempt: 2,
+  test("materializes a direct runnable Task into an executable immutable input snapshot", () => {
+    const result = materializeTaskInput({
       document: directLlmWorkflowDocument(),
       documentRevision: 17,
-      itemIndex: 1,
-      nodeExecutionId: "node-execution-script",
+      branchIndex: 1,
+      nodeRunId: "node-execution-script",
       nodeId: "script",
-      taskRunId: "task-run-script-1",
+      taskId: "task-run-script-1",
     });
 
     assert.equal(result.ok, true);
@@ -90,17 +89,16 @@ describe("Task Run Input Materialization", () => {
     assert.deepEqual(
       { ...result.value, workflowDefinition: undefined },
       {
-        attempt: 2,
         documentRevision: 17,
-        idempotencyKey: "task_run:task-run-script-1:attempt:2",
-        itemIndex: 1,
-        kind: "task-run-input-snapshot",
-        nodeExecutionId: "node-execution-script",
+        idempotencyKey: "task:task-run-script-1",
+        branchIndex: 1,
+        kind: "task-input-snapshot",
+        nodeRunId: "node-execution-script",
         nodeId: "script",
         providerInput: {
           kind: "llm-generation-request",
           request: {
-            idempotencyKey: "task_run:task-run-script-1:attempt:2",
+            idempotencyKey: "task:task-run-script-1",
             maxOutputTokens: 1024,
             mode: null,
             model: "gemini-3-flash-preview",
@@ -111,9 +109,9 @@ describe("Task Run Input Materialization", () => {
             thinkingLevel: "LOW",
           },
         },
-        resolvedParentTaskRuns: [],
+        resolvedParentTasks: [],
         targetNodeConfig: result.value.targetNodeConfig,
-        taskRunId: "task-run-script-1",
+        taskId: "task-run-script-1",
         version: 1,
         workflowDefinition: undefined,
       },

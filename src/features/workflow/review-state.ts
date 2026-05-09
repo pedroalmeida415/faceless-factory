@@ -67,13 +67,10 @@ export function toReviewOutput(
     (existingStatus === "approved" || existingStatus === "regenerating")
       ? existingStatus
       : "pending";
-  const attempt = isSameValue ? (existingOutput?.attempt ?? 0) : 0;
-
   switch (value.type) {
     case "text":
       return {
         assets: [],
-        attempt,
         executionId: existingOutput?.executionId ?? null,
         outputIndex,
         status,
@@ -83,7 +80,6 @@ export function toReviewOutput(
     case "video":
       return {
         assets: value.items[outputIndex] ?? [],
-        attempt,
         executionId: existingOutput?.executionId ?? null,
         outputIndex,
         status,

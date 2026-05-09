@@ -1,9 +1,9 @@
 import {
-  isActiveTaskRunStatus,
-  isFailedTaskRunStatus,
-  isTaskRunDependencySatisfiedStatus,
-  type TaskRunStatus,
-} from "~/features/runtime/domain/task-run-state";
+  isActiveTaskStatus,
+  isFailedTaskStatus,
+  isTaskDependencySatisfiedStatus,
+  type TaskStatus,
+} from "~/features/runtime/domain/task-state";
 import type { RenderableTaskOutput } from "~/features/runtime/events/task-status-events";
 import type {
   WorkflowDocument,
@@ -20,21 +20,20 @@ import type {
   WorkflowReviewState,
 } from "~/features/workflow/types";
 
-export type TaskRunStudioProjectionSlot = {
-  readonly attempt: number;
+export type TaskStudioProjectionSlot = {
   readonly failureReason?: string;
-  readonly itemIndex: number;
-  readonly nodeExecutionId: string;
+  readonly branchIndex: number;
+  readonly nodeRunId: string;
   readonly nodeId: string;
   readonly output?: RenderableTaskOutput;
-  readonly status: TaskRunStatus;
-  readonly taskRunId: string;
+  readonly status: TaskStatus;
+  readonly taskId: string;
 };
 
-export function applyTaskRunStudioProjection(input: {
+export function applyTaskStudioProjection(input: {
   readonly document: WorkflowDocument;
   readonly runtime: RuntimeState;
-  readonly slots: readonly TaskRunStudioProjectionSlot[];
+  readonly slots: readonly TaskStudioProjectionSlot[];
 }): {
   readonly activeNodeIds: readonly string[];
   readonly document: WorkflowDocument;
@@ -43,7 +42,7 @@ export function applyTaskRunStudioProjection(input: {
   const slotsByNodeId = groupByNodeId(input.slots);
   const activeNodeIds = Array.from(slotsByNodeId)
     .filter(([, slots]) =>
-      slots.some((slot) => isActiveTaskRunStatus(slot.status)),
+      slots.some((slot) => isActiveTaskStatus(slot.status)),
     )
     .map(([nodeId]) => nodeId);
 
@@ -52,7 +51,7 @@ export function applyTaskRunStudioProjection(input: {
     document: {
       ...input.document,
       nodes: input.document.nodes.map((node) =>
-        projectNodeTaskRuns(node, slotsByNodeId.get(node.id) ?? []),
+        projectNodeTasks(node, slotsByNodeId.get(node.id) ?? []),
       ),
     },
     runtime: {
@@ -73,15 +72,15 @@ export function applyTaskRunStudioProjection(input: {
   };
 }
 
-export function hasActiveTaskRunProjection(
-  slots: readonly TaskRunStudioProjectionSlot[],
+export function hasActiveTaskProjection(
+  slots: readonly TaskStudioProjectionSlot[],
 ) {
-  return slots.some((slot) => isActiveTaskRunStatus(slot.status));
+  return slots.some((slot) => isActiveTaskStatus(slot.status));
 }
 
-function projectNodeTaskRuns(
+function projectNodeTasks(
   node: WorkflowDocumentNode,
-  slots: readonly TaskRunStudioProjectionSlot[],
+  slots: readonly TaskStudioProjectionSlot[],
 ): WorkflowDocumentNode {
   if (!slots.length) {
     return node;
@@ -91,16 +90,16 @@ function projectNodeTaskRuns(
     const outputKind = node.kind === "imageGenerator" ? "image" : "video";
     const outputs = node.outputs.map((output) => output ?? []);
     for (const slot of slots) {
-      if (!isTaskRunDependencySatisfiedStatus(slot.status) || !slot.output) {
+      if (!isTaskDependencySatisfiedStatus(slot.status) || !slot.output) {
         continue;
       }
 
       const asset = projectRenderableAsset(slot.output, outputKind);
       if (asset) {
-        while (outputs.length <= slot.itemIndex) {
+        while (outputs.length <= slot.branchIndex) {
           outputs.push([]);
         }
-        outputs[slot.itemIndex] = [asset];
+        outputs[slot.branchIndex] = [asset];
       }
     }
 
@@ -115,10 +114,10 @@ function projectNodeTaskRuns(
     const outputs = [...node.outputs];
     for (const slot of slots) {
       if (
-        isTaskRunDependencySatisfiedStatus(slot.status) &&
+        isTaskDependencySatisfiedStatus(slot.status) &&
         slot.output?.kind === "inline-text-asset"
       ) {
-        outputs[slot.itemIndex] = slot.output.text;
+        outputs[slot.branchIndex] = slot.output.text;
       }
     }
 
@@ -134,7 +133,7 @@ function projectNodeTaskRuns(
 
 function projectReviewState(
   currentReview: WorkflowReviewState,
-  slots: readonly TaskRunStudioProjectionSlot[],
+  slots: readonly TaskStudioProjectionSlot[],
   valueType: NonNullable<WorkflowReviewState["valueType"]>,
 ): WorkflowReviewState {
   const reviewOutputs = slots.flatMap((slot): WorkflowReviewOutput[] => {
@@ -151,11 +150,10 @@ function projectReviewState(
     return [
       {
         assets: asset ? [asset] : [],
-        attempt: slot.attempt,
         executionId: null,
-        outputIndex: slot.itemIndex,
+        outputIndex: slot.branchIndex,
         status,
-        taskRunId: slot.taskRunId,
+        taskId: slot.taskId,
         text:
           slot.output?.kind === "inline-text-asset" ? slot.output.text : null,
       },
@@ -200,7 +198,7 @@ function projectRenderableAsset(
 }
 
 function projectReviewStatus(
-  status: TaskRunStatus,
+  status: TaskStatus,
 ): WorkflowReviewOutput["status"] | null {
   if (status === "PENDING_REVIEW") {
     return "pending";
@@ -211,27 +209,27 @@ function projectReviewStatus(
   if (status === "REJECTED") {
     return "rejected";
   }
-  if (isActiveTaskRunStatus(status)) {
+  if (isActiveTaskStatus(status)) {
     return "regenerating";
   }
   return null;
 }
 
 function projectNodeRuntimeState(
-  slots: readonly TaskRunStudioProjectionSlot[],
+  slots: readonly TaskStudioProjectionSlot[],
 ): WorkflowNodeRuntimeState {
   return {
     error:
-      slots.find((slot) => isFailedTaskRunStatus(slot.status))?.failureReason ??
+      slots.find((slot) => isFailedTaskStatus(slot.status))?.failureReason ??
       null,
     status: projectNodeStatus(slots),
   };
 }
 
 function projectNodeStatus(
-  slots: readonly TaskRunStudioProjectionSlot[],
+  slots: readonly TaskStudioProjectionSlot[],
 ): WorkflowNodeStatus {
-  if (slots.some((slot) => isFailedTaskRunStatus(slot.status))) {
+  if (slots.some((slot) => isFailedTaskStatus(slot.status))) {
     return "error";
   }
   if (
@@ -239,7 +237,7 @@ function projectNodeStatus(
   ) {
     return "running";
   }
-  if (slots.some((slot) => isActiveTaskRunStatus(slot.status))) {
+  if (slots.some((slot) => isActiveTaskStatus(slot.status))) {
     return "waiting";
   }
   if (slots.some((slot) => slot.status === "APPROVED")) {
@@ -248,8 +246,8 @@ function projectNodeStatus(
   return "idle";
 }
 
-function groupByNodeId(slots: readonly TaskRunStudioProjectionSlot[]) {
-  const grouped = new Map<string, TaskRunStudioProjectionSlot[]>();
+function groupByNodeId(slots: readonly TaskStudioProjectionSlot[]) {
+  const grouped = new Map<string, TaskStudioProjectionSlot[]>();
   for (const slot of slots) {
     grouped.set(slot.nodeId, [...(grouped.get(slot.nodeId) ?? []), slot]);
   }

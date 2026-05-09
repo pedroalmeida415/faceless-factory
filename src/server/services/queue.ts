@@ -1,10 +1,10 @@
 import { Queue } from "bullmq";
-import { Context, Effect } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { z } from "zod";
 import type {
-  TaskRunFailureReason,
-  TaskRunSettlementFailureSource,
-} from "~/features/runtime/domain/task-run-state";
+  TaskFailureReason,
+  TaskSettlementFailureSource,
+} from "~/features/runtime/domain/task-state";
 import {
   buildExecutionJobId,
   buildOrchestratorEventId,
@@ -56,33 +56,30 @@ const jobIdSchema = z
     message: "BullMQ job ids must not contain colons.",
   });
 const nonEmptyStringSchema = z.string().min(1);
-const attemptSchema = z.number().int().nonnegative();
-const itemIndexSchema = z.number().int().nonnegative();
+const branchIndexSchema = z.number().int().nonnegative();
 
 export type RuntimeExecutionJobPayload = {
-  readonly attempt: number;
-  readonly itemIndex: number;
+  readonly branchIndex: number;
   readonly jobId: string;
-  readonly nodeExecutionId: string;
+  readonly nodeRunId: string;
   readonly ownerUserId: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 };
 
 export const RuntimeExecutionJobPayloadSchema = z.object({
-  attempt: attemptSchema,
-  itemIndex: itemIndexSchema,
+  branchIndex: branchIndexSchema,
   jobId: jobIdSchema,
-  nodeExecutionId: nonEmptyStringSchema,
+  nodeRunId: nonEmptyStringSchema,
   ownerUserId: nonEmptyStringSchema,
-  taskRunId: nonEmptyStringSchema,
+  taskId: nonEmptyStringSchema,
   workflowId: nonEmptyStringSchema,
 });
 
 export type RuntimeWakeUpJobPayload = {
   readonly jobId: string;
   readonly ownerUserId: string;
-  readonly parentTaskRunId: string;
+  readonly parentTaskId: string;
   readonly workflowId: string;
 };
 
@@ -98,12 +95,17 @@ export type QueueServiceApi = {
 export class QueueService extends Context.Tag("QueueService")<
   QueueService,
   QueueServiceApi
->() {}
+>() {
+  static readonly Test = Layer.succeed(this, {
+    enqueueExecutionJob: () => Effect.void,
+    enqueueWakeUpJob: () => Effect.void,
+  });
+}
 
 export const RuntimeWakeUpJobPayloadSchema = z.object({
   jobId: jobIdSchema,
   ownerUserId: nonEmptyStringSchema,
-  parentTaskRunId: nonEmptyStringSchema,
+  parentTaskId: nonEmptyStringSchema,
   workflowId: nonEmptyStringSchema,
 });
 
@@ -159,44 +161,40 @@ const RuntimeGeneratedPrimaryAssetPayloadSchema = z.discriminatedUnion("kind", [
 ]);
 
 export type RuntimeCompletionSettlementJobPayload = {
-  readonly attempt: number;
   readonly providerCostCredits: number;
   readonly generatedAsset: RuntimeGeneratedPrimaryAssetPayload;
   readonly jobId: string;
   readonly ownerUserId: string;
   readonly reviewRequired: boolean;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 };
 
 export const RuntimeCompletionSettlementJobPayloadSchema = z.object({
-  attempt: attemptSchema,
   providerCostCredits: z.number().int().nonnegative(),
   generatedAsset: RuntimeGeneratedPrimaryAssetPayloadSchema,
   jobId: jobIdSchema,
   ownerUserId: nonEmptyStringSchema,
   reviewRequired: z.boolean(),
-  taskRunId: nonEmptyStringSchema,
+  taskId: nonEmptyStringSchema,
   workflowId: nonEmptyStringSchema,
 });
 
 export type RuntimeFailureSettlementJobPayload = {
-  readonly attempt: number;
   readonly failureReason: Exclude<
-    TaskRunFailureReason,
+    TaskFailureReason,
     { readonly type: "UPSTREAM_FAILED" }
   >;
-  readonly failureSource: TaskRunSettlementFailureSource;
+  readonly failureSource: TaskSettlementFailureSource;
   readonly providerCostCredits?: number;
   readonly jobId: string;
   readonly ownerUserId: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 };
 
 export const RuntimeFailureSettlementJobPayloadSchema: z.ZodType<RuntimeFailureSettlementJobPayload> =
   z.object({
-    attempt: attemptSchema,
     failureReason: z.discriminatedUnion("type", [
       z.object({ type: z.literal("INSUFFICIENT_CREDITS") }),
       z.object({ message: z.string(), type: z.literal("PROVIDER_FAILED") }),
@@ -204,18 +202,18 @@ export const RuntimeFailureSettlementJobPayloadSchema: z.ZodType<RuntimeFailureS
     ]),
     failureSource: z.discriminatedUnion("type", [
       z.object({
-        taskRunDebitRefundable: z.boolean(),
+        taskDebitRefundable: z.boolean(),
         type: z.literal("PROVIDER"),
       }),
       z.object({
-        taskRunDebitRefundable: z.literal(false),
+        taskDebitRefundable: z.literal(false),
         type: z.literal("POST_PROVIDER_INFRASTRUCTURE"),
       }),
     ]),
     providerCostCredits: z.number().int().nonnegative().optional(),
     jobId: jobIdSchema,
     ownerUserId: nonEmptyStringSchema,
-    taskRunId: nonEmptyStringSchema,
+    taskId: nonEmptyStringSchema,
     workflowId: nonEmptyStringSchema,
   });
 
@@ -336,9 +334,8 @@ export function buildRuntimeCompletionSettlementJobPayload(
   return {
     ...input,
     jobId: buildOrchestratorEventId({
-      attempt: input.attempt,
       kind: "completion",
-      taskRunId: input.taskRunId,
+      taskId: input.taskId,
     }),
   };
 }
@@ -353,17 +350,15 @@ export function buildRuntimeFailureSettlementJobPayload(
 ): RuntimeFailureSettlementJobPayload {
   return {
     jobId: buildOrchestratorEventId({
-      attempt: input.attempt,
       kind: "failure",
-      taskRunId: input.taskRunId,
+      taskId: input.taskId,
     }),
     ...(input.providerCostCredits === undefined
       ? {
-          attempt: input.attempt,
           failureReason: input.failureReason,
           failureSource: input.failureSource,
           ownerUserId: input.ownerUserId,
-          taskRunId: input.taskRunId,
+          taskId: input.taskId,
           workflowId: input.workflowId,
         }
       : input),
@@ -392,7 +387,7 @@ export type WorkflowQueuePublishError = {
   readonly cause: unknown;
   readonly jobId: string;
   readonly jobName: string;
-  readonly taskRunId?: string;
+  readonly taskId?: string;
   readonly workflowId: string;
 };
 
@@ -441,7 +436,7 @@ export function createWorkflowQueueAdapter(queue: WorkflowQueueLike) {
         cause,
         jobId: job.jobId,
         jobName,
-        taskRunId: "taskRunId" in job ? job.taskRunId : job.parentTaskRunId,
+        taskId: "taskId" in job ? job.taskId : job.parentTaskId,
         workflowId: job.workflowId,
       }),
     }).pipe(
@@ -450,7 +445,7 @@ export function createWorkflowQueueAdapter(queue: WorkflowQueueLike) {
         Effect.logWarning("Runtime queue publish failed", {
           jobId: error.jobId,
           jobName: error.jobName,
-          taskRunId: error.taskRunId,
+          taskId: error.taskId,
           workflowId: error.workflowId,
         }),
       ),

@@ -1,34 +1,33 @@
 import {
-  extractTaskRunMaterializationSubgraph,
+  extractTaskMaterializationSubgraph,
   type GeneratorIterationInfo,
   getGeneratorIterationPreview,
   planTargetNodes,
-  type TaskRunMaterializationPlan,
+  type TaskMaterializationPlan,
 } from "~/features/runtime/materialization/planning";
 import type { WorkflowDocument } from "~/features/workflow/document";
 
-export type { GeneratorIterationInfo, TaskRunMaterializationPlan };
+export type { GeneratorIterationInfo, TaskMaterializationPlan };
 
 export { getGeneratorIterationPreview };
 
-function buildTaskRunMaterializationPlan(
+function buildTaskMaterializationPlan(
   document: WorkflowDocument,
   targetNodeIds: string[],
-): TaskRunMaterializationPlan {
+): TaskMaterializationPlan {
   return planTargetNodes(document, targetNodeIds);
 }
 
-export function collectTaskRunMaterializationNodeIds(
+export function collectTaskMaterializationNodeIds(
   document: WorkflowDocument,
   targetNodeIds: string[],
 ) {
-  return buildTaskRunMaterializationPlan(document, targetNodeIds)
-    .requiredNodeIds;
+  return buildTaskMaterializationPlan(document, targetNodeIds).requiredNodeIds;
 }
 
-export function extractTaskRunMaterializationSlice(
+export function extractTaskMaterializationSlice(
   document: WorkflowDocument,
   targetNodeIds: string[],
 ): WorkflowDocument {
-  return extractTaskRunMaterializationSubgraph(document, targetNodeIds);
+  return extractTaskMaterializationSubgraph(document, targetNodeIds);
 }

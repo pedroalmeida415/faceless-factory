@@ -18,8 +18,8 @@ import {
 import { getReviewOutputCount } from "~/features/workflow/review-state";
 import { isGeneratorNodeKind } from "~/features/workflow/types";
 
-class TaskRunMaterializationPlanningError extends Data.TaggedError(
-  "TaskRunMaterializationPlanningError",
+class TaskMaterializationPlanningError extends Data.TaggedError(
+  "TaskMaterializationPlanningError",
 )<{
   readonly message: string;
   readonly cause?: unknown;
@@ -48,7 +48,7 @@ type PlanningContext = {
   targetNodeIdSet: Set<string>;
 };
 
-export type TaskRunMaterializationPlan = {
+export type TaskMaterializationPlan = {
   targetNodeIds: string[];
   requiredNodeIds: Set<string>;
   executableNodeIds: string[];
@@ -63,7 +63,7 @@ const DEFAULT_GENERATOR_ITERATION_INFO: GeneratorIterationInfo = {
 };
 
 function failPlanning(message: string, cause?: unknown): never {
-  throw new TaskRunMaterializationPlanningError({ message, cause });
+  throw new TaskMaterializationPlanningError({ message, cause });
 }
 
 function getNodeOutputValueType(
@@ -376,7 +376,7 @@ function buildPlan(
     executableNodeIds: context.executableNodeIds,
     reviewBarrierNodeIds: Array.from(context.reviewBarrierNodeIds),
     generatorIterationById: context.generatorIterationById,
-  } satisfies TaskRunMaterializationPlan;
+  } satisfies TaskMaterializationPlan;
 }
 
 function getPlannedOutputCount(params: {
@@ -426,7 +426,7 @@ function extractSubgraph(
   } satisfies WorkflowDocument;
 }
 
-export function planTaskRunMaterialization(params: {
+export function planTaskMaterialization(params: {
   document: WorkflowDocument;
   targetNodeIds: readonly string[];
 }) {
@@ -447,7 +447,7 @@ export function planTaskRunMaterialization(params: {
   };
 }
 
-export function extractTaskRunMaterializationSubgraph(
+export function extractTaskMaterializationSubgraph(
   document: WorkflowDocument,
   targetNodeIds: readonly string[],
 ) {

@@ -92,7 +92,7 @@ export type RuntimeEstimatedCreditCostByNodeId = Readonly<
   Record<string, number>
 >;
 
-export type RuntimeTaskRunCreditCostByNodeId = Readonly<Record<string, number>>;
+export type RuntimeTaskCreditCostByNodeId = Readonly<Record<string, number>>;
 
 function unsupportedPricing(node: WorkflowDocumentNode): never {
   const model = "model" in node ? String(node.model) : "unknown";
@@ -183,12 +183,12 @@ export function priceVideoGeneration(request: GenerateVideoRequest) {
 export function estimateRuntimeCreditCostByNodeId(input: {
   readonly document: WorkflowDocument;
 }): RuntimeEstimatedCreditCostByNodeId {
-  return getRuntimeTaskRunCreditCostByNodeId(input);
+  return getRuntimeTaskCreditCostByNodeId(input);
 }
 
-export function getRuntimeTaskRunCreditCostByNodeId(input: {
+export function getRuntimeTaskCreditCostByNodeId(input: {
   readonly document: WorkflowDocument;
-}): RuntimeTaskRunCreditCostByNodeId {
+}): RuntimeTaskCreditCostByNodeId {
   return Object.fromEntries(
     buildExecutionCostProjection(input.document).lineItems.map((lineItem) => [
       lineItem.nodeId,

@@ -60,9 +60,9 @@ export const WorkflowClientService = {
     }) as Effect.Effect<RuntimeRunCostPreview, WorkflowRequestError>;
   },
 
-  runTaskSlot(input: {
-    itemIndex: number;
-    nodeExecutionId: string;
+  runTask(input: {
+    branchIndex: number;
+    nodeRunId: string;
     projectId: string;
   }) {
     return Effect.tryPromise({
@@ -70,9 +70,9 @@ export const WorkflowClientService = {
         trpcClient.runtime.run.mutate({
           projectId: input.projectId,
           target: {
-            itemIndex: input.itemIndex,
-            nodeExecutionId: input.nodeExecutionId,
-            type: "task-slot",
+            branchIndex: input.branchIndex,
+            nodeRunId: input.nodeRunId,
+            type: "task",
           },
         }),
       catch: (cause) =>
@@ -139,13 +139,9 @@ export const WorkflowClientService = {
     } satisfies Unsubscribable;
   },
 
-  approveTaskRun(input: {
-    attempt: number;
-    projectId: string;
-    taskRunId: string;
-  }) {
+  approveTask(input: { projectId: string; taskId: string }) {
     return Effect.tryPromise({
-      try: () => trpcClient.runtime.approveTaskRun.mutate(input),
+      try: () => trpcClient.runtime.approveTask.mutate(input),
       catch: (cause) =>
         new WorkflowRequestError({
           message: getErrorMessage(cause),
@@ -154,13 +150,9 @@ export const WorkflowClientService = {
     });
   },
 
-  rejectTaskRun(input: {
-    attempt: number;
-    projectId: string;
-    taskRunId: string;
-  }) {
+  rejectTask(input: { projectId: string; taskId: string }) {
     return Effect.tryPromise({
-      try: () => trpcClient.runtime.rejectTaskRun.mutate(input),
+      try: () => trpcClient.runtime.rejectTask.mutate(input),
       catch: (cause) =>
         new WorkflowRequestError({
           message: getErrorMessage(cause),
@@ -169,13 +161,9 @@ export const WorkflowClientService = {
     });
   },
 
-  cancelTaskRun(input: {
-    attempt: number;
-    projectId: string;
-    taskRunId: string;
-  }) {
+  cancelTask(input: { projectId: string; taskId: string }) {
     return Effect.tryPromise({
-      try: () => trpcClient.runtime.cancelTaskRun.mutate(input),
+      try: () => trpcClient.runtime.cancelTask.mutate(input),
       catch: (cause) =>
         new WorkflowRequestError({
           message: getErrorMessage(cause),

@@ -14,13 +14,13 @@ export type TelemetryServiceConfig = {
 export type RuntimePostCommitDeliveryTelemetry = {
   readonly attempt: number;
   readonly cause: string;
-  readonly itemIndex?: number;
+  readonly branchIndex?: number;
   readonly jobId?: string;
   readonly kind: "execution-job" | "task-status-event" | "wake-up-call-job";
-  readonly nodeExecutionId?: string;
+  readonly nodeRunId?: string;
   readonly source: string;
   readonly status?: string;
-  readonly taskRunId?: string;
+  readonly taskId?: string;
   readonly workflowId: string;
 };
 
@@ -115,6 +115,8 @@ export class TelemetryService extends Context.Tag("TelemetryService")<
     serviceName: "faceless-factory-server",
   });
 
+  static readonly Test = TelemetryService.Local;
+
   static readonly enabledByEnv = env.RUNTIME_OTEL_ENABLED === "true";
 
   static readonly Live = TelemetryService.layerFromConfig({
@@ -142,7 +144,7 @@ function tagPostCommitMetric(
     Metric.tagged("work_kind", details.kind),
     Metric.tagged("source", details.source),
     Metric.tagged("workflow_id", details.workflowId),
-    Metric.tagged("task_run_id", details.taskRunId ?? "none"),
+    Metric.tagged("task_id", details.taskId ?? "none"),
     Metric.tagged("status", details.status ?? "none"),
   );
 }

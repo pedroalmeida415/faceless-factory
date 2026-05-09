@@ -1,8 +1,8 @@
 import type { Effect } from "effect";
 import type {
-  TaskRunFailureReason,
-  TaskRunSettlementFailureSource,
-} from "~/features/runtime/domain/task-run-state";
+  TaskFailureReason,
+  TaskSettlementFailureSource,
+} from "~/features/runtime/domain/task-state";
 import type { TaskStatusEvent } from "~/features/runtime/events/task-status-events";
 import type {
   WorkflowRunPlan,
@@ -11,8 +11,8 @@ import type {
 import type {
   RepositoryCommittedOutcome,
   RuntimeRepositoryFailure,
-  WakeUpTaskRunChildrenRepositoryCommand,
-  WakeUpTaskRunChildrenRepositoryResult,
+  WakeUpTaskChildrenRepositoryCommand,
+  WakeUpTaskChildrenRepositoryResult,
 } from "~/features/runtime/server/repository";
 import type {
   QueueServiceApi,
@@ -23,7 +23,7 @@ import type {
 
 export type StartWorkflowRunInput = Omit<
   WorkflowRunPlannerInput,
-  "createNodeExecutionId" | "createTaskRunId"
+  "createNodeRunId" | "createTaskId"
 >;
 
 export type RuntimeCommitPlanResult = {
@@ -33,43 +33,40 @@ export type RuntimeCommitPlanResult = {
 };
 
 export type SettleWorkerCompletionCommand = {
-  readonly attempt: number;
   readonly providerCostCredits: number;
   readonly generatedAsset: RuntimeGeneratedPrimaryAssetPayload;
   readonly ownerUserId: string;
   readonly reviewRequired: boolean;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 };
 
 export type SettleWorkerFailureCommand = {
-  readonly attempt: number;
   readonly failureReason: Exclude<
-    TaskRunFailureReason,
+    TaskFailureReason,
     { readonly type: "UPSTREAM_FAILED" }
   >;
-  readonly failureSource: TaskRunSettlementFailureSource;
+  readonly failureSource: TaskSettlementFailureSource;
   readonly providerCostCredits?: number;
   readonly ownerUserId: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 };
 
-export type HandleWakeUpCallCommand = WakeUpTaskRunChildrenRepositoryCommand & {
+export type HandleWakeUpCallCommand = WakeUpTaskChildrenRepositoryCommand & {
   readonly workflowId: string;
 };
 
-export type ReviewTaskRunDecisionCommand = {
-  readonly attempt: number;
+export type ReviewTaskDecisionCommand = {
   readonly ownerUserId: string;
-  readonly taskRunId: string;
+  readonly taskId: string;
   readonly workflowId: string;
 };
 
-export type RejectTaskRunCommand = ReviewTaskRunDecisionCommand;
+export type RejectTaskCommand = ReviewTaskDecisionCommand;
 
-export type RejectTaskRunRepositoryCommand = RejectTaskRunCommand & {
-  readonly newTaskRunId: string;
+export type RejectTaskRepositoryCommand = RejectTaskCommand & {
+  readonly newTaskId: string;
 };
 
 export type RuntimeSettleCompletionResult =
@@ -96,20 +93,20 @@ export type RuntimeReviewDecisionResult =
     }
   | { readonly decided: false };
 
-export type TaskRunCancellationBlockedReason =
+export type TaskCancellationBlockedReason =
   | "PENDING_REVIEW_REQUIRES_REVIEW_DECISION"
   | "RUNNING_TASK_RUN_CANCELLATION_BLOCKED";
 
-export type RuntimeCancelTaskRunResult =
+export type RuntimeCancelTaskResult =
   | RuntimeReviewDecisionResult
   | {
       readonly blocked: true;
       readonly decided: false;
       readonly message: string;
-      readonly reason: TaskRunCancellationBlockedReason;
+      readonly reason: TaskCancellationBlockedReason;
     };
 
-export type RuntimeRejectTaskRunResult =
+export type RuntimeRejectTaskResult =
   | {
       readonly rejected: true;
       readonly executionJob: RuntimeExecutionJobPayload | null;
@@ -124,40 +121,40 @@ export type RuntimeRepositoryForCommands = {
     RepositoryCommittedOutcome<RuntimeCommitPlanResult>,
     RuntimeRepositoryFailure
   >;
-  readonly settleTaskRunCompletion: (
+  readonly settleTaskCompletion: (
     command: SettleWorkerCompletionCommand,
   ) => Effect.Effect<
     RepositoryCommittedOutcome<RuntimeSettleCompletionResult>,
     RuntimeRepositoryFailure
   >;
-  readonly settleTaskRunFailure: (
+  readonly settleTaskFailure: (
     command: SettleWorkerFailureCommand,
   ) => Effect.Effect<
     RepositoryCommittedOutcome<RuntimeSettleFailureResult>,
     RuntimeRepositoryFailure
   >;
-  readonly approveTaskRun: (
-    command: ReviewTaskRunDecisionCommand,
+  readonly approveTask: (
+    command: ReviewTaskDecisionCommand,
   ) => Effect.Effect<
     RepositoryCommittedOutcome<RuntimeReviewDecisionResult>,
     RuntimeRepositoryFailure
   >;
-  readonly cancelTaskRun: (
-    command: ReviewTaskRunDecisionCommand,
+  readonly cancelTask: (
+    command: ReviewTaskDecisionCommand,
   ) => Effect.Effect<
-    RepositoryCommittedOutcome<RuntimeCancelTaskRunResult>,
+    RepositoryCommittedOutcome<RuntimeCancelTaskResult>,
     RuntimeRepositoryFailure
   >;
-  readonly rejectTaskRunAndCreateRegeneration: (
-    command: RejectTaskRunRepositoryCommand,
+  readonly rejectTaskAndCreateRegeneration: (
+    command: RejectTaskRepositoryCommand,
   ) => Effect.Effect<
-    RepositoryCommittedOutcome<RuntimeRejectTaskRunResult>,
+    RepositoryCommittedOutcome<RuntimeRejectTaskResult>,
     RuntimeRepositoryFailure
   >;
-  readonly wakeUpTaskRunChildren: (
+  readonly wakeUpTaskChildren: (
     command: HandleWakeUpCallCommand,
   ) => Effect.Effect<
-    RepositoryCommittedOutcome<WakeUpTaskRunChildrenRepositoryResult>,
+    RepositoryCommittedOutcome<WakeUpTaskChildrenRepositoryResult>,
     RuntimeRepositoryFailure
   >;
 };

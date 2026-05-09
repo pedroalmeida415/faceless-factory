@@ -1,8 +1,8 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { renderTaskRunProviderInput } from "~/features/runtime/execution/provider-input-rendering";
-import type { ResolvedParentTaskRunInputSnapshot } from "~/features/runtime/execution/task-run-input-snapshot";
-import type { MaterializedProviderInputFacts } from "~/features/runtime/materialization/task-run-input-materialization";
+import { renderTaskProviderInput } from "~/features/runtime/execution/provider-input-rendering";
+import type { ResolvedParentTaskInputSnapshot } from "~/features/runtime/execution/task-input-snapshot";
+import type { MaterializedProviderInputFacts } from "~/features/runtime/materialization/task-input-materialization";
 import {
   createWorkflowNode,
   toWorkflowDefinitionGraphDocument,
@@ -13,7 +13,7 @@ import { SYSTEM_PROMPT_INPUT_HANDLE_ID } from "~/features/workflow/llm-models";
 import { PROMPT_INPUT_HANDLE_ID } from "~/features/workflow/node-definitions";
 import type { WorkflowAsset } from "~/features/workflow/types";
 
-describe("renderTaskRunProviderInput", () => {
+describe("renderTaskProviderInput", () => {
   test("renders provider requests from materialized prompt, system prompt, and image facts", () => {
     const node = { ...createWorkflowNode("llmGenerator", 0), id: "llm-node" };
     const image = workflowImageAsset("materialized-reference");
@@ -24,11 +24,11 @@ describe("renderTaskRunProviderInput", () => {
       systemPrompt: "use a factual tone",
     } satisfies MaterializedProviderInputFacts;
 
-    const result = renderTaskRunProviderInput({
-      idempotencyKey: "task_run:llm-task:attempt:0",
-      itemIndex: 0,
+    const result = renderTaskProviderInput({
+      idempotencyKey: "task:llm-task",
+      branchIndex: 0,
       materializedInputFacts,
-      resolvedParentTaskRuns: [],
+      resolvedParentTasks: [],
       targetNodeConfig: node,
     });
 
@@ -36,7 +36,7 @@ describe("renderTaskRunProviderInput", () => {
     assert.deepEqual(result.providerInput, {
       kind: "llm-generation-request",
       request: {
-        idempotencyKey: "task_run:llm-task:attempt:0",
+        idempotencyKey: "task:llm-task",
         maxOutputTokens: 2048,
         mode: null,
         model: "gemini-3-flash-preview",
@@ -55,10 +55,10 @@ describe("renderTaskRunProviderInput", () => {
       id: "image-node",
     };
 
-    const result = renderTaskRunProviderInput({
-      idempotencyKey: "task_run:image-task:attempt:0",
-      itemIndex: 0,
-      resolvedParentTaskRuns: [
+    const result = renderTaskProviderInput({
+      idempotencyKey: "task:image-task",
+      branchIndex: 0,
+      resolvedParentTasks: [
         textParent("make a glass castle", PROMPT_INPUT_HANDLE_ID),
       ],
       targetNodeConfig: node,
@@ -70,7 +70,7 @@ describe("renderTaskRunProviderInput", () => {
         kind: "image-generation-request",
         request: {
           aspectRatio: "1:1",
-          idempotencyKey: "task_run:image-task:attempt:0",
+          idempotencyKey: "task:image-task",
           mode: "default",
           model: "gemini-3-pro-image-preview",
           prompt: "make a glass castle",
@@ -84,10 +84,10 @@ describe("renderTaskRunProviderInput", () => {
     const node = { ...createWorkflowNode("llmGenerator", 0), id: "llm-node" };
     const image = workflowImageAsset("image-asset");
 
-    const result = renderTaskRunProviderInput({
-      idempotencyKey: "task_run:llm-task:attempt:0",
-      itemIndex: 0,
-      resolvedParentTaskRuns: [
+    const result = renderTaskProviderInput({
+      idempotencyKey: "task:llm-task",
+      branchIndex: 0,
+      resolvedParentTasks: [
         textParent("write a shot list", PROMPT_INPUT_HANDLE_ID),
         textParent("answer tersely", SYSTEM_PROMPT_INPUT_HANDLE_ID),
         mediaParent(image, "image-input-0"),
@@ -99,7 +99,7 @@ describe("renderTaskRunProviderInput", () => {
     assert.deepEqual(result.providerInput, {
       kind: "llm-generation-request",
       request: {
-        idempotencyKey: "task_run:llm-task:attempt:0",
+        idempotencyKey: "task:llm-task",
         maxOutputTokens: 2048,
         mode: null,
         model: "gemini-3-flash-preview",
@@ -119,10 +119,10 @@ describe("renderTaskRunProviderInput", () => {
     };
     const image = workflowImageAsset("reference-image");
 
-    const result = renderTaskRunProviderInput({
-      idempotencyKey: "task_run:video-task:attempt:0",
-      itemIndex: 0,
-      resolvedParentTaskRuns: [
+    const result = renderTaskProviderInput({
+      idempotencyKey: "task:video-task",
+      branchIndex: 0,
+      resolvedParentTasks: [
         textParent("animate this", PROMPT_INPUT_HANDLE_ID),
         mediaParent(image, "image-input-0"),
       ],
@@ -190,10 +190,10 @@ describe("renderTaskRunProviderInput", () => {
     );
     assert.equal(targetNodeConfig?.kind, "videoGenerator");
 
-    const result = renderTaskRunProviderInput({
-      idempotencyKey: "task_run:video-task:attempt:0",
-      itemIndex: 2,
-      resolvedParentTaskRuns: [
+    const result = renderTaskProviderInput({
+      idempotencyKey: "task:video-task",
+      branchIndex: 2,
+      resolvedParentTasks: [
         mediaParent(frame1, "last-frame", image.id, 0),
         mediaParent(frame3, "first-frame", image.id, 2),
       ],
@@ -218,10 +218,10 @@ describe("renderTaskRunProviderInput", () => {
       storagePath: null,
     } satisfies WorkflowAsset;
 
-    const result = renderTaskRunProviderInput({
-      idempotencyKey: "task_run:image-task:attempt:0",
-      itemIndex: 0,
-      resolvedParentTaskRuns: [
+    const result = renderTaskProviderInput({
+      idempotencyKey: "task:image-task",
+      branchIndex: 0,
+      resolvedParentTasks: [
         textParent("use this reference", PROMPT_INPUT_HANDLE_ID),
         mediaParent(image, "image-input-0"),
       ],
@@ -232,21 +232,21 @@ describe("renderTaskRunProviderInput", () => {
     assert.deepEqual(result.providerInput.request.referenceImages, [image]);
   });
 
-  test("folds prompt-node variables into generator provider input from upstream Task Run outputs", () => {
+  test("folds prompt-node variables into generator provider input from upstream Task outputs", () => {
     const document = promptVariableDocument();
     const targetNodeConfig = document.nodes.find(
       (node) => node.id === "script",
     );
     assert.equal(targetNodeConfig?.kind, "llmGenerator");
 
-    const result = renderTaskRunProviderInput({
-      idempotencyKey: "task_run:script-task:attempt:0",
-      itemIndex: 0,
-      resolvedParentTaskRuns: [
+    const result = renderTaskProviderInput({
+      idempotencyKey: "task:script-task",
+      branchIndex: 0,
+      resolvedParentTasks: [
         {
           ...textParent("clockwork birds", "topic"),
           address: {
-            parentItemIndex: 0,
+            parentBranchIndex: 0,
             parentNodeId: "topic-source",
             sourceHandle: "text",
             targetHandle: "topic",
@@ -268,10 +268,10 @@ describe("renderTaskRunProviderInput", () => {
   test("returns a typed non-executable result for unsupported node kinds", () => {
     const node = { ...createWorkflowNode("list", 0), id: "list-node" };
 
-    const result = renderTaskRunProviderInput({
-      idempotencyKey: "task_run:list-task:attempt:0",
-      itemIndex: 0,
-      resolvedParentTaskRuns: [],
+    const result = renderTaskProviderInput({
+      idempotencyKey: "task:list-task",
+      branchIndex: 0,
+      resolvedParentTasks: [],
       targetNodeConfig: node,
     });
 
@@ -289,24 +289,23 @@ describe("renderTaskRunProviderInput", () => {
 function textParent(
   text: string,
   targetHandle: string,
-): ResolvedParentTaskRunInputSnapshot {
+): ResolvedParentTaskInputSnapshot {
   return {
     address: {
-      parentItemIndex: 0,
+      parentBranchIndex: 0,
       parentNodeId: `source-${targetHandle}`,
       sourceHandle: "text",
       targetHandle,
       targetNodeId: "target-node",
     },
-    attempt: 0,
-    itemIndex: 0,
-    nodeExecutionId: `node-execution-${targetHandle}`,
+    branchIndex: 0,
+    nodeRunId: `node-execution-${targetHandle}`,
     output: {
       assetId: `asset-${targetHandle}`,
       kind: "inline-text-asset",
       text,
     },
-    taskRunId: `task-run-${targetHandle}`,
+    taskId: `task-run-${targetHandle}`,
   };
 }
 
@@ -314,27 +313,26 @@ function mediaParent(
   asset: WorkflowAsset,
   targetHandle: string,
   parentNodeId?: string,
-  itemIndex = 0,
-): ResolvedParentTaskRunInputSnapshot {
+  branchIndex = 0,
+): ResolvedParentTaskInputSnapshot {
   return {
     address: {
-      parentItemIndex: itemIndex,
+      parentBranchIndex: branchIndex,
       parentNodeId: parentNodeId ?? `source-${targetHandle}`,
       sourceHandle: "images",
       targetHandle,
       targetNodeId: "target-node",
     },
-    attempt: 0,
     asset,
-    itemIndex,
-    nodeExecutionId: `node-execution-${targetHandle}`,
+    branchIndex,
+    nodeRunId: `node-execution-${targetHandle}`,
     output: {
       assetId: asset.id,
       cdnUrl: asset.url,
       contentType: asset.mimeType,
       kind: "cdn-asset",
     },
-    taskRunId: `task-run-${targetHandle}`,
+    taskId: `task-run-${targetHandle}`,
   };
 }
 

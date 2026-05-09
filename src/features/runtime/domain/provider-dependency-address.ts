@@ -1,6 +1,6 @@
 export type ProviderDependencyAddress = {
   readonly parentNodeId: string;
-  readonly parentItemIndex: number;
+  readonly parentBranchIndex: number;
   readonly sourceHandle: string | null;
   readonly targetNodeId: string;
   readonly targetHandle: string | null;
@@ -17,7 +17,7 @@ export function providerDependencyAddressKey(
 ) {
   return [
     address.parentNodeId,
-    address.parentItemIndex,
+    address.parentBranchIndex,
     address.sourceHandle ?? "",
     address.targetHandle ?? "",
     address.targetNodeId,
@@ -49,7 +49,7 @@ export function isProviderDependencyAddress(
   return (
     isRecord(value) &&
     typeof value.parentNodeId === "string" &&
-    typeof value.parentItemIndex === "number" &&
+    typeof value.parentBranchIndex === "number" &&
     typeof value.targetNodeId === "string" &&
     (value.sourceHandle === null || typeof value.sourceHandle === "string") &&
     (value.targetHandle === null || typeof value.targetHandle === "string")
