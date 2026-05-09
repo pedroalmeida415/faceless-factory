@@ -75,25 +75,40 @@ Match the installed package version and local project patterns.
 
 ## 6. Runtime and service rules
 
-Shared reusable server capabilities live under:
+Follow `docs/adr/0004-feature-clean-architecture-boundaries.md` for feature and core boundaries.
+
+Feature modules use:
 
 ```txt
-src/server/services/**
+src/features/<feature>/domain/**
+src/features/<feature>/application/**
+src/features/<feature>/infra/**
 ```
 
-Feature folders may own domain workflows, repositories, commands, projections, workers, and payload schemas, but reusable capabilities such as database, telemetry, queues, credits, storage, billing, provider clients, and event infrastructure must be shared services.
+Global technical capabilities use:
 
-Shared service tags use capability names with `Service`, for example:
+```txt
+src/core/application/**
+src/core/infra/**
+```
 
-* `DatabaseService`
-* `TelemetryService`
-* `QueueService`
-* `CreditsService`
-* `StorageService`
-* `ProjectStoreService`
-* `VertexAiService`
+Root composition and framework adapters use:
 
-Do not prefix shared server services with `Server`, runtime tier names, or the first feature that used them.
+```txt
+src/main/**
+```
+
+Feature `domain` contains business rules, domain errors, value objects, domain services, and business protocols. Feature `application` contains use cases, orchestration, and feature-owned ports/contracts. Feature `infra` implements feature application ports using external libraries, SDKs, databases, queues, framework mechanisms, and `core/application` ports.
+
+Feature application should depend on feature domain and feature-owned ports expressed in business/use-case language. Feature application should not import shared infrastructure implementations, and should not depend directly on generic core capability ports by default.
+
+Feature infra may depend on feature application and `core/application`. Feature infra must not depend on `core/infra`, and must not bypass feature application by implementing domain ports directly.
+
+Core application ports are broad but cohesive technical capabilities, such as database, job queue, blob store, pub/sub, telemetry, AI generation, and payment gateway. Core ports must use generic capability language, not feature nouns such as Runtime Task, Workflow Asset, or Task Status Event.
+
+Core infra implements core application ports. Feature-shaped services such as runtime queues, workflow asset stores, credit accounting, or project stores must not be moved into core as-is; translate feature language to core capabilities in feature infra.
+
+Capability service tags use capability names with `Service`, for example `DatabaseService`, `TelemetryService`, `JobQueueService`, `BlobStoreService`, `PubSubService`, `AiGenerationService`, or `PaymentGatewayService`. Do not prefix capability services with `Server`, runtime tier names, or the first feature that used them.
 
 External provider services expose capability methods such as `generateText`, `generateImages`, `generateVideo`, `storeAsset`, or `chargeCredits`. Pass model/config as data. Do not create public model-specific methods.
 
@@ -102,9 +117,9 @@ Provider services own reusable SDK clients. Construct and validate clients in se
 `ManagedRuntime.make` may only be called from:
 
 * `src/client/effect.ts`
-* `src/server/effect.ts`
+* `src/main/effect.ts`
 
-App code and tests must reuse central runtimes or provide layers directly with `Effect.provide`.
+Root composition belongs in `src/main/**`. App code and tests must reuse central runtimes.
 
 ## 7. Workflow graph rules
 
