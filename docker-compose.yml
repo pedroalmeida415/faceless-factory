@@ -19,6 +19,29 @@ services:
     volumes:
       - redis_data:/data
 
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: faceless-factory
+      MINIO_ROOT_PASSWORD: faceless-factory-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  minio-init:
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 faceless-factory faceless-factory-secret; do sleep 1; done &&
+      mc mb --ignore-existing local/faceless-factory
+      "
+
 volumes:
   postgres_data:
   redis_data:
+  minio_data:

@@ -65,6 +65,10 @@ Use plain TypeScript for deterministic in-memory transforms with no I/O, lifecyc
 
 Do not use raw Promise orchestration, thrown domain errors, nullable failure sentinels, or ad hoc `try/catch` in domain, runtime, persistence, queue, worker, or provider integration code. Use Effect programs, tagged errors, managed resources, timeouts, interruption, and typed recovery.
 
+When asynchronous coordination needs shared readiness, single-flight initialization, fan-out, cancellation, or lifecycle cleanup, model it with Effect primitives instead of hidden promise state. Prefer `Deferred`, `Ref`, `Queue`, `PubSub`, `Scope`, `Fiber`, and `Effect.acquireRelease` so fallibility, interruption, and cleanup are visible in types. Do not hide errors in plain `async` helpers, `.then/.catch` chains, or callback-local `try/catch`; return an `Effect` with typed errors and compose cleanup with `Effect.tapError`, finalizers, or scoped resources.
+
+For shared external subscriptions, use one managed underlying connection/subscription per process or layer and multiplex local handlers explicitly. Track channel/topic handlers in scoped state, use `Deferred` for pending subscribe readiness so concurrent callers share the same in-flight subscribe attempt, and unsubscribe from the external system only after the last local handler is released.
+
 Before implementing or changing non-trivial Effect code, inspect the local Effect source at:
 
 ```txt
@@ -104,11 +108,11 @@ Feature application should depend on feature domain and feature-owned ports expr
 
 Feature infra may depend on feature application and `core/application`. Feature infra must not depend on `core/infra`, and must not bypass feature application by implementing domain ports directly.
 
-Core application ports are broad but cohesive technical capabilities, such as database, job queue, blob store, pub/sub, telemetry, AI generation, and payment gateway. Core ports must use generic capability language, not feature nouns such as Runtime Task, Workflow Asset, or Task Status Event.
+Core application ports are broad but cohesive technical capabilities, such as database, job queue, object storage, pub/sub, AI generation, and payment gateway. Core ports must use generic capability language, not feature nouns such as Runtime Task, Workflow Asset, or Task Status Event.
 
 Core infra implements core application ports. Feature-shaped services such as runtime queues, workflow asset stores, credit accounting, or project stores must not be moved into core as-is; translate feature language to core capabilities in feature infra.
 
-Capability service tags use capability names with `Service`, for example `DatabaseService`, `TelemetryService`, `JobQueueService`, `BlobStoreService`, `PubSubService`, `AiGenerationService`, or `PaymentGatewayService`. Do not prefix capability services with `Server`, runtime tier names, or the first feature that used them.
+Capability service tags use capability names with `Service`, for example `DatabaseService`, `JobQueueService`, `ObjectStorageService`, `PubSubService`, `AiGenerationService`, or `PaymentGatewayService`. Do not prefix capability services with `Server`, runtime tier names, or the first feature that used them.
 
 External provider services expose capability methods such as `generateText`, `generateImages`, `generateVideo`, `storeAsset`, or `chargeCredits`. Pass model/config as data. Do not create public model-specific methods.
 
@@ -172,6 +176,18 @@ Use Zustand for externalized workflow/node state when multiple components read o
 Sanitize user inputs with schemas or typed API seams. Never log secrets, credentials, raw PII, raw prompts, sensitive payloads, or unredacted media.
 
 Instrument durable seams and complex pipelines with spans, metrics, structured logs, and sanitized domain metadata. Prefer interface-level telemetry over noisy helper-level logs.
+
+Use Effect observability primitives directly instead of adding generic telemetry facades. Use `Effect.logDebug`, `Effect.logInfo`, `Effect.logWarning`, `Effect.logError`, `Metric.*`, and Effect span APIs in the code that owns the operation. OpenTelemetry layers are runtime/export wiring only;
+
+Effect spans are the primary observability primitive. Use `Effect.withSpan`, `Effect.functionWithSpan`, `Effect.annotateCurrentSpan`, and `Effect.withSpanScoped` at durable boundaries such as tRPC mutations, use cases, planning/gatekeeper/materialization modules, queue enqueue/dequeue, worker handlers, database transactions, pub/sub, blob storage, and provider calls. Use span names in `feature.component.action` form, for example `runtime.task.materialize`, `runtime.queue.enqueue`, or `workflow-event-stream.publish`.
+
+Use sanitized span attributes only. Prefer stable identifiers and operational metadata such as `workflow_id`, `task_id`, `node_run_id`, `job_id`, `provider`, `model`, `status`, and `attempt`. Never attach raw prompts, raw media, secrets, credentials, unredacted PII, or large payloads to spans, logs, metrics, or trace baggage.
+
+End-to-end traces must survive async process boundaries. Any queue, worker, delayed job, pub/sub, webhook, or provider callback boundary that represents causally related work must propagate a typed trace-context carrier as operational metadata separate from the domain payload. Do not rely on Effect fiber-local span context surviving serialization, Redis, BullMQ, process restarts, or worker handoff.
+
+Use W3C trace context for cross-boundary carriers: `traceparent`, optional `tracestate`, and optional `baggage` only when baggage is explicitly sanitized and justified. Enqueue/publish adapters should capture the current propagated span context and write the carrier; worker/subscriber adapters should extract the carrier before opening the processing span so the first worker span is a child of the remote parent. Missing or invalid trace context must not fail domain work; start a root span and record sanitized telemetry instead.
+
+Prefer parent-child span propagation for direct causal work. Use span links instead of parent-child relationships for fan-out, retries, replay, wake-up calls, or any work item that is derived from multiple possible parents. Tests for queue, worker, and pub/sub adapters should cover trace-context injection/extraction when those adapters are touched.
 
 BullMQ workers and generative provider calls must be idempotent. Use request IDs/correlation IDs and stable job IDs. Never use `:` in BullMQ custom `jobId` values; use existing builders and `~` as the structural delimiter.
 
@@ -280,7 +296,7 @@ Note: Git passthrough works for ALL subcommands, even those not explicitly liste
 
 The Effect repository is cloned outside this project at `~/.local/share/effect-solutions/effect`. Treat that external clone as the canonical local reference for Effect APIs, implementation details, and usage examples.
 
-Agents must read `~/.local/share/effect-solutions/effect` before implementing or modifying non-trivial Effect code, especially code involving `Effect`, `Layer`, `Context`, `Scope`, `Stream`, `Schedule`, `Runtime`, `Exit`, `Cause`, `Fiber`, resource lifecycles, typed errors, concurrency, retries, or service dependency injection. Prefer `Glob`, `Grep`, and targeted `Read` calls against `~/.local/share/effect-solutions/effect/packages/**` to find real examples and source definitions before designing local abstractions.
+Agents must read `~/.local/share/effect-solutions/effect` before implementing or modifying Effect code, especially code involving `Effect`, `Layer`, `Context`, `Scope`, `Stream`, `Schedule`, `Runtime`, `Exit`, `Cause`, `Fiber`, resource lifecycles, typed errors, concurrency, retries, or service dependency injection. Prefer `Glob`, `Grep`, and targeted `Read` calls against `~/.local/share/effect-solutions/effect/packages/**` to find real examples and source definitions before designing local abstractions.
 
 Do not invent Effect patterns from memory when the external clone can verify the API shape or idiom. If local project code and the external clone disagree, inspect both and choose the pattern that matches the installed package version or explicitly report the version mismatch.
 
@@ -291,6 +307,7 @@ Do not invent Effect patterns from memory when the external clone can verify the
 * Convert Promise APIs at adapter seams.
 * Model recoverable failures with tagged errors.
 * Use managed resources for connections, subscriptions, streams, workers, and external requests.
+* Use `Deferred` for shared async readiness and single-flight initialization instead of storing raw promises with `.then/.catch` bookkeeping.
 * Use `Effect.forEach`, `Effect.all`, `Schedule`, `Stream`, `Sink`, `Fiber`, `Semaphore`, and interruption where concurrency, retry, backpressure, cancellation, or observability matter.
 * Add telemetry at durable seams and major workflow transitions.
 * Use plain TypeScript for pure local transforms.

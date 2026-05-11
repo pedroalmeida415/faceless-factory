@@ -21,6 +21,18 @@ export const env = createEnv({
     GOOGLE_PRIVATE_KEY: z.string().optional(),
     GOOGLE_SERVICE_ACCOUNT_JSON: z.string().optional(),
     REDIS_URL: z.string().url(),
+    OBJECT_STORAGE_ACCESS_KEY_ID:
+      process.env.NODE_ENV === "production"
+        ? z.string()
+        : z.string().default("faceless-factory"),
+    OBJECT_STORAGE_BUCKET: z.string().default("faceless-factory"),
+    OBJECT_STORAGE_ENDPOINT: z.string().url().default("http://localhost:9000"),
+    OBJECT_STORAGE_FORCE_PATH_STYLE: z.enum(["true", "false"]).default("true"),
+    OBJECT_STORAGE_REGION: z.string().default("us-east-1"),
+    OBJECT_STORAGE_SECRET_ACCESS_KEY:
+      process.env.NODE_ENV === "production"
+        ? z.string()
+        : z.string().default("faceless-factory-secret"),
     CI: z.string().optional(),
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
     OTEL_SERVICE_NAME: z.string().optional(),
@@ -63,6 +75,14 @@ export const env = createEnv({
     GOOGLE_PRIVATE_KEY: process.env.GOOGLE_PRIVATE_KEY,
     GOOGLE_SERVICE_ACCOUNT_JSON: process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
     REDIS_URL: process.env.REDIS_URL,
+    OBJECT_STORAGE_ACCESS_KEY_ID: process.env.OBJECT_STORAGE_ACCESS_KEY_ID,
+    OBJECT_STORAGE_BUCKET: process.env.OBJECT_STORAGE_BUCKET,
+    OBJECT_STORAGE_ENDPOINT: process.env.OBJECT_STORAGE_ENDPOINT,
+    OBJECT_STORAGE_FORCE_PATH_STYLE:
+      process.env.OBJECT_STORAGE_FORCE_PATH_STYLE,
+    OBJECT_STORAGE_REGION: process.env.OBJECT_STORAGE_REGION,
+    OBJECT_STORAGE_SECRET_ACCESS_KEY:
+      process.env.OBJECT_STORAGE_SECRET_ACCESS_KEY,
     CI: process.env.CI,
     OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_SERVICE_NAME: process.env.OTEL_SERVICE_NAME,
