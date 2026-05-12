@@ -1,2 +1,3 @@
 [test]
 pathIgnorePatterns = ["vendor/**"]
+preload = ["./src/main/__tests__/setup.ts"]

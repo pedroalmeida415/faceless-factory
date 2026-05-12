@@ -69,11 +69,7 @@ When asynchronous coordination needs shared readiness, single-flight initializat
 
 For shared external subscriptions, use one managed underlying connection/subscription per process or layer and multiplex local handlers explicitly. Track channel/topic handlers in scoped state, use `Deferred` for pending subscribe readiness so concurrent callers share the same in-flight subscribe attempt, and unsubscribe from the external system only after the last local handler is released.
 
-Before implementing or changing non-trivial Effect code, inspect the local Effect source at:
-
-```txt
-~/.local/share/effect-solutions/effect
-````
+Before implementing or changing non-trivial Effect code, inspect the local Effect source at: ~/.local/share/effect-solutions/effect
 
 Match the installed package version and local project patterns.
 
@@ -83,24 +79,18 @@ Follow `docs/adr/0004-feature-clean-architecture-boundaries.md` for feature and 
 
 Feature modules use:
 
-```txt
 src/features/<feature>/domain/**
 src/features/<feature>/application/**
 src/features/<feature>/infra/**
-```
 
 Global technical capabilities use:
 
-```txt
 src/core/application/**
 src/core/infra/**
-```
 
 Root composition and framework adapters use:
 
-```txt
 src/main/**
-```
 
 Feature `domain` contains business rules, domain errors, value objects, domain services, and business protocols. Feature `application` contains use cases, orchestration, and feature-owned ports/contracts. Feature `infra` implements feature application ports using external libraries, SDKs, databases, queues, framework mechanisms, and `core/application` ports.
 
@@ -211,7 +201,7 @@ rtk docker exec faceless-factory-redis-1 redis-cli <command>
 
 Non-documentation implementation work is not done until:
 
-* Durable modules are split by concern.
+* Durable modules are split by domain capability.
 * Core invariants are encoded in types or schemas.
 * Runtime/persistence/UI paths touched by the change are exercised.
 * Relevant checks pass, or inability to run them is explicitly reported.
