@@ -1,3 +1,0 @@
-# Cross-Feature Ambient Database Transactions
-
-Accepted. Feature infra operations that use the shared database capability must participate in an ambient transaction when one is already scoped. The use case that owns the larger business atomicity opens the transaction; nested feature operations must not unconditionally open independent transactions. Task queueing plus Task Debit is the motivating case: Runtime owns the atomic transition to `QUEUED`, while Credits owns the ledger mutation, and both changes must commit or roll back together. Standalone feature use cases may open their own transaction at their own boundary when they are not called inside a larger cross-feature transaction.

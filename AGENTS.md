@@ -19,7 +19,7 @@ When rules conflict, use this order:
 5. Minimal code surface area.
 6. Speed of delivery.
 
-Move fast by choosing direct architecture and avoiding legacy compatibility. Do not move fast by faking persistence, runtime execution, validation, idempotency, typed errors, or verification.
+Move fast by choosing direct architecture and avoiding unnecessary compatibility code. Do not move fast by faking persistence, execution, validation, idempotency, typed errors, or verification.
 
 ## 3. Scope discipline
 
@@ -35,7 +35,7 @@ Outside the touched path:
 - Do not expand scope into unrelated systems.
 - Mention notable unrelated issues only when useful.
 
-Prototype data may be broken. Architecture may not be faked. Local/staging Postgres, Redis, BullMQ state, and saved workflows may be invalidated during MVP refactors when this produces a cleaner system.
+Prototype data may be broken. Architecture may not be faked. Local/staging Postgres, Redis, and BullMQ state may be invalidated during MVP refactors when this produces a cleaner system.
 
 ## 4. Architecture standards
 
@@ -63,7 +63,7 @@ Use Effect when code crosses seams, performs I/O, manages resources, coordinates
 
 Use plain TypeScript for deterministic in-memory transforms with no I/O, lifecycle, concurrency, recoverable errors, or dependency requirements.
 
-Do not use raw Promise orchestration, thrown domain errors, nullable failure sentinels, or ad hoc `try/catch` in domain, runtime, persistence, queue, worker, or provider integration code. Use Effect programs, tagged errors, managed resources, timeouts, interruption, and typed recovery.
+Do not use raw Promise orchestration, thrown domain errors, nullable failure sentinels, or ad hoc `try/catch` in domain, application, persistence, queue, worker, or provider integration code. Use Effect programs, tagged errors, managed resources, timeouts, interruption, and typed recovery.
 
 When asynchronous coordination needs shared readiness, single-flight initialization, fan-out, cancellation, or lifecycle cleanup, model it with Effect primitives instead of hidden promise state. Prefer `Deferred`, `Ref`, `Queue`, `PubSub`, `Scope`, `Fiber`, and `Effect.acquireRelease` so fallibility, interruption, and cleanup are visible in types. Do not hide errors in plain `async` helpers, `.then/.catch` chains, or callback-local `try/catch`; return an `Effect` with typed errors and compose cleanup with `Effect.tapError`, finalizers, or scoped resources.
 
@@ -73,9 +73,9 @@ Before implementing or changing non-trivial Effect code, inspect the local Effec
 
 Match the installed package version and local project patterns.
 
-## 6. Runtime and service rules
+## 6. Service and boundary rules
 
-Follow `docs/adr/0004-feature-clean-architecture-boundaries.md` for feature and core boundaries.
+Follow `docs/adr/0001-feature-clean-architecture-boundaries.md` for feature and core boundaries.
 
 Feature modules use:
 
@@ -98,11 +98,11 @@ Feature application should depend on feature domain and feature-owned ports expr
 
 Feature infra may depend on feature application and `core/application`. Feature infra must not depend on `core/infra`, and must not bypass feature application by implementing domain ports directly.
 
-Core application ports are broad but cohesive technical capabilities, such as database, job queue, object storage, pub/sub, AI generation, and payment gateway. Core ports must use generic capability language, not feature nouns such as Runtime Task, Workflow Asset, or Task Status Event.
+Core application ports are broad but cohesive technical capabilities, such as database, job queue, object storage, pub/sub, AI generation, and payment gateway. Core ports must use generic capability language, not feature-specific nouns.
 
-Core infra implements core application ports. Feature-shaped services such as runtime queues, workflow asset stores, credit accounting, or project stores must not be moved into core as-is; translate feature language to core capabilities in feature infra.
+Core infra implements core application ports. Feature-shaped services must not be moved into core as-is; translate feature language to core capabilities in feature infra.
 
-Capability service tags use capability names with `Service`, for example `DatabaseService`, `JobQueueService`, `ObjectStorageService`, `PubSubService`, `AiGenerationService`, or `PaymentGatewayService`. Do not prefix capability services with `Server`, runtime tier names, or the first feature that used them.
+Capability service tags use capability names with `Service`, for example `DatabaseService`, `JobQueueService`, `ObjectStorageService`, `PubSubService`, `AiGenerationService`, or `PaymentGatewayService`. Do not prefix capability services with `Server`, deployment tier names, or the first feature that used them.
 
 External provider services expose capability methods such as `generateText`, `generateImages`, `generateVideo`, `storeAsset`, or `chargeCredits`. Pass model/config as data. Do not create public model-specific methods.
 
@@ -115,25 +115,11 @@ Provider services own reusable SDK clients. Construct and validate clients in se
 
 Root composition belongs in `src/main/**`. App code and tests must reuse central runtimes.
 
-## 7. Workflow graph rules
-
-Minimum architecture:
-
-* Graph definition model separate from runtime execution state.
-* Projection layer from persisted/runtime state into React Flow node data.
-* External transient UI state when more than one component reads/writes workflow state.
-* Custom node UI separate from execution/domain logic.
-* Explicit item-level execution when nodes fan out into generated artifacts.
-* Review, retry, stale, aborted, and downstream invalidation states represented when in scope.
-* Cycle and edge validation before execution logic.
-* Port-level type validation with schemas.
-* Content-addressable caching where expensive generation depends on stable inputs.
-
-## 8. Bug fixing
+## 7. Bug fixing
 
 For non-trivial bugs:
 
-1. Trace the full lifecycle through persistence, runtime execution, validation, pricing, preview/UI, and synchronization as applicable.
+1. Trace the full lifecycle through persistence, execution, validation, UI, and synchronization as applicable.
 2. Search for all callers that compute or depend on the same domain concept.
 3. Treat duplicated or divergent logic as a likely root cause.
 4. Consolidate the invariant into one source of truth.
@@ -149,7 +135,7 @@ Final response for non-trivial bug fixes must state:
 * Verification performed.
 * Whether any temporary workaround remains.
 
-## 9. UI and Next.js
+## 8. UI and Next.js
 
 Use Next.js App Router correctly:
 
@@ -159,9 +145,9 @@ Use Next.js App Router correctly:
 
 For user-facing async UI, include appropriate loading, transition, error, and empty states consistent with the design system.
 
-Use Zustand for externalized workflow/node state when multiple components read or write it. Use React Query/tRPC seams for server state, cache invalidation, optimistic updates, and typed API behavior.
+Use Zustand for external state store when multiple components read or write the same client state. Use React Query/tRPC seams for server state, cache invalidation, optimistic updates, and typed API behavior.
 
-## 10. Security, telemetry, and idempotency
+## 9. Security, telemetry, and idempotency
 
 Sanitize user inputs with schemas or typed API seams. Never log secrets, credentials, raw PII, raw prompts, sensitive payloads, or unredacted media.
 
@@ -169,9 +155,9 @@ Instrument durable seams and complex pipelines with spans, metrics, structured l
 
 Use Effect observability primitives directly instead of adding generic telemetry facades. Use `Effect.logDebug`, `Effect.logInfo`, `Effect.logWarning`, `Effect.logError`, `Metric.*`, and Effect span APIs in the code that owns the operation. OpenTelemetry layers are runtime/export wiring only;
 
-Effect spans are the primary observability primitive. Use `Effect.withSpan`, `Effect.functionWithSpan`, `Effect.annotateCurrentSpan`, and `Effect.withSpanScoped` at durable boundaries such as tRPC mutations, use cases, planning/gatekeeper/materialization modules, queue enqueue/dequeue, worker handlers, database transactions, pub/sub, blob storage, and provider calls. Use span names in `feature.component.action` form, for example `runtime.task.materialize`, `runtime.queue.enqueue`, or `workflow-event-stream.publish`.
+Effect spans are the primary observability primitive. Use `Effect.withSpan`, `Effect.functionWithSpan`, `Effect.annotateCurrentSpan`, and `Effect.withSpanScoped` at durable boundaries such as tRPC mutations, use cases, queue enqueue/dequeue, worker handlers, database transactions, pub/sub, blob storage, and provider calls. Use span names in `feature.component.action` form.
 
-Use sanitized span attributes only. Prefer stable identifiers and operational metadata such as `workflow_id`, `task_id`, `node_run_id`, `job_id`, `provider`, `model`, `status`, and `attempt`. Never attach raw prompts, raw media, secrets, credentials, unredacted PII, or large payloads to spans, logs, metrics, or trace baggage.
+Use sanitized span attributes only. Prefer stable identifiers and operational metadata such as `job_id`, `provider`, `model`, `status`, and `attempt`. Never attach raw prompts, raw media, secrets, credentials, unredacted PII, or large payloads to spans, logs, metrics, or trace baggage.
 
 End-to-end traces must survive async process boundaries. Any queue, worker, delayed job, pub/sub, webhook, or provider callback boundary that represents causally related work must propagate a typed trace-context carrier as operational metadata separate from the domain payload. Do not rely on Effect fiber-local span context surviving serialization, Redis, BullMQ, process restarts, or worker handoff.
 
@@ -183,7 +169,7 @@ BullMQ workers and generative provider calls must be idempotent. Use request IDs
 
 All generative calls must support timeout/cancellation via `AbortSignal` or equivalent Effect interruption.
 
-## 11. Commands
+## 10. Commands
 
 Inspect local Postgres:
 
@@ -197,13 +183,13 @@ Inspect Redis/BullMQ:
 rtk docker exec faceless-factory-redis-1 redis-cli <command>
 ```
 
-## 12. Verification and final response
+## 11. Verification and final response
 
 Non-documentation implementation work is not done until:
 
 * Durable modules are split by domain capability.
 * Core invariants are encoded in types or schemas.
-* Runtime/persistence/UI paths touched by the change are exercised.
+* Execution, persistence, and UI paths touched by the change are exercised.
 * Relevant checks pass, or inability to run them is explicitly reported.
 
 Final response must include:
@@ -292,14 +278,14 @@ Do not invent Effect patterns from memory when the external clone can verify the
 
 ## Rules
 
-* Keep Effect values inside domain/runtime/integration code until the outer framework adapter runs them.
+* Keep Effect values inside domain/application/infra code until the outer framework adapter runs them.
 * Do not explicitly annotate Effect program return types unless necessary for exported API clarity; let inference expose requirements and errors.
 * Convert Promise APIs at adapter seams.
 * Model recoverable failures with tagged errors.
 * Use managed resources for connections, subscriptions, streams, workers, and external requests.
 * Use `Deferred` for shared async readiness and single-flight initialization instead of storing raw promises with `.then/.catch` bookkeeping.
 * Use `Effect.forEach`, `Effect.all`, `Schedule`, `Stream`, `Sink`, `Fiber`, `Semaphore`, and interruption where concurrency, retry, backpressure, cancellation, or observability matter.
-* Add telemetry at durable seams and major workflow transitions.
+* Add telemetry at durable seams and major state transitions.
 * Use plain TypeScript for pure local transforms.
 
 # Agent skills
