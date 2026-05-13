@@ -12,8 +12,6 @@
   },
   "iconLibrary": "remixicon",
   "rtl": false,
-  "menuColor": "default-translucent",
-  "menuAccent": "subtle",
   "aliases": {
     "components": "~/components",
     "utils": "~/lib/utils",

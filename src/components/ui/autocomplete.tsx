@@ -1,11 +1,11 @@
 "use client";
 
 import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete";
-import { RiArrowDownSLine, RiCloseLine } from "@remixicon/react";
+import { ChevronsUpDownIcon, XIcon } from "lucide-react";
 import type React from "react";
+import { cn } from "~/lib/utils";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
-import { cn } from "~/lib/utils";
 
 export const Autocomplete: typeof AutocompletePrimitive.Root =
   AutocompletePrimitive.Root;
@@ -66,7 +66,7 @@ export function AutocompleteInput({
           {...triggerProps}
         >
           <AutocompletePrimitive.Icon data-slot="autocomplete-icon">
-            <RiArrowDownSLine />
+            <ChevronsUpDownIcon />
           </AutocompletePrimitive.Icon>
         </AutocompleteTrigger>
       )}
@@ -78,7 +78,7 @@ export function AutocompleteInput({
           )}
           {...clearProps}
         >
-          <RiCloseLine />
+          <XIcon />
         </AutocompleteClear>
       )}
     </AutocompletePrimitive.InputGroup>
@@ -262,7 +262,7 @@ export function AutocompleteClear({
       data-slot="autocomplete-clear"
       {...props}
     >
-      <RiCloseLine />
+      <XIcon />
     </AutocompletePrimitive.Clear>
   );
 }
