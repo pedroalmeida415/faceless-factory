@@ -40,36 +40,27 @@ export const auth = betterAuth({
         }
 
         await ServerRuntimeLive.runPromise(
-          Effect.flatMap(BillingService, (billing) =>
-            billing.handleSuccessfulTopUpPayment(event.data.object),
-          ),
+          Effect.flatMap(BillingService, (billing) => billing.handleSuccessfulTopUpPayment(event.data.object)),
         );
       },
       stripeClient,
       stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
       subscription: {
-        authorizeReference: async ({ referenceId, user }) =>
-          referenceId === user.id,
+        authorizeReference: async ({ referenceId, user }) => referenceId === user.id,
         enabled: true,
         onSubscriptionComplete: async ({ subscription }) => {
           await ServerRuntimeLive.runPromise(
-            Effect.flatMap(BillingService, (billing) =>
-              billing.syncSubscriptionCredits(subscription),
-            ),
+            Effect.flatMap(BillingService, (billing) => billing.syncSubscriptionCredits(subscription)),
           );
         },
         onSubscriptionCreated: async ({ subscription }) => {
           await ServerRuntimeLive.runPromise(
-            Effect.flatMap(BillingService, (billing) =>
-              billing.syncSubscriptionCredits(subscription),
-            ),
+            Effect.flatMap(BillingService, (billing) => billing.syncSubscriptionCredits(subscription)),
           );
         },
         onSubscriptionUpdate: async ({ subscription }) => {
           await ServerRuntimeLive.runPromise(
-            Effect.flatMap(BillingService, (billing) =>
-              billing.syncSubscriptionCredits(subscription),
-            ),
+            Effect.flatMap(BillingService, (billing) => billing.syncSubscriptionCredits(subscription)),
           );
         },
         plans: BILLING_PLANS.map((plan) => ({

@@ -1,7 +1,4 @@
-import {
-  BILLING_CURRENCY,
-  BILLING_PLANS,
-} from "~/features/billing/domain/billing";
+import { BILLING_CURRENCY, BILLING_PLANS } from "~/features/billing/domain/billing";
 import { stripeClient } from "~/features/billing/infra/stripe";
 
 async function ensureProduct(planName: string, title: string) {
@@ -10,9 +7,7 @@ async function ensureProduct(planName: string, title: string) {
     limit: 100,
   });
   const existingProduct = products.data.find(
-    (product) =>
-      product.metadata.app === "faceless-factory" &&
-      product.metadata.plan === planName,
+    (product) => product.metadata.app === "faceless-factory" && product.metadata.plan === planName,
   );
 
   if (existingProduct) {
@@ -72,12 +67,7 @@ async function main() {
     });
 
     console.log(
-      [
-        `${plan.title}:`,
-        `product=${product.id}`,
-        `monthly=${monthlyPrice.id}`,
-        `annual=${annualPrice.id}`,
-      ].join(" "),
+      [`${plan.title}:`, `product=${product.id}`, `monthly=${monthlyPrice.id}`, `annual=${annualPrice.id}`].join(" "),
     );
   }
 }

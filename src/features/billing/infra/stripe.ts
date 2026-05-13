@@ -2,10 +2,7 @@ import { Effect, Layer } from "effect";
 import Stripe from "stripe";
 
 import { env } from "~/env";
-import {
-  BillingPaymentGateway,
-  BillingStripeError,
-} from "~/features/billing/application/billing-service";
+import { BillingPaymentGateway, BillingStripeError } from "~/features/billing/application/billing-service";
 
 const globalForStripe = globalThis as unknown as {
   stripe: Stripe | undefined;

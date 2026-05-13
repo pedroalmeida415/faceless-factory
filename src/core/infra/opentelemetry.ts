@@ -7,9 +7,5 @@ export const OpenTelemetryLive = NodeSdk.layer(() => ({
   resource: {
     serviceName: env.OTEL_SERVICE_NAME ?? "faceless-factory",
   },
-  spanProcessor: [
-    new BatchSpanProcessor(
-      new OTLPTraceExporter({ url: env.OTEL_EXPORTER_OTLP_ENDPOINT }),
-    ),
-  ],
+  spanProcessor: [new BatchSpanProcessor(new OTLPTraceExporter({ url: env.OTEL_EXPORTER_OTLP_ENDPOINT }))],
 }));

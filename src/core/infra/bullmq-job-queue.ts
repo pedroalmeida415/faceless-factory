@@ -23,12 +23,7 @@ export const BullMqJobQueueLive = Layer.scoped(
           yield* validateJobId(command);
           const queue = getOrCreateQueue(queues, command.queueName);
           yield* Effect.tryPromise({
-            try: () =>
-              queue.add(
-                command.jobName,
-                command.payload,
-                toBullMqOptions(command),
-              ),
+            try: () => queue.add(command.jobName, command.payload, toBullMqOptions(command)),
             catch: (cause) =>
               new JobQueuePublishError({
                 cause,
@@ -117,15 +112,11 @@ function toBullMqOptions(command: EnqueueJobCommand): BullMqEnqueueOptions {
       : {
           removeOnComplete: toBullMqRetentionPolicy(command.removeOnComplete),
         }),
-    ...(command.removeOnFail === undefined
-      ? {}
-      : { removeOnFail: toBullMqRetentionPolicy(command.removeOnFail) }),
+    ...(command.removeOnFail === undefined ? {} : { removeOnFail: toBullMqRetentionPolicy(command.removeOnFail) }),
   };
 }
 
-function toBullMqRetentionPolicy(
-  policy: JobRetentionPolicy,
-): JobsOptions["removeOnComplete"] {
+function toBullMqRetentionPolicy(policy: JobRetentionPolicy): JobsOptions["removeOnComplete"] {
   if (typeof policy !== "object") {
     return policy;
   }

@@ -6,21 +6,15 @@ type MessageHandler = (payload: string) => void;
 export const PubSubTest = Layer.effect(
   PubSubService,
   Effect.gen(function* () {
-    const subscriptions = yield* Ref.make(
-      new Map<string, ReadonlySet<MessageHandler>>(),
-    );
+    const subscriptions = yield* Ref.make(new Map<string, ReadonlySet<MessageHandler>>());
 
     return PubSubService.of({
       publish: ({ channel, payload }) =>
         Effect.gen(function* () {
           const handlers = yield* Ref.get(subscriptions).pipe(
-            Effect.map(
-              (channels) => channels.get(channel) ?? new Set<MessageHandler>(),
-            ),
+            Effect.map((channels) => channels.get(channel) ?? new Set<MessageHandler>()),
           );
-          yield* Effect.forEach(handlers, (handler) =>
-            Effect.sync(() => handler(payload)),
-          );
+          yield* Effect.forEach(handlers, (handler) => Effect.sync(() => handler(payload)));
         }),
       subscribe: ({ channel, onMessage }) =>
         Ref.update(subscriptions, (channels) => {

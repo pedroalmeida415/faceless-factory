@@ -28,10 +28,8 @@ export const S3ObjectStorageLive = Layer.scoped(
     const bucket = env.OBJECT_STORAGE_BUCKET;
 
     return ObjectStorageService.of({
-      createPresignedDownloadUrl: (command) =>
-        createPresignedDownloadUrl(client, bucket, command),
-      createPresignedUploadUrl: (command) =>
-        createPresignedUploadUrl(client, bucket, command),
+      createPresignedDownloadUrl: (command) => createPresignedDownloadUrl(client, bucket, command),
+      createPresignedUploadUrl: (command) => createPresignedUploadUrl(client, bucket, command),
       delete: (command) => deleteObject(client, bucket, command),
       download: (command) => downloadObject(client, bucket, command),
       exists: (command) => objectExists(client, bucket, command),
@@ -56,11 +54,7 @@ const acquireS3Client = Effect.acquireRelease(
   (client) => Effect.sync(() => client.destroy()),
 );
 
-function uploadObject(
-  client: S3Client,
-  bucket: string,
-  command: UploadObjectCommand,
-) {
+function uploadObject(client: S3Client, bucket: string, command: UploadObjectCommand) {
   return Effect.gen(function* () {
     const key = yield* validateObjectKey(command.key, "upload");
     yield* Effect.tryPromise({
@@ -100,16 +94,11 @@ function uploadObject(
   }).pipe(Effect.asVoid);
 }
 
-function downloadObject(
-  client: S3Client,
-  bucket: string,
-  command: DownloadObjectCommand,
-) {
+function downloadObject(client: S3Client, bucket: string, command: DownloadObjectCommand) {
   return Effect.gen(function* () {
     const key = yield* validateObjectKey(command.key, "download");
     const response = yield* Effect.tryPromise({
-      try: () =>
-        client.send(new GetObjectCommand({ Bucket: bucket, Key: key })),
+      try: () => client.send(new GetObjectCommand({ Bucket: bucket, Key: key })),
       catch: (cause) =>
         new ObjectStorageError({
           cause,
@@ -148,16 +137,11 @@ function downloadObject(
   });
 }
 
-function deleteObject(
-  client: S3Client,
-  bucket: string,
-  command: DeleteObjectCommand,
-) {
+function deleteObject(client: S3Client, bucket: string, command: DeleteObjectCommand) {
   return Effect.gen(function* () {
     const key = yield* validateObjectKey(command.key, "delete");
     yield* Effect.tryPromise({
-      try: () =>
-        client.send(new S3DeleteObjectCommand({ Bucket: bucket, Key: key })),
+      try: () => client.send(new S3DeleteObjectCommand({ Bucket: bucket, Key: key })),
       catch: (cause) =>
         new ObjectStorageError({
           cause,
@@ -169,16 +153,11 @@ function deleteObject(
   }).pipe(Effect.asVoid);
 }
 
-function objectExists(
-  client: S3Client,
-  bucket: string,
-  command: ObjectExistsCommand,
-) {
+function objectExists(client: S3Client, bucket: string, command: ObjectExistsCommand) {
   return Effect.gen(function* () {
     const key = yield* validateObjectKey(command.key, "exists");
     return yield* Effect.tryPromise({
-      try: () =>
-        client.send(new HeadObjectCommand({ Bucket: bucket, Key: key })),
+      try: () => client.send(new HeadObjectCommand({ Bucket: bucket, Key: key })),
       catch: (cause) =>
         new ObjectStorageError({
           cause,
@@ -200,23 +179,15 @@ function objectExists(
           cause.$metadata !== null &&
           "httpStatusCode" in cause.$metadata &&
           cause.$metadata.httpStatusCode === 404;
-        const hasNotFoundName =
-          "name" in cause &&
-          (cause.name === "NoSuchKey" || cause.name === "NotFound");
+        const hasNotFoundName = "name" in cause && (cause.name === "NoSuchKey" || cause.name === "NotFound");
 
-        return hasNotFoundStatus || hasNotFoundName
-          ? Effect.succeed(false)
-          : Effect.fail(error);
+        return hasNotFoundStatus || hasNotFoundName ? Effect.succeed(false) : Effect.fail(error);
       }),
     );
   });
 }
 
-function createPresignedUploadUrl(
-  client: S3Client,
-  bucket: string,
-  command: CreatePresignedUploadUrlCommand,
-) {
+function createPresignedUploadUrl(client: S3Client, bucket: string, command: CreatePresignedUploadUrlCommand) {
   return Effect.gen(function* () {
     const key = yield* validateObjectKey(command.key, "presign-upload");
     const expiresIn = command.expiresInSeconds ?? 3_600;
@@ -248,11 +219,7 @@ function createPresignedUploadUrl(
   });
 }
 
-function createPresignedDownloadUrl(
-  client: S3Client,
-  bucket: string,
-  command: CreatePresignedDownloadUrlCommand,
-) {
+function createPresignedDownloadUrl(client: S3Client, bucket: string, command: CreatePresignedDownloadUrlCommand) {
   return Effect.gen(function* () {
     const key = yield* validateObjectKey(command.key, "presign-download");
     const expiresIn = command.expiresInSeconds ?? 3_600;
@@ -289,11 +256,7 @@ function validateObjectKey(key: string, operation: ObjectStorageOperation) {
     try: () => {
       const trimmed = key.trim();
       const parts = trimmed.split("/");
-      if (
-        !trimmed ||
-        trimmed.startsWith("/") ||
-        parts.some((part) => !part || part === "." || part === "..")
-      ) {
+      if (!trimmed || trimmed.startsWith("/") || parts.some((part) => !part || part === "." || part === "..")) {
         throw new Error("Object key must be a non-empty relative key.");
       }
       return trimmed;

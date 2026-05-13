@@ -11,9 +11,7 @@ import {
   type SuccessfulTopUpPayment,
 } from "~/features/billing/domain/billing";
 
-export class BillingDatabaseError extends Data.TaggedError(
-  "BillingDatabaseError",
-)<{
+export class BillingDatabaseError extends Data.TaggedError("BillingDatabaseError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -23,9 +21,7 @@ export class BillingStripeError extends Data.TaggedError("BillingStripeError")<{
   readonly cause?: unknown;
 }> {}
 
-export class BillingUserNotFoundError extends Data.TaggedError(
-  "BillingUserNotFoundError",
-)<{
+export class BillingUserNotFoundError extends Data.TaggedError("BillingUserNotFoundError")<{
   readonly message: string;
 }> {}
 
@@ -53,10 +49,7 @@ export type BillingStoreApi = {
   ) => Effect.Effect<BillingSubscriptionRecord | null, BillingDatabaseError>;
   readonly getBillingOverviewRecords: (userId: string) => Effect.Effect<
     {
-      readonly account: Pick<
-        BillingUserRecord,
-        "creditBalance" | "stripeCustomerId"
-      > | null;
+      readonly account: Pick<BillingUserRecord, "creditBalance" | "stripeCustomerId"> | null;
       readonly activeSubscription: BillingSubscriptionRecord | null;
       readonly latestSubscription: BillingSubscriptionRecord | null;
     },
@@ -64,20 +57,14 @@ export type BillingStoreApi = {
   >;
   readonly getUserRecord: (
     userId: string,
-  ) => Effect.Effect<
-    BillingUserRecord,
-    BillingDatabaseError | BillingUserNotFoundError
-  >;
+  ) => Effect.Effect<BillingUserRecord, BillingDatabaseError | BillingUserNotFoundError>;
   readonly persistStripeCustomerId: (input: {
     readonly stripeCustomerId: string;
     readonly userId: string;
   }) => Effect.Effect<void, BillingDatabaseError | BillingUserNotFoundError>;
 };
 
-export class BillingStore extends Context.Tag("BillingStore")<
-  BillingStore,
-  BillingStoreApi
->() {}
+export class BillingStore extends Context.Tag("BillingStore")<BillingStore, BillingStoreApi>() {}
 
 export type BillingPaymentGatewayApi = {
   readonly createCreditTopUpCheckoutUrl: (input: {
@@ -105,16 +92,10 @@ export type BillingServiceApi = {
   readonly createCreditTopUpCheckoutSession: (params: {
     readonly packs: number;
     readonly userId: string;
-  }) => Effect.Effect<
-    string,
-    BillingDatabaseError | BillingStripeError | BillingUserNotFoundError
-  >;
+  }) => Effect.Effect<string, BillingDatabaseError | BillingStripeError | BillingUserNotFoundError>;
   readonly getBillingOverview: (
     userId: string,
-  ) => Effect.Effect<
-    BillingOverview,
-    BillingDatabaseError | BillingUserNotFoundError
-  >;
+  ) => Effect.Effect<BillingOverview, BillingDatabaseError | BillingUserNotFoundError>;
   readonly handleSuccessfulTopUpPayment: (
     paymentIntent: SuccessfulTopUpPayment,
   ) => Effect.Effect<boolean, BillingDatabaseError | BillingUserNotFoundError>;
@@ -127,10 +108,7 @@ export type BillingServiceApi = {
   ) => Effect.Effect<number, BillingDatabaseError | BillingUserNotFoundError>;
 };
 
-export class BillingService extends Context.Tag("BillingService")<
-  BillingService,
-  BillingServiceApi
->() {}
+export class BillingService extends Context.Tag("BillingService")<BillingService, BillingServiceApi>() {}
 
 export const BillingServiceLive = Layer.effect(
   BillingService,
@@ -168,29 +146,18 @@ export const BillingServiceLive = Layer.effect(
         return customer.id;
       });
 
-    const syncSubscriptionCredits = (
-      subscriptionRecord: BillingSubscriptionRecord,
-      now = new Date(),
-    ) => {
-      const grants = getSubscriptionGrantDates(subscriptionRecord, now).flatMap(
-        (grantDate) => {
-          const grant = getSubscriptionCreditGrant({
-            grantDate,
-            subscription: subscriptionRecord,
-          });
+    const syncSubscriptionCredits = (subscriptionRecord: BillingSubscriptionRecord, now = new Date()) => {
+      const grants = getSubscriptionGrantDates(subscriptionRecord, now).flatMap((grantDate) => {
+        const grant = getSubscriptionCreditGrant({
+          grantDate,
+          subscription: subscriptionRecord,
+        });
 
-          return grant ? [grant] : [];
-        },
-      );
+        return grant ? [grant] : [];
+      });
 
-      return Effect.map(
-        Effect.forEach(grants, applyCreditGrant, { concurrency: 1 }),
-        (appliedGrants) =>
-          appliedGrants.reduce(
-            (total, applied, index) =>
-              applied ? total + (grants[index]?.amount ?? 0) : total,
-            0,
-          ),
+      return Effect.map(Effect.forEach(grants, applyCreditGrant, { concurrency: 1 }), (appliedGrants) =>
+        appliedGrants.reduce((total, applied, index) => (applied ? total + (grants[index]?.amount ?? 0) : total), 0),
       );
     };
 
@@ -225,8 +192,7 @@ export const BillingServiceLive = Layer.effect(
         Effect.gen(function* () {
           yield* syncSubscriptionCreditsForUser(userId);
 
-          const { account, activeSubscription, latestSubscription } =
-            yield* store.getBillingOverviewRecords(userId);
+          const { account, activeSubscription, latestSubscription } = yield* store.getBillingOverviewRecords(userId);
 
           if (!account) {
             return yield* Effect.fail(

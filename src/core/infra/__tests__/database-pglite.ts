@@ -27,9 +27,7 @@ export const DatabaseServiceTest = Layer.scoped(
       spanAttributes: [["db.system.name", "pglite"]],
       transactionAcquirer: Effect.succeed(makePgliteConnection(pglite)),
     }).pipe(Effect.provide(Reactivity.layer));
-    const db = yield* PgDrizzle.make({ schema }).pipe(
-      Effect.provideService(SqlClient.SqlClient, sql),
-    );
+    const db = yield* PgDrizzle.make({ schema }).pipe(Effect.provideService(SqlClient.SqlClient, sql));
 
     return DatabaseService.of(Object.assign(db, { sql }));
   }),
@@ -38,8 +36,7 @@ export const DatabaseServiceTest = Layer.scoped(
 function makePgliteConnection(pglite: PGlite): Connection {
   const queryObjects = (sql: string, params: ReadonlyArray<unknown>) =>
     Effect.tryPromise({
-      catch: (cause) =>
-        new SqlError({ cause, message: "Failed to execute PGLite query" }),
+      catch: (cause) => new SqlError({ cause, message: "Failed to execute PGLite query" }),
       try: () =>
         pglite.query<Record<string, unknown>>(sql, [...params], {
           rowMode: "object",
@@ -47,8 +44,7 @@ function makePgliteConnection(pglite: PGlite): Connection {
     });
   const queryArrays = (sql: string, params: ReadonlyArray<unknown>) =>
     Effect.tryPromise({
-      catch: (cause) =>
-        new SqlError({ cause, message: "Failed to execute PGLite query" }),
+      catch: (cause) => new SqlError({ cause, message: "Failed to execute PGLite query" }),
       try: () =>
         pglite.query<readonly unknown[]>(sql, [...params], {
           rowMode: "array",
@@ -57,13 +53,8 @@ function makePgliteConnection(pglite: PGlite): Connection {
 
   return {
     execute(sql, params, transformRows) {
-      const rows = Effect.map(
-        queryObjects(sql, params),
-        (result) => result.rows,
-      );
-      return transformRows
-        ? Effect.map(rows, (rows) => transformRows(rows))
-        : rows;
+      const rows = Effect.map(queryObjects(sql, params), (result) => result.rows);
+      return transformRows ? Effect.map(rows, (rows) => transformRows(rows)) : rows;
     },
     executeRaw(sql, params) {
       return queryObjects(sql, params);
@@ -72,13 +63,8 @@ function makePgliteConnection(pglite: PGlite): Connection {
       return Effect.dieMessage("PGLite test SqlClient does not stream rows");
     },
     executeUnprepared(sql, params, transformRows) {
-      const rows = Effect.map(
-        queryObjects(sql, params),
-        (result) => result.rows,
-      );
-      return transformRows
-        ? Effect.map(rows, (rows) => transformRows(rows))
-        : rows;
+      const rows = Effect.map(queryObjects(sql, params), (result) => result.rows);
+      return transformRows ? Effect.map(rows, (rows) => transformRows(rows)) : rows;
     },
     executeValues(sql, params) {
       return Effect.map(queryArrays(sql, params), (result) => result.rows);

@@ -8,11 +8,7 @@ import {
   BillingStore,
   BillingUserNotFoundError,
 } from "~/features/billing/application/billing-service";
-import {
-  creditLedgerEntries,
-  subscription,
-  user,
-} from "~/main/database/schema";
+import { creditLedgerEntries, subscription, user } from "~/main/database/schema";
 
 export const BillingStoreLive = Layer.effect(
   BillingStore,
@@ -107,12 +103,7 @@ export const BillingStoreLive = Layer.effect(
             database
               .select()
               .from(subscription)
-              .where(
-                and(
-                  eq(subscription.referenceId, userId),
-                  inArray(subscription.status, ["active", "trialing"]),
-                ),
-              )
+              .where(and(eq(subscription.referenceId, userId), inArray(subscription.status, ["active", "trialing"])))
               .orderBy(desc(subscription.periodEnd))
               .limit(1),
             ([activeSubscription]) => activeSubscription ?? null,
@@ -133,12 +124,7 @@ export const BillingStoreLive = Layer.effect(
             const [activeSubscription] = yield* database
               .select()
               .from(subscription)
-              .where(
-                and(
-                  eq(subscription.referenceId, userId),
-                  inArray(subscription.status, ["active", "trialing"]),
-                ),
-              )
+              .where(and(eq(subscription.referenceId, userId), inArray(subscription.status, ["active", "trialing"])))
               .orderBy(desc(subscription.periodEnd))
               .limit(1);
             const [latestSubscription] = yield* database
@@ -209,24 +195,12 @@ export const BillingStoreLive = Layer.effect(
   }),
 );
 
-function mapBillingDatabaseError<A, E>(
-  effect: Effect.Effect<A, E>,
-  failureMessage: string,
-) {
+function mapBillingDatabaseError<A, E>(effect: Effect.Effect<A, E>, failureMessage: string) {
   return Effect.mapError(effect, (cause) =>
-    isBillingDomainError(cause)
-      ? cause
-      : new BillingDatabaseError({ message: failureMessage, cause }),
+    isBillingDomainError(cause) ? cause : new BillingDatabaseError({ message: failureMessage, cause }),
   );
 }
 
-function isBillingDomainError(
-  cause: unknown,
-): cause is BillingUserNotFoundError {
-  return (
-    typeof cause === "object" &&
-    cause !== null &&
-    "_tag" in cause &&
-    cause._tag === "BillingUserNotFoundError"
-  );
+function isBillingDomainError(cause: unknown): cause is BillingUserNotFoundError {
+  return typeof cause === "object" && cause !== null && "_tag" in cause && cause._tag === "BillingUserNotFoundError";
 }

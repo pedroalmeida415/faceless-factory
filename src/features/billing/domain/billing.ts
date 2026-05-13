@@ -66,8 +66,7 @@ export const BILLING_PLANS = [
     annualPriceCents: 118_800,
     annualPriceLookupKey: "faceless-factory-ultra-annual",
     creditsPerMonth: 20_000,
-    description:
-      "For high-volume production where credits must stay ahead of demand.",
+    description: "For high-volume production where credits must stay ahead of demand.",
     featured: false,
     monthlyPriceCents: 20_000,
     monthlyPriceLookupKey: "faceless-factory-ultra-monthly",
@@ -76,10 +75,7 @@ export const BILLING_PLANS = [
   },
 ] as const satisfies readonly BillingPlanDefinition[];
 
-export const BILLING_PLAN_NAMES = BILLING_PLANS.map((plan) => plan.name) as [
-  BillingPlanName,
-  ...BillingPlanName[],
-];
+export const BILLING_PLAN_NAMES = BILLING_PLANS.map((plan) => plan.name) as [BillingPlanName, ...BillingPlanName[]];
 
 export function formatUsd(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -97,29 +93,21 @@ export function getBillingPlanCredits(planName: string) {
   return getBillingPlan(planName)?.creditsPerMonth ?? 0;
 }
 
-export function getBillingPlanLookupKey(
-  planName: BillingPlanName,
-  interval: BillingInterval,
-) {
+export function getBillingPlanLookupKey(planName: BillingPlanName, interval: BillingInterval) {
   const plan = getBillingPlan(planName);
 
   if (!plan) {
     return null;
   }
 
-  return interval === "year"
-    ? plan.annualPriceLookupKey
-    : plan.monthlyPriceLookupKey;
+  return interval === "year" ? plan.annualPriceLookupKey : plan.monthlyPriceLookupKey;
 }
 
 export function isBillingPlanName(value: string): value is BillingPlanName {
   return BILLING_PLANS.some((plan) => plan.name === value);
 }
 
-export function getSubscriptionGrantDates(
-  subscriptionRecord: BillingSubscriptionRecord,
-  now: Date,
-) {
+export function getSubscriptionGrantDates(subscriptionRecord: BillingSubscriptionRecord, now: Date) {
   if (
     !subscriptionRecord.periodStart ||
     !subscriptionRecord.periodEnd ||
@@ -132,15 +120,9 @@ export function getSubscriptionGrantDates(
   let monthOffset = 0;
 
   while (true) {
-    const grantDate = addMonthsClamped(
-      subscriptionRecord.periodStart,
-      monthOffset,
-    );
+    const grantDate = addMonthsClamped(subscriptionRecord.periodStart, monthOffset);
 
-    if (
-      grantDate.getTime() >= subscriptionRecord.periodEnd.getTime() ||
-      grantDate.getTime() > now.getTime()
-    ) {
+    if (grantDate.getTime() >= subscriptionRecord.periodEnd.getTime() || grantDate.getTime() > now.getTime()) {
       return grantDates;
     }
 
@@ -168,17 +150,11 @@ export function getSubscriptionCreditGrant(input: {
   };
 }
 
-export function getTopUpCreditGrant(
-  paymentIntent: SuccessfulTopUpPayment,
-): CreditGrant | null {
+export function getTopUpCreditGrant(paymentIntent: SuccessfulTopUpPayment): CreditGrant | null {
   const credits = Number(paymentIntent.metadata.credits ?? "0");
   const userId = paymentIntent.metadata.userId;
 
-  if (
-    paymentIntent.metadata.billingType !== "credit-topup" ||
-    !userId ||
-    credits <= 0
-  ) {
+  if (paymentIntent.metadata.billingType !== "credit-topup" || !userId || credits <= 0) {
     return null;
   }
 
@@ -195,9 +171,7 @@ function addMonthsClamped(date: Date, months: number) {
   const monthIndex = date.getUTCMonth() + months;
   const targetYear = date.getUTCFullYear() + Math.floor(monthIndex / 12);
   const targetMonth = ((monthIndex % 12) + 12) % 12;
-  const lastDayOfMonth = new Date(
-    Date.UTC(targetYear, targetMonth + 1, 0),
-  ).getUTCDate();
+  const lastDayOfMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
 
   return new Date(
     Date.UTC(

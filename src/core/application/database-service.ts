@@ -8,7 +8,4 @@ export type DatabaseServiceApi = DatabaseClient & {
   readonly sql: SqlClient.SqlClient;
 };
 
-export class DatabaseService extends Context.Tag("DatabaseService")<
-  DatabaseService,
-  DatabaseServiceApi
->() {}
+export class DatabaseService extends Context.Tag("DatabaseService")<DatabaseService, DatabaseServiceApi>() {}

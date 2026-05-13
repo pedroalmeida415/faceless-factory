@@ -1,10 +1,6 @@
 import { Deferred, Effect, Layer } from "effect";
 import { createClient } from "redis";
-import {
-  PubSubPublishError,
-  PubSubService,
-  PubSubSubscribeError,
-} from "~/core/application/pubsub-service";
+import { PubSubPublishError, PubSubService, PubSubSubscribeError } from "~/core/application/pubsub-service";
 import { env } from "~/env";
 
 type AppRedisClient = ReturnType<typeof createClient>;
@@ -71,8 +67,7 @@ function addChannelHandler(input: {
   readonly subscriber: AppRedisClient;
 }) {
   return Effect.gen(function* () {
-    const { shouldSubscribe, subscription } =
-      yield* getOrCreateChannelSubscription(input);
+    const { shouldSubscribe, subscription } = yield* getOrCreateChannelSubscription(input);
     yield* Effect.sync(() => {
       subscription.handlers.add(input.handler);
     });
@@ -129,15 +124,9 @@ function removeChannelHandler(input: {
       return;
     }
 
-    yield* Deferred.await(input.subscription.ready).pipe(
-      Effect.catchAll(() => Effect.void),
-    );
+    yield* Deferred.await(input.subscription.ready).pipe(Effect.catchAll(() => Effect.void));
     yield* Effect.tryPromise({
-      try: () =>
-        input.subscriber.unsubscribe(
-          input.channel,
-          input.subscription.dispatch,
-        ),
+      try: () => input.subscriber.unsubscribe(input.channel, input.subscription.dispatch),
       catch: (cause) =>
         new PubSubSubscribeError({
           cause,

@@ -1,12 +1,5 @@
 import { relations } from "drizzle-orm";
-import {
-  bigint,
-  boolean,
-  index,
-  pgTable,
-  text,
-  timestamp,
-} from "drizzle-orm/pg-core";
+import { bigint, boolean, index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
 type CreditLedgerEntryKind = "debit" | "refund" | "grant" | "purchase";
 
@@ -24,9 +17,7 @@ export const user = pgTable("user", {
   updatedAt: timestamp("updated_at")
     .$defaultFn(() => new Date())
     .notNull(),
-  creditBalance: bigint("credit_balance", { mode: "number" })
-    .default(0)
-    .notNull(),
+  creditBalance: bigint("credit_balance", { mode: "number" }).default(0).notNull(),
   stripeCustomerId: text("stripe_customer_id").unique(),
 });
 
@@ -87,10 +78,7 @@ export const creditLedgerEntries = pgTable(
       .notNull(),
   },
   (table) => ({
-    userCreatedAtIdx: index("credit_ledger_entries_user_created_at_idx").on(
-      table.userId,
-      table.createdAt,
-    ),
+    userCreatedAtIdx: index("credit_ledger_entries_user_created_at_idx").on(table.userId, table.createdAt),
   }),
 );
 
@@ -118,13 +106,8 @@ export const subscription = pgTable(
     stripeScheduleId: text("stripe_schedule_id"),
   },
   (table) => ({
-    referenceStatusIdx: index("subscription_reference_status_idx").on(
-      table.referenceId,
-      table.status,
-    ),
-    stripeSubscriptionIdIdx: index(
-      "subscription_stripe_subscription_id_idx",
-    ).on(table.stripeSubscriptionId),
+    referenceStatusIdx: index("subscription_reference_status_idx").on(table.referenceId, table.status),
+    stripeSubscriptionIdIdx: index("subscription_stripe_subscription_id_idx").on(table.stripeSubscriptionId),
   }),
 );
 
@@ -143,15 +126,12 @@ export const sessionRelations = relations(session, ({ one }) => ({
   user: one(user, { fields: [session.userId], references: [user.id] }),
 }));
 
-export const creditLedgerEntriesRelations = relations(
-  creditLedgerEntries,
-  ({ one }) => ({
-    user: one(user, {
-      fields: [creditLedgerEntries.userId],
-      references: [user.id],
-    }),
+export const creditLedgerEntriesRelations = relations(creditLedgerEntries, ({ one }) => ({
+  user: one(user, {
+    fields: [creditLedgerEntries.userId],
+    references: [user.id],
   }),
-);
+}));
 
 export const subscriptionRelations = relations(subscription, ({ one }) => ({
   user: one(user, {

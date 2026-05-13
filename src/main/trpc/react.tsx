@@ -45,8 +45,7 @@ const createTrpcClient = () =>
       return [
         loggerLink({
           enabled: (op) =>
-            env.NEXT_PUBLIC_NODE_ENV === "development" ||
-            (op.direction === "down" && op.result instanceof Error),
+            env.NEXT_PUBLIC_NODE_ENV === "development" || (op.direction === "down" && op.result instanceof Error),
         }),
         splitLink({
           condition: (op) => op.type === "subscription",

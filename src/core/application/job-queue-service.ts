@@ -32,18 +32,14 @@ export type EnqueueJobCommand = {
   readonly removeOnFail?: JobRetentionPolicy;
 };
 
-export class JobQueueInvalidJobIdError extends Data.TaggedError(
-  "JobQueueInvalidJobIdError",
-)<{
+export class JobQueueInvalidJobIdError extends Data.TaggedError("JobQueueInvalidJobIdError")<{
   readonly jobId: string;
   readonly jobName: string;
   readonly message: string;
   readonly queueName: string;
 }> {}
 
-export class JobQueuePublishError extends Data.TaggedError(
-  "JobQueuePublishError",
-)<{
+export class JobQueuePublishError extends Data.TaggedError("JobQueuePublishError")<{
   readonly cause: unknown;
   readonly jobId: string;
   readonly jobName: string;
@@ -53,12 +49,7 @@ export class JobQueuePublishError extends Data.TaggedError(
 export type JobQueueError = JobQueueInvalidJobIdError | JobQueuePublishError;
 
 export type JobQueueServiceApi = {
-  readonly enqueue: (
-    command: EnqueueJobCommand,
-  ) => Effect.Effect<void, JobQueueError>;
+  readonly enqueue: (command: EnqueueJobCommand) => Effect.Effect<void, JobQueueError>;
 };
 
-export class JobQueueService extends Context.Tag("JobQueueService")<
-  JobQueueService,
-  JobQueueServiceApi
->() {}
+export class JobQueueService extends Context.Tag("JobQueueService")<JobQueueService, JobQueueServiceApi>() {}

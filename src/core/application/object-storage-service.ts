@@ -73,18 +73,10 @@ export type ObjectStorageServiceApi = {
   readonly createPresignedUploadUrl: (
     command: CreatePresignedUploadUrlCommand,
   ) => Effect.Effect<PresignedObjectUrl, ObjectStorageError>;
-  readonly delete: (
-    command: DeleteObjectCommand,
-  ) => Effect.Effect<void, ObjectStorageError>;
-  readonly download: (
-    command: DownloadObjectCommand,
-  ) => Effect.Effect<DownloadObjectResult, ObjectStorageError>;
-  readonly exists: (
-    command: ObjectExistsCommand,
-  ) => Effect.Effect<boolean, ObjectStorageError>;
-  readonly upload: (
-    command: UploadObjectCommand,
-  ) => Effect.Effect<void, ObjectStorageError>;
+  readonly delete: (command: DeleteObjectCommand) => Effect.Effect<void, ObjectStorageError>;
+  readonly download: (command: DownloadObjectCommand) => Effect.Effect<DownloadObjectResult, ObjectStorageError>;
+  readonly exists: (command: ObjectExistsCommand) => Effect.Effect<boolean, ObjectStorageError>;
+  readonly upload: (command: UploadObjectCommand) => Effect.Effect<void, ObjectStorageError>;
 };
 
 export class ObjectStorageService extends Context.Tag("ObjectStorageService")<
