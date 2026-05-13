@@ -1,4 +1,7 @@
-import { BILLING_CURRENCY, BILLING_PLANS } from "~/features/billing/billing";
+import {
+  BILLING_CURRENCY,
+  BILLING_PLANS,
+} from "~/features/billing/domain/billing";
 import { stripeClient } from "~/features/billing/infra/stripe";
 
 async function ensureProduct(planName: string, title: string) {

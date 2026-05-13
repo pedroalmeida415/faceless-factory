@@ -1,4 +1,4 @@
 import { Layer } from "effect";
-import { BillingService } from "~/features/billing/service";
+import { Billing } from "~/features/billing";
 
-export const Features = Layer.mergeAll(BillingService.Live);
+export const Features = Layer.mergeAll(Billing);

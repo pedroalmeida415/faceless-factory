@@ -3,18 +3,17 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
 import { Effect } from "effect";
-
 import { env } from "~/env";
-import { BILLING_PLANS } from "~/features/billing/billing";
+import { BillingService } from "~/features/billing/application/billing-service";
+import { BILLING_PLANS } from "~/features/billing/domain/billing";
 import { stripeClient } from "~/features/billing/infra/stripe";
-import { BillingService } from "~/features/billing/service";
 import { db } from "~/main/database/db";
 import { ServerRuntimeLive } from "~/main/effect";
 
 export const auth = betterAuth({
   baseURL: env.BETTER_AUTH_URL,
   database: drizzleAdapter(db, {
-    provider: "pg", // or "pg" or "mysql"
+    provider: "pg",
   }),
   emailAndPassword: {
     enabled: true,
@@ -26,7 +25,6 @@ export const auth = betterAuth({
       redirectURI: `${env.BETTER_AUTH_URL}/api/auth/callback/github`,
     },
   },
-  // Make sure nextCookies() is the last plugin in the array
   plugins: [
     stripe({
       createCustomerOnSignUp: true,
