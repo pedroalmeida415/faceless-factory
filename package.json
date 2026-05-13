@@ -9,7 +9,6 @@
     "preview": "next build && next start",
     "start": "next start",
     "test": "rtk bun test --dots",
-    "test:runtime-contract": "rtk bun test --dots src/features/runtime/contract.test.ts",
     "test:verbose": "rtk bun test",
     "test:watch": "rtk bun test --watch",
     "check": "rtk biome check --no-errors-on-unmatched --max-diagnostics=none .",
@@ -18,9 +17,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio",
-    "worker:runtime": "bun src/features/runtime/server/worker.ts",
-    "worker:runtime:dev": "bun --watch src/features/runtime/server/worker.ts"
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@atlaskit/pragmatic-drag-and-drop": "^1.8.0",

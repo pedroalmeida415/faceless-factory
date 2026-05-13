@@ -2,6 +2,10 @@
 
 This context defines the domain language for the node-based media runtime, including execution, review, replacement tasks, and dependency gating.
 
+A feature is a business capability with its own vocabulary, invariants, and durable lifecycle. A vertical slice is a feature-owned use case or transition, not a feature boundary by itself.
+
+The runtime feature is initially split around the **Task** lifecycle capabilities of **Task Planning**, **Task Execution**, and **Task Settlement**. These module boundaries may be refined when a stronger invariant emerges.
+
 ## Language
 
 **Task**:
@@ -12,6 +16,18 @@ _Avoid_: Task, job, output job
 The queue-time process that freezes a task's provider-ready input snapshot from the workflow blueprint, static upstream values, resolved parent tasks, provider settings, and idempotency key.
 _Avoid_: Live rendering, worker graph resolution
 
+**Task Planning**:
+The runtime capability that plans Node Runs, Tasks, Task Dependencies, Task credit costs, and initial Waiting Upstream state from a run command.
+_Avoid_: Workflow execution planning, graph runner, task creation helper
+
+**Task Execution**:
+The runtime capability that moves ready Tasks into provider work through Task Readiness, Task Debits, worker claims, and AI generation execution.
+_Avoid_: Queue worker only, provider runner, gatekeeper
+
+**Task Settlement**:
+The runtime capability that records provider completion or failure, review transitions, refunds, generated Assets, status events, and downstream Wake-Up Calls.
+_Avoid_: Result handling, post-processing, review helper
+
 **Node Run**:
 A durable batch grouping of tasks for a single graph node.
 _Avoid_: Node Run, header, node job
@@ -21,8 +37,12 @@ The zero-based position of the parallel result flow a task attempts to produce w
 _Avoid_: Branch Index, slot index
 
 **Waiting Upstream**:
-A task state where execution is parked until all parent tasks settle successfully.
+A task state where execution is parked until **Task Readiness** determines the task can become `QUEUED`; tasks with no generated parent dependencies also start here before readiness accepts them for execution.
 _Avoid_: Waiting, blocked
+
+**Queued**:
+A task state meaning the task has been accepted for execution, has an executable input snapshot, has received its **Task Debit**, and is waiting for a worker claim.
+_Avoid_: Scheduled without debit, ready task, pending worker
 
 **Active Task**:
 A task in any non-terminal state.
@@ -68,6 +88,10 @@ _Avoid_: Dependency event, provenance event
 Work derived from a committed runtime transaction that must happen after commit, such as publishing Task Status Events or enqueueing execution and Wake-Up Call jobs.
 _Avoid_: Side effect, after-commit callback
 
+**Runtime Job Intent**:
+A runtime-owned post-commit request to enqueue execution work or a Wake-Up Call without depending on queue infrastructure payloads.
+_Avoid_: BullMQ job payload, queue event, worker message
+
 **Workflow Event Stream**:
 A tRPC subscription delivered over server-sent events for workflow task updates.
 _Avoid_: WebSocket, socket event
@@ -76,13 +100,21 @@ _Avoid_: WebSocket, socket event
 A durable requirement from one child task to a parent node run branch, resolved to the exact parent latest task when the child is queued.
 _Avoid_: Node dependency, latest dependency
 
+**Task Readiness**:
+The decision process that checks a **Waiting Upstream** **Task** against its latest required parent **Tasks** and either keeps it waiting, marks it **Upstream Failed**, or accepts it for execution by moving it to `QUEUED`.
+_Avoid_: Gatekeeper, dependency loop, readiness helper
+
 **Task Debit**:
-A debit charged for exactly one **Task** immediately before that **Task** moves to `QUEUED`; it is considered spent unless settlement creates a refund or cost reconciliation.
+A debit charged for exactly one **Task** immediately before that **Task** moves to `QUEUED`; it is considered spent unless settlement creates a refund.
 _Avoid_: Credit reservation, reserved credits, execution debit, output debit
 
-**Task Cost Adjustment**:
-An optional post-settlement debit for a **Task** when an LLM provider's actual cost exceeds the Task's credit cost.
-_Avoid_: Final cost, final cost credits, reserved reconciliation
+**Credit Ledger**:
+The durable account record that applies debits and refunds for a workflow owner.
+_Avoid_: Runtime ledger, execution balance, task balance
+
+**Credits**:
+The product feature that owns credit accounts, ledger entries, balance invariants, debits, refunds, grants, and idempotent credit source keys.
+_Avoid_: Core credit service, runtime balance, payment provider
 
 **Task Refund**:
 A credit ledger refund for a **Task Debit** after queued cancellation or provider/infrastructure failure.
@@ -91,6 +123,18 @@ _Avoid_: Reservation release, cost reversal
 **Pricing Catalog**:
 The server-side source of truth for supported node/model credit costs used to assign a Task credit cost.
 _Avoid_: Client-provided cost, saved graph cost
+
+**Generation Quote**:
+A credit-denominated price for a configured AI generation operation, used by workflow cost projections and persisted by runtime as a **Task** credit cost.
+_Avoid_: Provider price, runtime price, client-computed cost
+
+**Generation Operation**:
+A validated AI generation request describing modality, provider, model, and generation configuration in provider-agnostic product language.
+_Avoid_: Raw provider request, workflow node config, runtime task input
+
+**AI Generation Service**:
+A core capability that quotes and runs supported AI generation operations across providers without using workflow, runtime, task, or credit ledger language.
+_Avoid_: Runtime generator, provider-specific generation service, workflow pricing service
 
 **Execution Cost Projection**:
 A server-derived projection that assigns displayable own-node run costs from the Pricing Catalog to workflow nodes without persisting those costs in the workflow document.
@@ -108,6 +152,9 @@ _Avoid_: Node cost, aggregate node badge
 - A **Task** is the durable source of truth for scheduling, retry, review, replacement, and dependency gating.
 - **Task Input Materialization** is the only path that creates or refreshes a **Task** input snapshot before the task becomes `QUEUED`.
 - **Task Input Materialization** freezes static upstream blueprint values and target node settings when a **Task** is created, including **Waiting Upstream** tasks.
+- **Task Planning** owns initial **Task Input Materialization** when a **Task** is created.
+- **Task Execution** owns final executable **Task Input Materialization** when **Task Readiness** binds approved parent outputs for a **Waiting Upstream** **Task**.
+- **Task Execution** owns all **Task Debits**, including debits for immediately runnable **Tasks** created by **Task Planning**.
 - A **Wake-Up Call** for a **Waiting Upstream** **Task** binds only generated parent outputs from resolved parent **Tasks**; it does not re-read live list, prompt, asset, or target generator settings from the workflow document.
 - Later non-semantic edits such as node position changes do not affect already-created **Tasks** because workers execute materialized input snapshots instead of live blueprint state.
 - A **Node Run** is the durable batch record; there is no separate **Workflow Execution** concept in the domain model.
@@ -117,7 +164,7 @@ _Avoid_: Node cost, aggregate node badge
 - The UI shows the latest **Node Run** for each node by default.
 - **Run Node** creates a new **Node Run** only for the selected node when that node already has execution history; existing downstream **Tasks** remain historical and frozen to their resolved dependencies.
 - **Run Node** plans the full upstream closure needed by that node in one transaction when the node has no existing **Node Run**.
-- Upstream closure planning creates missing **Node Runs**, **Tasks**, and **Task Dependencies**, queues satisfied **Tasks**, and parks unsatisfied **Tasks** as `WAITING_UPSTREAM`.
+- Upstream closure planning creates missing **Node Runs**, **Tasks**, and **Task Dependencies** as `WAITING_UPSTREAM`; **Task Execution** runs **Task Readiness** to accept immediately ready **Tasks** into `QUEUED`.
 - Downstream planning reuses the latest existing upstream **Node Run** when one exists.
 - Downstream planning creates an upstream **Node Run** only when the upstream node has none.
 - When downstream planning finds a latest upstream **Task** in `FAILED`, `CANCELLED`, or `UPSTREAM_FAILED`, it creates a new upstream **Task** and parks the downstream **Task** on it.
@@ -131,13 +178,15 @@ _Avoid_: Node cost, aggregate node badge
 - **Latest Task** is determined by task creation time within the same **Node Run** and **Branch Index**.
 - The server enforces the one-active-task invariant transactionally; frontend controls only prevent obvious duplicate user actions.
 - The database enforces active-task uniqueness for each **Node Run** and **Branch Index** across `WAITING_UPSTREAM`, `QUEUED`, `RUNNING`, and `PENDING_REVIEW` tasks.
-- A **Task** in **Waiting Upstream** consumes no worker resources; it is resumed only by a **Wake-Up Call** from a settled parent task.
+- A **Task** in **Waiting Upstream** consumes no worker resources; it is evaluated by **Task Readiness** after planning and by **Wake-Up Calls** from settled parent tasks.
 - A **Task** moves through `WAITING_UPSTREAM`, `QUEUED`, `RUNNING`, `PENDING_REVIEW`, `APPROVED`, `REJECTED`, `CANCELLED`, `FAILED`, or `UPSTREAM_FAILED`.
 - If an upstream **Task** fails, downstream **Tasks** that depend on it become **Upstream Failed** instead of remaining parked indefinitely.
 - A directly **Failed** **Task** may be retried; an **Upstream Failed** **Task** requires running its failed upstream path first.
 - A **Rejected** **Task** is not an execution failure; it is a reviewed item that was not accepted.
 - Rejecting a **Task** is a server-side **Run Task** command: the rejected task becomes `REJECTED` and a newer **Task** is created immediately.
 - A **Cancelled** **Task** propagates to waiting downstream **Tasks** as `UPSTREAM_FAILED`.
+- **Task Execution** owns cancellation because cancellation stops execution work before completion.
+- Cancelling a parent **Task** marks waiting downstream children as **Upstream Failed** so they do not remain parked indefinitely.
 - If review is disabled for a generated output, successful generation transitions the **Task** directly to `APPROVED`.
 - Downstream execution may consume only `APPROVED` parent **Tasks**; `PENDING_REVIEW` output is renderable but does not satisfy dependencies.
 - A later upstream **Run Node** does not automatically resume a downstream **Task** already marked **Upstream Failed**.
@@ -149,14 +198,23 @@ _Avoid_: Node cost, aggregate node badge
 - Once a child **Task** becomes `QUEUED`, its **Task Dependencies** are frozen to exact resolved parent **Tasks** and are not affected by later **Run Task**.
 - An `APPROVED` **Task** remains approved forever; later **Run Task** creates a newer **Task** without mutating historical approval.
 - When a newer **Task** is created for a required branch, unresolved downstream **Task Dependencies** wait for that newer **Task** even if an older **Task** is `APPROVED`.
-- The gatekeeper transaction is the only path that moves a dependency-waiting child **Task** to `QUEUED`.
-- The gatekeeper re-checks latest required tasks at commit time; creating newer upstream tasks does not require rewriting already waiting children.
-- The gatekeeper resolves each satisfied **Task Dependency** to an exact parent **Task** and snapshots the child input payload before moving the child **Task** to `QUEUED`.
+- **Task Readiness** is the only path that moves a **Waiting Upstream** **Task** to `QUEUED`.
+- **Task Planning** always creates **Tasks** as `WAITING_UPSTREAM`, including Tasks with no generated parent dependencies.
+- **Task Execution** is the only path that moves any **Task** to `QUEUED`.
+- **Task Readiness** re-checks latest required tasks at commit time; creating newer upstream tasks does not require rewriting already waiting children.
+- **Task Readiness** resolves each satisfied **Task Dependency** to an exact parent **Task** and snapshots the child input payload before moving the child **Task** to `QUEUED`.
+- **Task Readiness** is one durable runtime use case because the observable transition is atomic: a waiting **Task** remains waiting, becomes **Upstream Failed**, or becomes `QUEUED`.
+- Dependency satisfaction, input materialization, and task debit timing are internal policies of **Task Readiness** unless another runtime use case needs the same invariant.
 - A queued **Task** stores an immutable input snapshot; workers execute that snapshot instead of reading the live graph or latest dependencies.
 - A **Task** input snapshot stores the minimal execution contract: task identity, target node configuration, resolved parent outputs, relevant document revision, provider settings, and idempotency key.
 - A **Task** input snapshot includes fully rendered provider input plus structured provenance; workers do not perform graph or prompt resolution.
 - A **Task** idempotency key is scoped to the concrete task, such as `task:{taskId}`.
 - Credits are debited immediately before a **Task** moves to `QUEUED`, not when it is created as `WAITING_UPSTREAM`.
+- `QUEUED` means a **Task** is financially accepted for execution; a queued **Task** has already received its **Task Debit**.
+- Runtime owns the business timing of a **Task Debit**; the **Credit Ledger** owns the account mutation and balance invariant.
+- **Credits** is a product feature, not a core technical capability; payment gateway integration is the core capability when external payment providers are introduced.
+- Runtime-facing credit ports use Runtime language such as **Task Debit** and **Task Refund**; Runtime infra translates those calls into Credits application operations.
+- **Credits** stores opaque source metadata and idempotency keys; it does not model Runtime **Tasks** or enforce Runtime lifecycle rules.
 - A **Task Debit** is charged only after input materialization and other pre-provider checks succeed, to avoid unnecessary refunds.
 - A **Task Debit** is per **Task** at the moment that task becomes `QUEUED`.
 - A **Task Debit** belongs to exactly one **Task**.
@@ -166,6 +224,12 @@ _Avoid_: Node cost, aggregate node badge
 - A **Task** credit cost is known and stored when the **Task** is created, including while it is `WAITING_UPSTREAM`.
 - A **Task** credit cost is immutable after the **Task** is created; Pricing Catalog changes affect newly planned Tasks only.
 - A **Task** credit cost comes from the server-side **Pricing Catalog**, not from client-supplied workflow document JSON.
+- A **Generation Quote** is requested only for a validated **Generation Operation**; quoting is not the validation seam.
+- **Generation Operations** are the seam between workflow/runtime configuration and the **AI Generation Service**.
+- **Generation Operation** is core AI generation vocabulary; workflow and runtime map their own feature-owned data into it instead of importing each other's shapes.
+- A **Generation Quote** does not validate provider credentials, provider runtime availability, or current provider outage state.
+- The **AI Generation Service** is the shared source for **Generation Quotes** and generation execution; workflow uses quotes for cost display, and runtime uses quotes to persist **Task** credit costs.
+- The **AI Generation Service** exposes product-level operations such as quote generation, generate text, generate images, and generate video; provider SDK routing and quirks belong behind its infrastructure adapters.
 - The UI may display **Pricing Catalog** costs, but saved workflow documents do not persist pricing as node configuration.
 - The **Execution Cost Projection** feeds own-node run costs to the UI in one server-derived projection for all relevant generation nodes.
 - Node UI displays only its own execution cost; it does not include upstream costs.
@@ -176,9 +240,8 @@ _Avoid_: Node cost, aggregate node badge
 - A run command requires current balance only for Tasks moving to `QUEUED` immediately; waiting upstream cost is disclosed but not reserved.
 - A **Run Cost Preview** excludes already active or approved upstream Tasks from the new-cost total.
 - The **Task Debit** amount comes from the Task's stored credit cost and is charged only when the Task is ready to move to `QUEUED`.
-- LLM provider cost overage after settlement is recorded as a **Task Cost Adjustment** in the credit ledger, not as a second Task cost field.
-- **Task Cost Adjustments** are only additional debits when actual LLM cost exceeds the Task's credit cost; lower actual cost does not create a refund.
-- Credit ledger amounts are whole credits for this MVP; fractional **Task Cost Adjustments** round up to the nearest whole credit.
+- LLM **Tasks** use the fixed **Generation Quote** credit cost for this MVP; provider usage overage does not create post-settlement debits.
+- Actual provider usage-based cost adjustment is deferred until a later pricing model requires it.
 - Planning can create **Tasks** regardless of current credit balance; insufficient credits fail only when a task attempts to become `QUEUED`.
 - If a **Task Debit** cannot be charged, the **Task** becomes `FAILED` and waiting downstream **Tasks** cascade to `UPSTREAM_FAILED`.
 - Direct task failures use `FAILED` with a structured failure reason such as `INSUFFICIENT_CREDITS`.
@@ -186,7 +249,7 @@ _Avoid_: Node cost, aggregate node badge
 - A **Task** may be cancelled without credit impact while it is `WAITING_UPSTREAM` because no **Task Debit** has been charged yet.
 - Cancelling a `QUEUED` **Task** refunds its **Task Debit** because provider work has not started.
 - Cancelling a `RUNNING` **Task** is blocked for this MVP; if cancellation is later allowed after provider work starts, the **Task Debit** is still considered spent unless an adapter proves no external cost occurred.
-- Cancelling a post-provider **Task** does not refund its **Task Debit**.
+- Post-provider **Tasks** are not cancellable; review uses approval or rejection.
 - A failed `RUNNING` **Task** receives a **Task Refund** only when the failure source explicitly marks it refundable.
 - Failed provider work is treated as billable by default after a **Task** reaches `RUNNING`; a provider adapter must explicitly mark the failure as refundable for a **Task Refund** to be created.
 - Post-provider infrastructure failure is not automatically refundable because recovery may still surface the generated result; the failure source must explicitly mark the Task refundable.
@@ -201,14 +264,18 @@ _Avoid_: Node cost, aggregate node badge
 - **Assets** are workflow-local and belong to the workflow owner.
 - Generated **Assets** point directly to their producing **Task**; output ordering within a task is not part of this overhaul.
 - This overhaul treats each completed **Task** as producing exactly one primary generated **Asset**.
+- Runtime generation uses one **Task** for one primary result; batch creation for the same **Branch Index** is out of scope for this overhaul.
 - Generated text **Assets** store their text inline in the asset record for this overhaul.
 - A **Task Status Event** includes `taskId`, `nodeRunId`, `branchIndex`, `status`, and an optional renderable output payload.
+- Runtime standardizes **Task Status Event** payloads and post-commit event intents for lifecycle modules.
 - Renderable asset payloads use CDN URLs for immediate display and keep asset ids as stable identities.
 - Renderable text payloads include the full generated text; LLM node output limits constrain event size.
 - The **Workflow Event Stream** uses SSE through a tRPC subscription; user commands remain HTTP/tRPC mutations.
 - The **Workflow Event Stream** is backed by Redis Pub/Sub so worker processes can publish events consumed by web server subscriptions.
 - **Task Status Events** are published only after the database transaction that produced them commits.
+- Runtime lifecycle modules return post-commit event intents; runtime infra translates those intents to the generic pub/sub capability after commit.
 - Execution jobs are enqueued only after the database transaction that marks tasks `QUEUED` commits.
+- Runtime lifecycle modules return **Runtime Job Intents**; runtime infra translates those intents to the generic job queue capability after commit.
 - **Post-Commit Work** is delivered after commit on a best-effort basis during the MVP.
 - User commands remain successful once the runtime transaction commits, even if **Post-Commit Work** delivery fails.
 - If best-effort **Post-Commit Work** delivery is missed, the user can cancel affected active tasks and run the leaf node again to re-plan the upstream cascade from durable state.

@@ -6,21 +6,17 @@ import * as PgDrizzle from "@effect/sql-drizzle/Pg";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { PGlite } from "@electric-sql/pglite";
 import { Effect, Layer } from "effect";
-import { Database } from "~/core/application/database";
-import {
-  taskFailureReasonTypeValues,
-  taskStatusValues,
-} from "~/features/runtime/domain/task-state";
-import * as schema from "~/server/database/schema";
+import { DatabaseService } from "~/core/application/database-service";
+import * as schema from "~/main/database/schema";
 
-export const DatabaseTest = Layer.scoped(
-  Database,
+export const DatabaseServiceTest = Layer.scoped(
+  DatabaseService,
   Effect.gen(function* () {
     const pglite = yield* Effect.acquireRelease(
       Effect.promise(async () => {
         const database = new PGlite();
         await database.waitReady;
-        await database.exec(coreRuntimeTestSchemaSql);
+        await database.exec(coreTestSchemaSql);
         return database;
       }),
       (database) => Effect.promise(() => database.close()),
@@ -35,7 +31,7 @@ export const DatabaseTest = Layer.scoped(
       Effect.provideService(SqlClient.SqlClient, sql),
     );
 
-    return Database.of(Object.assign(db, { sql }));
+    return DatabaseService.of(Object.assign(db, { sql }));
   }),
 );
 
@@ -90,10 +86,7 @@ function makePgliteConnection(pglite: PGlite): Connection {
   };
 }
 
-const coreRuntimeTestSchemaSql = `
-create type task_runtime_status as enum (${taskStatusValues.map(sqlString).join(", ")});
-create type task_failure_reason as enum (${taskFailureReasonTypeValues.map(sqlString).join(", ")});
-
+const coreTestSchemaSql = `
 create table "user" (
   id text primary key,
   name text not null,
@@ -106,83 +99,71 @@ create table "user" (
   stripe_customer_id text unique
 );
 
-create table workflows (
+create table session (
   id text primary key,
-  owner_user_id text not null references "user"(id) on delete cascade,
-  name text not null,
-  document jsonb not null,
-  document_revision bigint not null default 0,
-  created_at timestamp not null default now(),
-  updated_at timestamp not null default now(),
-  last_opened_at timestamp
+  expires_at timestamp not null,
+  token text not null unique,
+  created_at timestamp not null,
+  updated_at timestamp not null,
+  ip_address text,
+  user_agent text,
+  user_id text not null references "user"(id) on delete cascade
 );
 
-create table node_runs (
+create table account (
   id text primary key,
-  workflow_id text not null references workflows(id) on delete cascade,
-  owner_user_id text not null references "user"(id) on delete cascade,
-  node_id text not null,
-  execution_id text not null,
-  document_revision bigint,
-  status text not null,
-  output_count bigint not null,
-  target_reason text not null,
-  created_at timestamp not null default now(),
-  dispatched_at timestamp,
-  updated_at timestamp not null default now()
+  account_id text not null,
+  provider_id text not null,
+  user_id text not null references "user"(id) on delete cascade,
+  access_token text,
+  refresh_token text,
+  id_token text,
+  access_token_expires_at timestamp,
+  refresh_token_expires_at timestamp,
+  scope text,
+  password text,
+  created_at timestamp not null,
+  updated_at timestamp not null
 );
 
-create table tasks (
+create table verification (
   id text primary key,
-  node_run_id text not null references node_runs(id) on delete cascade,
-  workflow_id text not null references workflows(id) on delete cascade,
-  owner_user_id text not null references "user"(id) on delete cascade,
-  node_id text not null,
-  output_index bigint not null,
-  version bigint not null,
-  branch_index bigint,
-  execution_id text not null,
-  job_id text not null unique,
-  status text not null,
-  runtime_status task_runtime_status,
-  runtime_worker_id text,
-  runtime_locked_until timestamp,
-  runtime_attempt_count bigint not null default 0,
-  runtime_next_attempt_at timestamp,
-  runtime_last_error text,
-  runtime_post_commit_processed_at timestamp,
-  target_reason text not null,
-  value_type text,
-  text_value text,
-  asset_ids jsonb not null default '[]'::jsonb,
-  input_hash text,
-  idempotency_key text unique,
-  model text,
-  prompt_snapshot text,
-  input_data jsonb,
-  input_snapshot jsonb,
-  review_status text,
-  error text,
-  credit_cost bigint not null,
-  failure_reason task_failure_reason,
-  document_revision bigint,
-  queued_at timestamp,
-  started_at timestamp,
-  finished_at timestamp,
-  failed_at timestamp,
-  created_at timestamp not null default now(),
-  updated_at timestamp not null default now()
+  identifier text not null,
+  value text not null,
+  expires_at timestamp not null,
+  created_at timestamp,
+  updated_at timestamp
 );
 
-create unique index tasks_runtime_active_slot_unique
-  on tasks (node_run_id, branch_index)
-  where runtime_status in ('WAITING_UPSTREAM', 'QUEUED', 'RUNNING', 'PENDING_REVIEW');
+create table credit_ledger_entries (
+  id text primary key,
+  user_id text not null references "user"(id) on delete cascade,
+  kind text not null,
+  amount bigint not null,
+  balance_after bigint not null,
+  reason text not null,
+  source_key text unique,
+  created_at timestamp not null default now()
+);
 
-create index tasks_runtime_ready_idx
-  on tasks (runtime_status, runtime_next_attempt_at, runtime_locked_until, queued_at, created_at);
+create table subscription (
+  id text primary key,
+  plan text not null,
+  reference_id text not null references "user"(id) on delete cascade,
+  stripe_customer_id text,
+  stripe_subscription_id text,
+  status text not null default 'incomplete',
+  period_start timestamp,
+  period_end timestamp,
+  cancel_at_period_end boolean default false,
+  cancel_at timestamp,
+  canceled_at timestamp,
+  ended_at timestamp,
+  seats bigint,
+  trial_start timestamp,
+  trial_end timestamp,
+  billing_interval text,
+  stripe_schedule_id text
+);
 
 `;
-
-function sqlString(value: string) {
-  return `'${value.replaceAll("'", "''")}'`;
-}

@@ -2,9 +2,9 @@ import { SqlClient } from "@effect/sql";
 import * as PgDrizzle from "@effect/sql-drizzle/Pg";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { Effect, Layer, Redacted } from "effect";
-import { Database } from "~/core/application/database";
+import { DatabaseService } from "~/core/application/database-service";
 import { env } from "~/env";
-import * as schema from "~/server/database/schema";
+import * as schema from "~/main/database/schema";
 
 export const PgClientLive = PgClient.layer({
   url: Redacted.make(env.DATABASE_URL),
@@ -12,8 +12,8 @@ export const PgClientLive = PgClient.layer({
   minConnections: 1,
 });
 
-export const DatabaseLive = Layer.effect(
-  Database,
+export const DatabaseServiceLive = Layer.effect(
+  DatabaseService,
   Effect.gen(function* () {
     const db = yield* PgDrizzle.make({ schema });
     const sql = yield* SqlClient.SqlClient;
@@ -23,6 +23,6 @@ export const DatabaseLive = Layer.effect(
     // transaction keeps those queries on the transactional connection through
     // the Effect context. Avoid Drizzle's Promise-based `db.transaction(...)`.
     // `sql` is only to be used for transactions. Prefer db.query() or db.select() syntax.
-    return Database.of(Object.assign(db, { sql }));
+    return DatabaseService.of(Object.assign(db, { sql }));
   }),
 ).pipe(Layer.provideMerge(PgClientLive));
