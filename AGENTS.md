@@ -276,6 +276,8 @@ Agents must read `~/.local/share/effect-solutions/effect` before implementing or
 
 Do not invent Effect patterns from memory when the external clone can verify the API shape or idiom. If local project code and the external clone disagree, inspect both and choose the pattern that matches the installed package version or explicitly report the version mismatch.
 
+When writing Effect code, inspect `~/.local/share/effect-solutions/effect` for examples of idiomatic usage, tests, module structure, and API design. Treat it as the source of truth for Effect patterns.
+
 ## Rules
 
 * Keep Effect values inside domain/application/infra code until the outer framework adapter runs them.
