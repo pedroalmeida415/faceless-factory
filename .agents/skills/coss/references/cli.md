@@ -5,8 +5,6 @@ Use this guide when installing, previewing, or discovering coss components via t
 ## CLI Safety Rules
 
 - Always use the project's package runner:
-  - `npx shadcn@latest ...`
-  - `pnpm dlx shadcn@latest ...`
   - `bunx --bun shadcn@latest ...`
 - Do not invent flags. Use only documented CLI flags.
 
@@ -16,16 +14,16 @@ Use this guide when installing, previewing, or discovering coss components via t
 
 ```bash
 # New projects (recommended — includes Inter + Geist Mono fonts + full theme)
-npx shadcn@latest init @coss/style
+bunx --bun shadcn@latest init @coss/style
 
 # Existing projects - all primitives
-npx shadcn@latest add @coss/ui
+bunx --bun shadcn@latest add @coss/ui
 
 # Existing projects - full theme setup
-npx shadcn@latest add @coss/style
+bunx --bun shadcn@latest add @coss/style
 
 # Existing projects - primitives + color tokens
-npx shadcn@latest add @coss/ui @coss/colors-neutral
+bunx --bun shadcn@latest add @coss/ui @coss/colors-neutral
 ```
 
 `@coss/style` automatically installs `@coss/fonts` (Inter for `--font-sans` and `--font-heading`, Geist Mono for `--font-mono`), which configures all three font variables in `layout.tsx`. No manual font wiring needed.
@@ -39,17 +37,17 @@ shadcn add @coss/<component>
 Examples:
 
 ```bash
-npx shadcn@latest add @coss/dialog
-npx shadcn@latest add @coss/select
-npx shadcn@latest add @coss/toast
+bunx --bun shadcn@latest add @coss/dialog
+bunx --bun shadcn@latest add @coss/select
+bunx --bun shadcn@latest add @coss/toast
 ```
 
 ### `add` preview mode (recommended)
 
 ```bash
-npx shadcn@latest add @coss/dialog --dry-run
-npx shadcn@latest add @coss/dialog --diff
-npx shadcn@latest add @coss/dialog --view
+bunx --bun shadcn@latest add @coss/dialog --dry-run
+bunx --bun shadcn@latest add @coss/dialog --diff
+bunx --bun shadcn@latest add @coss/dialog --view
 ```
 
 Use preview mode when:
@@ -61,10 +59,10 @@ Use preview mode when:
 ### Optional discovery helpers (use when available)
 
 ```bash
-npx shadcn@latest search @coss -q "dialog"
-npx shadcn@latest view @coss/dialog
-npx shadcn@latest docs dialog
-npx shadcn@latest info --json
+bunx --bun shadcn@latest search @coss -q "dialog"
+bunx --bun shadcn@latest view @coss/dialog
+bunx --bun shadcn@latest docs dialog
+bunx --bun shadcn@latest info --json
 ```
 
 If these are unsupported in the environment, use fallback sources below.

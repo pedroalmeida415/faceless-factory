@@ -8,7 +8,7 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/kbd
+bunx --bun shadcn@latest add @coss/kbd
 ```
 
 Manual deps from docs:

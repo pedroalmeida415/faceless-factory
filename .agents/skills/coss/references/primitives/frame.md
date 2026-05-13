@@ -8,7 +8,7 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/frame
+bunx --bun shadcn@latest add @coss/frame
 ```
 
 Manual deps from docs:

@@ -9,13 +9,13 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/form
+bunx --bun shadcn@latest add @coss/form
 ```
 
 Manual deps:
 
 ```bash
-npm install @base-ui/react zod
+bun install @base-ui/react zod
 ```
 
 ## Canonical imports

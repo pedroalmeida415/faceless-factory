@@ -14,13 +14,13 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/menu
+bunx --bun shadcn@latest add @coss/menu
 ```
 
 Manual deps and theme var from docs:
 
 ```bash
-npm install @base-ui/react
+bun install @base-ui/react
 ```
 
 Also include the destructive foreground CSS variable snippet from the coss menu docs when doing manual setup.

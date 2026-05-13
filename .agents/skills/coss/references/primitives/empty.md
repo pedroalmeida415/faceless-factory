@@ -8,7 +8,7 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/empty
+bunx --bun shadcn@latest add @coss/empty
 ```
 
 Manual deps from docs:

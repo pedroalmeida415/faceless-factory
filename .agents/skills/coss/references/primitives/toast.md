@@ -20,13 +20,13 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/toast
+bunx --bun shadcn@latest add @coss/toast
 ```
 
 Manual deps:
 
 ```bash
-npm install @base-ui/react
+bun install @base-ui/react
 ```
 
 ## Required app setup

@@ -8,7 +8,7 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/label
+bunx --bun shadcn@latest add @coss/label
 ```
 
 Manual deps from docs:

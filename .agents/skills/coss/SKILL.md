@@ -84,7 +84,7 @@ See `./references/cli.md` for full install/discovery workflow.
 Quick CLI pattern:
 
 ```bash
-npx shadcn@latest add @coss/<component>
+bunx --bun shadcn@latest add @coss/<component>
 ```
 
 Quick manual pattern:

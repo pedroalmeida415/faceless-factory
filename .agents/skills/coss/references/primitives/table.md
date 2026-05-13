@@ -8,7 +8,7 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/table
+bunx --bun shadcn@latest add @coss/table
 ```
 
 Manual deps from docs:
@@ -16,7 +16,7 @@ Manual deps from docs:
 ```bash
 # No extra runtime dependency required for basic table usage.
 # For interactive data tables, add TanStack Table:
-npm install @tanstack/react-table
+bun install @tanstack/react-table
 ```
 
 ## Canonical imports

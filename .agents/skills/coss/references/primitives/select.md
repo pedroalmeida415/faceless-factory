@@ -14,13 +14,13 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/select
+bunx --bun shadcn@latest add @coss/select
 ```
 
 Manual deps:
 
 ```bash
-npm install @base-ui/react
+bun install @base-ui/react
 ```
 
 ## Canonical imports

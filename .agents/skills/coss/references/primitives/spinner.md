@@ -8,7 +8,7 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/spinner
+bunx --bun shadcn@latest add @coss/spinner
 ```
 
 Manual deps from docs:

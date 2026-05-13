@@ -14,7 +14,7 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/alert
+bunx --bun shadcn@latest add @coss/alert
 ```
 
 Manual deps from docs:

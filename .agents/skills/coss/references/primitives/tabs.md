@@ -8,7 +8,7 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/tabs
+bunx --bun shadcn@latest add @coss/tabs
 ```
 
 Manual deps from docs:

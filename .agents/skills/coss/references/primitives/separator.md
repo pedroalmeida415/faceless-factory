@@ -8,13 +8,13 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/separator
+bunx --bun shadcn@latest add @coss/separator
 ```
 
 Manual deps from docs:
 
 ```bash
-npm install @base-ui/react
+bun install @base-ui/react
 ```
 
 ## Canonical imports

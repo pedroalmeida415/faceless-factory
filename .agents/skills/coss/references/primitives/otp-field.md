@@ -8,13 +8,13 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/otp-field
+bunx --bun shadcn@latest add @coss/otp-field
 ```
 
 Manual deps from docs:
 
 ```bash
-npm install @base-ui/react lucide-react
+bun install @base-ui/react lucide-react
 ```
 
 ## Canonical imports

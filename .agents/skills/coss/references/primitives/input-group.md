@@ -8,13 +8,13 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/input-group
+bunx --bun shadcn@latest add @coss/input-group
 ```
 
 Manual deps:
 
 ```bash
-npm install @base-ui/react
+bun install @base-ui/react
 ```
 
 ## Canonical imports

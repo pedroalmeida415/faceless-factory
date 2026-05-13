@@ -14,13 +14,13 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/alert-dialog
+bunx --bun shadcn@latest add @coss/alert-dialog
 ```
 
 Manual deps from docs:
 
 ```bash
-npm install @base-ui/react
+bun install @base-ui/react
 ```
 
 ## Canonical imports

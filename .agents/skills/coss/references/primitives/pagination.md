@@ -8,7 +8,7 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/pagination
+bunx --bun shadcn@latest add @coss/pagination
 ```
 
 Manual deps from docs:

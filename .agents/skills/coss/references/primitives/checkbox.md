@@ -14,13 +14,13 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/checkbox
+bunx --bun shadcn@latest add @coss/checkbox
 ```
 
 Manual deps from docs:
 
 ```bash
-npm install @base-ui/react
+bun install @base-ui/react
 ```
 
 ## Canonical imports

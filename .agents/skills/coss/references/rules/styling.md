@@ -42,7 +42,7 @@ coss components use three CSS custom properties for typography:
 | `--font-mono` | `<code>`, `<kbd>`, `<pre>`, code blocks | `ui-monospace, monospace` |
 | `--font-heading` | Dialog/AlertDialog titles, headings | Defaults to Inter (same as `--font-sans`) |
 
-**CLI setup (recommended):** `npx shadcn@latest init @coss/style` automatically installs `@coss/fonts` — Inter for `--font-sans` and `--font-heading`, Geist Mono for `--font-mono` — via `registry:font` items and configures them in `layout.tsx`.
+**CLI setup (recommended):** `bunx --bun shadcn@latest init @coss/style` automatically installs `@coss/fonts` — Inter for `--font-sans` and `--font-heading`, Geist Mono for `--font-mono` — via `registry:font` items and configures them in `layout.tsx`.
 
 **Manual / custom font setup:** When using `next/font`, the `variable` option must match coss expectations exactly:
 

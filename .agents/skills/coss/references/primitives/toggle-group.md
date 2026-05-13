@@ -8,13 +8,13 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/toggle-group
+bunx --bun shadcn@latest add @coss/toggle-group
 ```
 
 Manual deps from docs:
 
 ```bash
-npm install @base-ui/react
+bun install @base-ui/react
 ```
 
 ## Canonical imports

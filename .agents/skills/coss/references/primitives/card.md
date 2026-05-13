@@ -8,7 +8,7 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/card
+bunx --bun shadcn@latest add @coss/card
 ```
 
 Manual deps from docs:

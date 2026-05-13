@@ -8,7 +8,7 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/skeleton
+bunx --bun shadcn@latest add @coss/skeleton
 ```
 
 Manual deps from docs:

@@ -8,13 +8,13 @@
 ## Install
 
 ```bash
-npx shadcn@latest add @coss/calendar
+bunx --bun shadcn@latest add @coss/calendar
 ```
 
 Manual deps from docs:
 
 ```bash
-npm install react-day-picker
+bun install react-day-picker
 ```
 
 ## Canonical imports
