@@ -94,6 +94,10 @@ src/main/**
 
 Feature `domain` contains business rules, domain errors, value objects, domain services, and business protocols. Feature `application` contains use cases, orchestration, and feature-owned ports/contracts. Feature `infra` implements feature application ports using external libraries, SDKs, databases, queues, framework mechanisms, and `core/application` ports.
 
+Feature application modules use stable top-level contracts such as `errors.ts`, `models.ts`, and capability ports like `store.ts`, plus procedure-aligned use cases under `application/use-cases/<procedure-name>.ts`. Do not create use-case service tags or `*Live` layers for stable use cases; export the Effect program directly. Name feature application ports by capability, not `ports.ts`, and mirror that capability in infra adapter filenames such as `infra/store.ts`; reserve `Live` for concrete Layer values.
+
+Feature domain modules should be split by domain concept or invariant owner, for example `graph-blueprint.ts`, `graph-evaluation.ts`, and `model-catalog.ts`. Avoid permanent catch-all files such as `domain/<feature>.ts`, `types.ts`, `utils.ts`, or `schemas.ts`. Keep deterministic in-memory domain rules as pure TypeScript functions; call them from Effect use cases/adapters when I/O or orchestration is needed.
+
 Feature application should depend on feature domain and feature-owned ports expressed in business/use-case language. Feature application should not import shared infrastructure implementations, and should not depend directly on generic core capability ports by default.
 
 Feature infra may depend on feature application and `core/application`. Feature infra must not depend on `core/infra`, and must not bypass feature application by implementing domain ports directly.
