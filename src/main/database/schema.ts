@@ -1,5 +1,6 @@
 import { relations } from "drizzle-orm";
-import { bigint, boolean, index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { bigint, boolean, index, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import type { WorkflowGraphBlueprint } from "~/features/workflow/domain/graph-blueprint";
 
 type CreditLedgerEntryKind = "debit" | "refund" | "grant" | "purchase";
 
@@ -11,12 +12,11 @@ export const user = pgTable("user", {
     .$defaultFn(() => false)
     .notNull(),
   image: text("image"),
-  createdAt: timestamp("created_at")
-    .$defaultFn(() => new Date())
-    .notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at")
-    .$defaultFn(() => new Date())
-    .notNull(),
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
   creditBalance: bigint("credit_balance", { mode: "number" }).default(0).notNull(),
   stripeCustomerId: text("stripe_customer_id").unique(),
 });
@@ -25,8 +25,11 @@ export const session = pgTable("session", {
   id: text("id").primaryKey(),
   expiresAt: timestamp("expires_at").notNull(),
   token: text("token").notNull().unique(),
-  createdAt: timestamp("created_at").notNull(),
-  updatedAt: timestamp("updated_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
   userId: text("user_id")
@@ -48,8 +51,11 @@ export const account = pgTable("account", {
   refreshTokenExpiresAt: timestamp("refresh_token_expires_at"),
   scope: text("scope"),
   password: text("password"),
-  createdAt: timestamp("created_at").notNull(),
-  updatedAt: timestamp("updated_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
 });
 
 export const verification = pgTable("verification", {
@@ -57,14 +63,16 @@ export const verification = pgTable("verification", {
   identifier: text("identifier").notNull(),
   value: text("value").notNull(),
   expiresAt: timestamp("expires_at").notNull(),
-  createdAt: timestamp("created_at").$defaultFn(() => new Date()),
-  updatedAt: timestamp("updated_at").$defaultFn(() => new Date()),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at")
+    .defaultNow()
+    .$onUpdate(() => new Date()),
 });
 
 export const creditLedgerEntries = pgTable(
   "credit_ledger_entries",
   {
-    id: text("id").primaryKey(),
+    id: uuid("id").primaryKey(),
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
@@ -73,9 +81,7 @@ export const creditLedgerEntries = pgTable(
     balanceAfter: bigint("balance_after", { mode: "number" }).notNull(),
     reason: text("reason").notNull(),
     sourceKey: text("source_key").unique(),
-    createdAt: timestamp("created_at")
-      .$defaultFn(() => new Date())
-      .notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({
     userCreatedAtIdx: index("credit_ledger_entries_user_created_at_idx").on(table.userId, table.createdAt),
@@ -111,11 +117,32 @@ export const subscription = pgTable(
   }),
 );
 
+export const workflows = pgTable(
+  "workflows",
+  {
+    id: uuid("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    graph: jsonb("graph").$type<WorkflowGraphBlueprint>().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    userUpdatedAtIdx: index("workflows_user_updated_at_idx").on(table.userId, table.updatedAt),
+  }),
+);
+
 export const userRelations = relations(user, ({ many }) => ({
   account: many(account),
   creditLedgerEntries: many(creditLedgerEntries),
   session: many(session),
   subscriptions: many(subscription),
+  workflows: many(workflows),
 }));
 
 export const accountRelations = relations(account, ({ one }) => ({
@@ -138,4 +165,8 @@ export const subscriptionRelations = relations(subscription, ({ one }) => ({
     fields: [subscription.referenceId],
     references: [user.id],
   }),
+}));
+
+export const workflowsRelations = relations(workflows, ({ one }) => ({
+  user: one(user, { fields: [workflows.userId], references: [user.id] }),
 }));
