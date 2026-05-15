@@ -15,6 +15,10 @@ export class WorkflowStore extends Context.Tag("WorkflowStore")<
       readonly name: string;
       readonly userId: string;
     }) => Effect.Effect<WorkflowGraphProjection, WorkflowDatabaseError>;
+    readonly deleteWorkflow: (input: {
+      readonly userId: string;
+      readonly workflowId: string;
+    }) => Effect.Effect<void, WorkflowDatabaseError | WorkflowNotFoundError>;
     readonly getWorkflow: (input: {
       readonly userId: string;
       readonly workflowId: string;
@@ -22,5 +26,10 @@ export class WorkflowStore extends Context.Tag("WorkflowStore")<
     readonly listWorkflows: (
       userId: string,
     ) => Effect.Effect<readonly WorkflowSummaryProjection[], WorkflowDatabaseError>;
+    readonly renameWorkflow: (input: {
+      readonly name: string;
+      readonly userId: string;
+      readonly workflowId: string;
+    }) => Effect.Effect<WorkflowSummaryProjection, WorkflowDatabaseError | WorkflowNotFoundError>;
   }
 >() {}

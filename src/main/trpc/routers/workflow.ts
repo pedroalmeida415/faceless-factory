@@ -3,8 +3,10 @@ import { Effect } from "effect";
 import { z } from "zod";
 import { WorkflowNotFoundError, WorkflowValidationError } from "~/features/workflow/application/errors";
 import { createWorkflow } from "~/features/workflow/application/use-cases/create-workflow";
+import { deleteWorkflow } from "~/features/workflow/application/use-cases/delete-workflow";
 import { getWorkflow } from "~/features/workflow/application/use-cases/get-workflow";
 import { listWorkflows } from "~/features/workflow/application/use-cases/list-workflows";
+import { renameWorkflow } from "~/features/workflow/application/use-cases/rename-workflow";
 import { saveWorkflow } from "~/features/workflow/application/use-cases/save-workflow";
 import { WorkflowGraphBlueprintSchema } from "~/features/workflow/domain/graph-blueprint";
 import { ServerRuntimeLive } from "~/main/effect";
@@ -38,6 +40,19 @@ export const workflowRouter = createTRPCRouter({
         createWorkflow({ name: input.name, userId: ctx.session.user.id }).pipe(Effect.mapError(toTrpcError)),
       ),
     ),
+  deleteWorkflow: protectedProcedure
+    .input(
+      z.object({
+        workflowId: z.string().min(1),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      ServerRuntimeLive.runPromise(
+        deleteWorkflow({ userId: ctx.session.user.id, workflowId: input.workflowId }).pipe(
+          Effect.mapError(toTrpcError),
+        ),
+      ),
+    ),
   getWorkflow: protectedProcedure
     .input(
       z.object({
@@ -52,12 +67,28 @@ export const workflowRouter = createTRPCRouter({
   listWorkflows: protectedProcedure.query(({ ctx }) =>
     ServerRuntimeLive.runPromise(listWorkflows(ctx.session.user.id).pipe(Effect.mapError(toTrpcError))),
   ),
+  renameWorkflow: protectedProcedure
+    .input(
+      z.object({
+        name: z.string().trim().min(1).max(120),
+        workflowId: z.string().min(1),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      ServerRuntimeLive.runPromise(
+        renameWorkflow({ name: input.name, userId: ctx.session.user.id, workflowId: input.workflowId }).pipe(
+          Effect.mapError(toTrpcError),
+        ),
+      ),
+    ),
 });
 
 type WorkflowRouterError = Effect.Effect.Error<
   | ReturnType<typeof createWorkflow>
+  | ReturnType<typeof deleteWorkflow>
   | ReturnType<typeof getWorkflow>
   | ReturnType<typeof listWorkflows>
+  | ReturnType<typeof renameWorkflow>
   | ReturnType<typeof saveWorkflow>
 >;
 

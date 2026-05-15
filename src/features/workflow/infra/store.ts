@@ -75,6 +75,14 @@ export const WorkflowStoreLive = Layer.effect(
             workflowId,
           });
         }).pipe(catchSqlError("Failed to create workflows.")),
+      deleteWorkflow: (input) =>
+        Effect.gen(function* () {
+          yield* loadWorkflow(input);
+
+          yield* database
+            .delete(workflows)
+            .where(and(eq(workflows.id, input.workflowId), eq(workflows.userId, input.userId)));
+        }).pipe(catchSqlError("Failed to delete workflow.")),
       getWorkflow: (input) =>
         Effect.gen(function* () {
           const workflow = yield* loadWorkflow(input);
@@ -98,6 +106,22 @@ export const WorkflowStoreLive = Layer.effect(
             .orderBy(desc(workflows.updatedAt)),
           (records) => records,
         ).pipe(catchSqlError("Failed to list workflows.")),
+      renameWorkflow: (input) =>
+        Effect.gen(function* () {
+          yield* loadWorkflow(input);
+          const now = new Date();
+
+          yield* database
+            .update(workflows)
+            .set({ name: input.name, updatedAt: now })
+            .where(and(eq(workflows.id, input.workflowId), eq(workflows.userId, input.userId)));
+
+          return {
+            name: input.name,
+            updatedAt: now,
+            workflowId: input.workflowId,
+          };
+        }).pipe(catchSqlError("Failed to rename workflow.")),
     });
   }),
 );
