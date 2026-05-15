@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import type { SqlError } from "@effect/sql/SqlError";
 import { and, desc, eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { DatabaseService } from "~/core/application/database-service";
@@ -39,84 +40,78 @@ export const WorkflowStoreLive = Layer.effect(
 
     return WorkflowStore.of({
       saveWorkflow: (input) =>
-        mapWorkflowDatabaseError(
-          Effect.gen(function* () {
-            const workflow = yield* loadWorkflow(input);
-            const now = new Date();
+        Effect.gen(function* () {
+          const workflow = yield* loadWorkflow(input);
+          const now = new Date();
 
-            yield* database
-              .update(workflows)
-              .set({ graph: input.graph, updatedAt: now })
-              .where(and(eq(workflows.id, input.workflowId), eq(workflows.userId, input.userId)));
+          yield* database
+            .update(workflows)
+            .set({ graph: input.graph, updatedAt: now })
+            .where(and(eq(workflows.id, input.workflowId), eq(workflows.userId, input.userId)));
 
-            return toWorkflowGraphProjection({
-              graph: input.graph,
-              name: workflow.name,
-              workflowId: input.workflowId,
-            });
-          }),
-          "Failed to save workflow graph.",
-        ),
+          return toWorkflowGraphProjection({
+            graph: input.graph,
+            name: workflow.name,
+            workflowId: input.workflowId,
+          });
+        }).pipe(catchSqlError("Failed to save workflow graph.")),
       createWorkflow: (input) =>
-        mapWorkflowDatabaseError(
-          Effect.gen(function* () {
-            const workflowId = randomUUID();
-            const now = new Date();
+        Effect.gen(function* () {
+          const workflowId = randomUUID();
+          const now = new Date();
 
-            yield* database.insert(workflows).values({
-              createdAt: now,
-              graph: EMPTY_WORKFLOW_GRAPH_BLUEPRINT,
-              id: workflowId,
-              name: input.name,
-              updatedAt: now,
-              userId: input.userId,
-            });
+          yield* database.insert(workflows).values({
+            createdAt: now,
+            graph: EMPTY_WORKFLOW_GRAPH_BLUEPRINT,
+            id: workflowId,
+            name: input.name,
+            updatedAt: now,
+            userId: input.userId,
+          });
 
-            return toWorkflowGraphProjection({
-              graph: EMPTY_WORKFLOW_GRAPH_BLUEPRINT,
-              name: input.name,
-              workflowId,
-            });
-          }),
-          "Failed to create workflow.",
-        ),
+          return toWorkflowGraphProjection({
+            graph: EMPTY_WORKFLOW_GRAPH_BLUEPRINT,
+            name: input.name,
+            workflowId,
+          });
+        }).pipe(catchSqlError("Failed to create workflows.")),
       getWorkflow: (input) =>
-        mapWorkflowDatabaseError(
-          Effect.gen(function* () {
-            const workflow = yield* loadWorkflow(input);
+        Effect.gen(function* () {
+          const workflow = yield* loadWorkflow(input);
 
-            return toWorkflowGraphProjection({
-              graph: workflow.graph,
-              name: workflow.name,
-              workflowId: workflow.id,
-            });
-          }),
-          "Failed to load workflow.",
-        ),
+          return toWorkflowGraphProjection({
+            graph: workflow.graph,
+            name: workflow.name,
+            workflowId: workflow.id,
+          });
+        }).pipe(catchSqlError("Failed to load workflows.")),
       listWorkflows: (userId) =>
-        mapWorkflowDatabaseError(
-          Effect.map(
-            database
-              .select({
-                name: workflows.name,
-                updatedAt: workflows.updatedAt,
-                workflowId: workflows.id,
-              })
-              .from(workflows)
-              .where(eq(workflows.userId, userId))
-              .orderBy(desc(workflows.updatedAt)),
-            (records) => records,
-          ),
-          "Failed to list workflows.",
-        ),
+        Effect.map(
+          database
+            .select({
+              name: workflows.name,
+              updatedAt: workflows.updatedAt,
+              workflowId: workflows.id,
+            })
+            .from(workflows)
+            .where(eq(workflows.userId, userId))
+            .orderBy(desc(workflows.updatedAt)),
+          (records) => records,
+        ).pipe(catchSqlError("Failed to list workflows.")),
     });
   }),
 );
 
-function mapWorkflowDatabaseError<A, E>(effect: Effect.Effect<A, E>, failureMessage: string) {
-  return Effect.mapError(effect, (cause) =>
-    cause instanceof WorkflowDatabaseError || cause instanceof WorkflowNotFoundError
-      ? cause
-      : new WorkflowDatabaseError({ cause, message: failureMessage }),
-  );
-}
+const catchSqlError =
+  (message: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E | SqlError, R>) =>
+    effect.pipe(
+      Effect.catchTag("SqlError", (error) =>
+        Effect.fail(
+          new WorkflowDatabaseError({
+            cause: error,
+            message,
+          }),
+        ),
+      ),
+    );
