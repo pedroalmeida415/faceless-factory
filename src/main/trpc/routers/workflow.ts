@@ -1,11 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { Effect } from "effect";
 import { z } from "zod";
-import {
-  type WorkflowDatabaseError,
-  WorkflowNotFoundError,
-  WorkflowValidationError,
-} from "~/features/workflow/application/errors";
+import { WorkflowNotFoundError, WorkflowValidationError } from "~/features/workflow/application/errors";
 import { createWorkflow } from "~/features/workflow/application/use-cases/create-workflow";
 import { getWorkflow } from "~/features/workflow/application/use-cases/get-workflow";
 import { listWorkflows } from "~/features/workflow/application/use-cases/list-workflows";
@@ -58,7 +54,12 @@ export const workflowRouter = createTRPCRouter({
   ),
 });
 
-type WorkflowRouterError = WorkflowDatabaseError | WorkflowNotFoundError | WorkflowValidationError;
+type WorkflowRouterError = Effect.Effect.Error<
+  | ReturnType<typeof createWorkflow>
+  | ReturnType<typeof getWorkflow>
+  | ReturnType<typeof listWorkflows>
+  | ReturnType<typeof saveWorkflow>
+>;
 
 function toTrpcError(cause: WorkflowRouterError) {
   const message = cause.message;

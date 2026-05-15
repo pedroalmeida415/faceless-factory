@@ -2,9 +2,9 @@ import { stripe } from "@better-auth/stripe";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { nextCookies } from "better-auth/next-js";
-import { Effect } from "effect";
 import { env } from "~/env";
-import { BillingService } from "~/features/billing/application/billing-service";
+import { handleSuccessfulTopUpPayment } from "~/features/billing/application/use-cases/handle-successful-top-up-payment";
+import { syncSubscriptionCredits } from "~/features/billing/application/use-cases/sync-subscription-credits";
 import { BILLING_PLANS } from "~/features/billing/domain/billing";
 import { stripeClient } from "~/features/billing/infra/stripe";
 import { db } from "~/main/database/db";
@@ -39,9 +39,7 @@ export const auth = betterAuth({
           return;
         }
 
-        await ServerRuntimeLive.runPromise(
-          Effect.flatMap(BillingService, (billing) => billing.handleSuccessfulTopUpPayment(event.data.object)),
-        );
+        await ServerRuntimeLive.runPromise(handleSuccessfulTopUpPayment(event.data.object));
       },
       stripeClient,
       stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
@@ -49,19 +47,13 @@ export const auth = betterAuth({
         authorizeReference: async ({ referenceId, user }) => referenceId === user.id,
         enabled: true,
         onSubscriptionComplete: async ({ subscription }) => {
-          await ServerRuntimeLive.runPromise(
-            Effect.flatMap(BillingService, (billing) => billing.syncSubscriptionCredits(subscription)),
-          );
+          await ServerRuntimeLive.runPromise(syncSubscriptionCredits(subscription));
         },
         onSubscriptionCreated: async ({ subscription }) => {
-          await ServerRuntimeLive.runPromise(
-            Effect.flatMap(BillingService, (billing) => billing.syncSubscriptionCredits(subscription)),
-          );
+          await ServerRuntimeLive.runPromise(syncSubscriptionCredits(subscription));
         },
         onSubscriptionUpdate: async ({ subscription }) => {
-          await ServerRuntimeLive.runPromise(
-            Effect.flatMap(BillingService, (billing) => billing.syncSubscriptionCredits(subscription)),
-          );
+          await ServerRuntimeLive.runPromise(syncSubscriptionCredits(subscription));
         },
         plans: BILLING_PLANS.map((plan) => ({
           annualDiscountLookupKey: plan.annualPriceLookupKey,

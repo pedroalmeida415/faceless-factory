@@ -98,6 +98,8 @@ Feature application modules use stable top-level contracts such as `errors.ts`, 
 
 Feature domain modules should be split by domain concept or invariant owner, for example `graph-blueprint.ts`, `graph-evaluation.ts`, and `model-catalog.ts`. Avoid permanent catch-all files such as `domain/<feature>.ts`, `types.ts`, `utils.ts`, or `schemas.ts`. Keep deterministic in-memory domain rules as pure TypeScript functions; call them from Effect use cases/adapters when I/O or orchestration is needed.
 
+Feature infra adapters translate infrastructure failures at the adapter method boundary into feature-level application errors. Prefer catching specific tagged infrastructure errors, such as `Effect.catchTag("SqlError", ...)`, over broad `mapError` helpers that catch every error and then special-case feature errors. Intentional feature errors emitted by adapter logic should pass through unchanged.
+
 Feature application should depend on feature domain and feature-owned ports expressed in business/use-case language. Feature application should not import shared infrastructure implementations, and should not depend directly on generic core capability ports by default.
 
 Feature infra may depend on feature application and `core/application`. Feature infra must not depend on `core/infra`, and must not bypass feature application by implementing domain ports directly.

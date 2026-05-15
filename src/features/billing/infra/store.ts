@@ -1,13 +1,11 @@
 import { randomUUID } from "node:crypto";
 
+import type { SqlError } from "@effect/sql/SqlError";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { DatabaseService } from "~/core/application/database-service";
-import {
-  BillingDatabaseError,
-  BillingStore,
-  BillingUserNotFoundError,
-} from "~/features/billing/application/billing-service";
+import { BillingDatabaseError, BillingUserNotFoundError } from "~/features/billing/application/errors";
+import { BillingStore } from "~/features/billing/application/store";
 import { creditLedgerEntries, subscription, user } from "~/main/database/schema";
 
 export const BillingStoreLive = Layer.effect(
@@ -21,8 +19,8 @@ export const BillingStoreLive = Layer.effect(
           return Effect.succeed(false);
         }
 
-        return mapBillingDatabaseError(
-          database.sql.withTransaction(
+        return database.sql
+          .withTransaction(
             Effect.gen(function* () {
               const now = new Date();
 
@@ -93,71 +91,65 @@ export const BillingStoreLive = Layer.effect(
 
               return true;
             }),
-          ),
-          "Failed to apply credit grant.",
-        );
+          )
+          .pipe(catchSqlError("Failed to apply credit grant."));
       },
-      getActiveSubscription: (userId) =>
-        mapBillingDatabaseError(
-          Effect.map(
-            database
-              .select()
-              .from(subscription)
-              .where(and(eq(subscription.referenceId, userId), inArray(subscription.status, ["active", "trialing"])))
-              .orderBy(desc(subscription.periodEnd))
-              .limit(1),
-            ([activeSubscription]) => activeSubscription ?? null,
-          ),
-          "Failed to load active billing subscription.",
-        ),
-      getBillingOverviewRecords: (userId) =>
-        mapBillingDatabaseError(
-          Effect.gen(function* () {
-            const [account] = yield* database
-              .select({
-                creditBalance: user.creditBalance,
-                stripeCustomerId: user.stripeCustomerId,
-              })
-              .from(user)
-              .where(eq(user.id, userId))
-              .limit(1);
-            const [activeSubscription] = yield* database
-              .select()
-              .from(subscription)
-              .where(and(eq(subscription.referenceId, userId), inArray(subscription.status, ["active", "trialing"])))
-              .orderBy(desc(subscription.periodEnd))
-              .limit(1);
-            const [latestSubscription] = yield* database
-              .select()
-              .from(subscription)
-              .where(eq(subscription.referenceId, userId))
-              .orderBy(desc(subscription.periodEnd))
-              .limit(1);
 
-            return {
-              account: account ?? null,
-              activeSubscription: activeSubscription ?? null,
-              latestSubscription: latestSubscription ?? null,
-            };
-          }),
-          "Failed to load billing overview.",
-        ),
+      getActiveSubscription: (userId) =>
+        Effect.gen(function* () {
+          const [activeSubscription] = yield* database
+            .select()
+            .from(subscription)
+            .where(and(eq(subscription.referenceId, userId), inArray(subscription.status, ["active", "trialing"])))
+            .orderBy(desc(subscription.periodEnd))
+            .limit(1);
+
+          return activeSubscription ?? null;
+        }).pipe(catchSqlError("Failed to load active billing subscription.")),
+
+      getBillingOverviewRecords: (userId) =>
+        Effect.gen(function* () {
+          const [account] = yield* database
+            .select({
+              creditBalance: user.creditBalance,
+              stripeCustomerId: user.stripeCustomerId,
+            })
+            .from(user)
+            .where(eq(user.id, userId))
+            .limit(1);
+          const [activeSubscription] = yield* database
+            .select()
+            .from(subscription)
+            .where(and(eq(subscription.referenceId, userId), inArray(subscription.status, ["active", "trialing"])))
+            .orderBy(desc(subscription.periodEnd))
+            .limit(1);
+          const [latestSubscription] = yield* database
+            .select()
+            .from(subscription)
+            .where(eq(subscription.referenceId, userId))
+            .orderBy(desc(subscription.periodEnd))
+            .limit(1);
+
+          return {
+            account: account ?? null,
+            activeSubscription: activeSubscription ?? null,
+            latestSubscription: latestSubscription ?? null,
+          };
+        }).pipe(catchSqlError("Failed to load billing overview.")),
+
       getUserRecord: (userId) =>
         Effect.gen(function* () {
-          const [account] = yield* mapBillingDatabaseError(
-            database
-              .select({
-                creditBalance: user.creditBalance,
-                email: user.email,
-                id: user.id,
-                name: user.name,
-                stripeCustomerId: user.stripeCustomerId,
-              })
-              .from(user)
-              .where(eq(user.id, userId))
-              .limit(1),
-            "Failed to load billing user.",
-          );
+          const [account] = yield* database
+            .select({
+              creditBalance: user.creditBalance,
+              email: user.email,
+              id: user.id,
+              name: user.name,
+              stripeCustomerId: user.stripeCustomerId,
+            })
+            .from(user)
+            .where(eq(user.id, userId))
+            .limit(1);
 
           if (!account) {
             return yield* Effect.fail(
@@ -168,20 +160,18 @@ export const BillingStoreLive = Layer.effect(
           }
 
           return account;
-        }),
+        }).pipe(catchSqlError("Failed to load billing user.")),
+
       persistStripeCustomerId: (input) =>
         Effect.gen(function* () {
-          const [updatedUser] = yield* mapBillingDatabaseError(
-            database
-              .update(user)
-              .set({
-                stripeCustomerId: input.stripeCustomerId,
-                updatedAt: new Date(),
-              })
-              .where(eq(user.id, input.userId))
-              .returning({ id: user.id }),
-            "Failed to persist Stripe customer id.",
-          );
+          const [updatedUser] = yield* database
+            .update(user)
+            .set({
+              stripeCustomerId: input.stripeCustomerId,
+              updatedAt: new Date(),
+            })
+            .where(eq(user.id, input.userId))
+            .returning({ id: user.id });
 
           if (!updatedUser) {
             return yield* Effect.fail(
@@ -190,17 +180,21 @@ export const BillingStoreLive = Layer.effect(
               }),
             );
           }
-        }),
+        }).pipe(catchSqlError("Failed to persist Stripe customer id.")),
     });
   }),
 );
 
-function mapBillingDatabaseError<A, E>(effect: Effect.Effect<A, E>, failureMessage: string) {
-  return Effect.mapError(effect, (cause) =>
-    isBillingDomainError(cause) ? cause : new BillingDatabaseError({ message: failureMessage, cause }),
-  );
-}
-
-function isBillingDomainError(cause: unknown): cause is BillingUserNotFoundError {
-  return typeof cause === "object" && cause !== null && "_tag" in cause && cause._tag === "BillingUserNotFoundError";
-}
+const catchSqlError =
+  (message: string) =>
+  <A, E, R>(effect: Effect.Effect<A, E | SqlError, R>) =>
+    effect.pipe(
+      Effect.catchTag("SqlError", (error) =>
+        Effect.fail(
+          new BillingDatabaseError({
+            cause: error,
+            message,
+          }),
+        ),
+      ),
+    );
