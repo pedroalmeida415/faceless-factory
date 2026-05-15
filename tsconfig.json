@@ -5,6 +5,7 @@
     "skipLibCheck": true,
     "target": "es2022",
     "allowJs": true,
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "moduleDetection": "force",
     "isolatedModules": true,
@@ -39,7 +40,8 @@
     "**/*.js",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
-    ".storybook/**/*.ts"
+    ".storybook/**/*.ts",
+    ".storybook/**/*.tsx"
   ],
-  "exclude": ["node_modules", "generated", "vendor"]
+  "exclude": ["node_modules", "generated", "vendor", "public/mockServiceWorker.js", "storybook-static"]
 }

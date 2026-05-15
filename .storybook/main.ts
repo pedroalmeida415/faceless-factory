@@ -7,9 +7,23 @@ const config: StorybookConfig = {
     "@storybook/addon-vitest",
     "@storybook/addon-a11y",
     "@storybook/addon-docs",
-    "@storybook/addon-onboarding",
+    "msw-storybook-addon",
   ],
   framework: "@storybook/nextjs-vite",
   staticDirs: ["../public"],
+  viteFinal: async (config) => {
+    // Pre-optimize dependencies to avoid test flakiness
+    config.optimizeDeps = config.optimizeDeps || {};
+    config.optimizeDeps.include = [
+      ...(config.optimizeDeps.include || []),
+      "@trpc/client",
+      "@trpc/server/observable",
+      "superjson",
+      "@tanstack/react-query",
+      "storybook/test",
+    ];
+
+    return config;
+  },
 };
 export default config;

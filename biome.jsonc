@@ -24,7 +24,7 @@
     "lineWidth": 120
   },
   "files": {
-    "includes": ["**", "!!src/components/ui", "!!vendor"]
+    "includes": ["**", "!!src/components/ui", "!!vendor", "!!public/mockServiceWorker.js", "!!storybook-static"]
   },
   "linter": {
     "enabled": true,
