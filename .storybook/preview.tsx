@@ -22,6 +22,11 @@ const withAppShell: Decorator = (Story) => (
 
 const preview: Preview = {
   parameters: {
+    darkMode: {
+      // Set the initial theme
+      current: "dark",
+      stylePreview: true,
+    },
     controls: {
       matchers: {
         color: /(background|color)$/i,

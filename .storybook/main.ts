@@ -8,6 +8,7 @@ const config: StorybookConfig = {
     "@storybook/addon-a11y",
     "@storybook/addon-docs",
     "msw-storybook-addon",
+    "storybook-dark-mode",
   ],
   framework: "@storybook/nextjs-vite",
   staticDirs: ["../public"],
