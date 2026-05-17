@@ -1,5 +1,6 @@
 import type { Decorator, Preview } from "@storybook/nextjs-vite";
 import { initialize, mswLoader } from "msw-storybook-addon";
+import { Oxanium } from "next/font/google";
 import { sb } from "storybook/test";
 
 import "../src/styles/globals.css";
@@ -7,6 +8,8 @@ import "../src/styles/globals.css";
 sb.mock(import("../src/main/trpc/react.tsx"));
 
 import { TRPCReactProvider } from "~/main/trpc/react";
+
+const oxanium = Oxanium({ subsets: ["latin"], variable: "--font-sans" });
 
 /*
  * Initializes MSW
@@ -17,7 +20,9 @@ initialize();
 
 const MockTRPCDecorator: Decorator = (Story) => (
   <TRPCReactProvider>
-    <Story />
+    <main className={`font-sans ${oxanium.variable} dark`}>
+      <Story />
+    </main>
   </TRPCReactProvider>
 );
 
