@@ -2,36 +2,66 @@ import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 import { Badge } from "~/components/ui/badge";
 import { Card, CardHeader, CardPanel, CardTitle } from "~/components/ui/card";
 import type { WorkflowImageGenerationNode } from "~/features/workflow/domain/graph";
+import { WORKFLOW_MODEL_CATALOG } from "~/features/workflow/domain/model-catalog";
 import { useGenerationNodeEvaluation } from "../../_hooks/use-generation-node-evaluation";
 import { SocketRow } from "../socket-row";
 
 type ImageGenerationFlowNode = Node<WorkflowImageGenerationNode["data"], "imageGeneration">;
+type InputSocketRow = {
+  readonly id: string;
+  readonly label: string;
+  readonly muted: boolean;
+};
 
 export function ImageGenerationNode(props: NodeProps<ImageGenerationFlowNode>) {
   const evaluation = useGenerationNodeEvaluation(props.id);
+  const model = WORKFLOW_MODEL_CATALOG.find((candidate) => candidate.modelId === props.data.modelId);
 
-  const imageState = evaluation?.inputStates.find((inputState) => inputState.socketId === "image");
-  const imageSocketCount = Math.min((imageState?.connectedEdgeCount ?? 0) + 1, 3);
-  const imageSocketSlots = Array.from({ length: imageSocketCount }, (_, index) => ({
-    id: `image:${index}`,
-    label: `Image #${index + 1}`,
-    muted: !imageState?.edgeStates[index],
-  }));
+  const inputSocketRows: InputSocketRow[] = [];
+
+  if (model) {
+    for (const socket of model.inputSockets) {
+      const state = evaluation?.inputStates.find((inputState) => inputState.socketId === socket.id);
+
+      if (!socket.repeatable) {
+        inputSocketRows.push({
+          id: socket.id,
+          label: socket.label,
+          muted: false,
+        });
+        continue;
+      }
+
+      for (let index = 0; index < socket.capacity; index += 1) {
+        inputSocketRows.push({
+          id: `${socket.id}:${index}`,
+          label: `${socket.label} #${index + 1}`,
+          muted: !state?.edgeStates[index],
+        });
+      }
+    }
+  }
+
   const outputPlaceholders = Array.from(
     { length: Math.max(evaluation?.summary.totalOutputCount ?? 1, 1) },
     (_, index) => `output-placeholder-${index + 1}`,
   );
 
   return (
-    <Card>
+    <Card className="group">
       <Handle id="output" position={Position.Right} type="source" />
       <CardHeader>
         <CardTitle>Image Generation</CardTitle>
       </CardHeader>
       <CardPanel>
-        <SocketRow id="prompt" label="Prompt" required />
-        {imageSocketSlots.map((slot) => (
-          <SocketRow key={slot.id} id={slot.id} label={slot.label} muted={slot.muted} />
+        {inputSocketRows.map((socket, index) => (
+          <SocketRow
+            key={socket.id}
+            handleTop={60 + index * 24}
+            id={socket.id}
+            label={socket.label}
+            muted={socket.muted}
+          />
         ))}
         <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
           <div className="flex flex-wrap gap-2">
