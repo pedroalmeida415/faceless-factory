@@ -1,6 +1,6 @@
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
+import { NodeCard, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
 import { Badge } from "~/components/ui/badge";
-import { Card, CardHeader, CardPanel, CardTitle } from "~/components/ui/card";
 import type { WorkflowImageGenerationNode } from "~/features/workflow/domain/graph";
 import { WORKFLOW_MODEL_CATALOG } from "~/features/workflow/domain/model-catalog";
 import { useGenerationNodeEvaluation } from "../../_hooks/use-generation-node-evaluation";
@@ -48,21 +48,21 @@ export function ImageGenerationNode(props: NodeProps<ImageGenerationFlowNode>) {
   );
 
   return (
-    <Card className="group">
+    <NodeCard className="group">
       <Handle id="output" position={Position.Right} type="source" />
-      <CardHeader>
-        <CardTitle>Image Generation</CardTitle>
-      </CardHeader>
-      <CardPanel>
-        {inputSocketRows.map((socket, index) => (
-          <SocketRow
-            key={socket.id}
-            handleTop={60 + index * 24}
-            id={socket.id}
-            label={socket.label}
-            muted={socket.muted}
-          />
-        ))}
+      {inputSocketRows.map((socket, index) => (
+        <SocketRow
+          key={socket.id}
+          handleTop={60 + index * 24}
+          id={socket.id}
+          label={socket.label}
+          muted={socket.muted}
+        />
+      ))}
+      <NodeCardHeader>
+        <NodeCardTitle>Image Generation</NodeCardTitle>
+      </NodeCardHeader>
+      <NodeCardPanel>
         <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
           <div className="flex flex-wrap gap-2">
             <Badge variant={evaluation?.summary.status === "blocked" ? "error" : "success"}>
@@ -82,7 +82,7 @@ export function ImageGenerationNode(props: NodeProps<ImageGenerationFlowNode>) {
             </div>
           )}
         </div>
-      </CardPanel>
-    </Card>
+      </NodeCardPanel>
+    </NodeCard>
   );
 }

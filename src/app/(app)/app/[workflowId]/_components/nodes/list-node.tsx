@@ -3,8 +3,8 @@
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 import { PlusIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { NodeCard, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
 import { Button } from "~/components/ui/button";
-import { Card, CardHeader, CardPanel, CardTitle } from "~/components/ui/card";
 import { Input } from "~/components/ui/input";
 import type { WorkflowListNode, WorkflowNode } from "~/features/workflow/domain/graph";
 import { useWorkflowStore } from "../../_hooks/use-workflow-store";
@@ -15,12 +15,12 @@ export function ListNode(props: NodeProps<ListFlowNode>) {
   const updateNode = useWorkflowStore((store) => store.updateNode);
 
   return (
-    <Card>
+    <NodeCard>
       <Handle position={Position.Right} type="source" />
-      <CardHeader>
-        <CardTitle>List</CardTitle>
-      </CardHeader>
-      <CardPanel className="nodrag">
+      <NodeCardHeader>
+        <NodeCardTitle>List</NodeCardTitle>
+      </NodeCardHeader>
+      <NodeCardPanel className="nodrag">
         {props.data.items.map((item, index) => (
           <ListItemRow key={item.id} index={index} item={item} nodeId={props.id} updateNode={updateNode} />
         ))}
@@ -48,8 +48,8 @@ export function ListNode(props: NodeProps<ListFlowNode>) {
         >
           <PlusIcon /> Add row
         </Button>
-      </CardPanel>
-    </Card>
+      </NodeCardPanel>
+    </NodeCard>
   );
 }
 

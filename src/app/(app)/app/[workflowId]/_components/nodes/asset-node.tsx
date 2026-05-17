@@ -2,8 +2,8 @@
 
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 import { PlusIcon } from "lucide-react";
+import { NodeCard, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
 import { Button } from "~/components/ui/button";
-import { Card, CardHeader, CardPanel, CardTitle } from "~/components/ui/card";
 import type { WorkflowAssetNode, WorkflowNode } from "~/features/workflow/domain/graph";
 import { useWorkflowStore } from "../../_hooks/use-workflow-store";
 
@@ -13,12 +13,12 @@ export function AssetNode(props: NodeProps<AssetFlowNode>) {
   const updateNode = useWorkflowStore((store) => store.updateNode);
 
   return (
-    <Card>
+    <NodeCard>
       <Handle position={Position.Right} type="source" />
-      <CardHeader>
-        <CardTitle>Asset</CardTitle>
-      </CardHeader>
-      <CardPanel className="nodrag">
+      <NodeCardHeader>
+        <NodeCardTitle>Asset</NodeCardTitle>
+      </NodeCardHeader>
+      <NodeCardPanel className="nodrag">
         {props.data.assets.length === 0 ? <p className="text-white/45 text-xs">No assets yet.</p> : null}
         {props.data.assets.map((asset, index) => (
           <div key={asset.assetId} className="rounded-lg border border-white/10 bg-white/4 px-2 py-1.5 text-xs">
@@ -49,7 +49,7 @@ export function AssetNode(props: NodeProps<AssetFlowNode>) {
         >
           <PlusIcon /> Add mock asset
         </Button>
-      </CardPanel>
-    </Card>
+      </NodeCardPanel>
+    </NodeCard>
   );
 }
