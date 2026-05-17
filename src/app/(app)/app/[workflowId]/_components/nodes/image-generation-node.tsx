@@ -1,6 +1,7 @@
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
-import { NodeCard, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
+import { NodeCard, NodeCardFooter, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
 import { Badge } from "~/components/ui/badge";
+import { Button } from "~/components/ui/button";
 import type { WorkflowImageGenerationNode } from "~/features/workflow/domain/graph";
 import { WORKFLOW_MODEL_CATALOG } from "~/features/workflow/domain/model-catalog";
 import { useGenerationNodeEvaluation } from "../../_hooks/use-generation-node-evaluation";
@@ -63,7 +64,7 @@ export function ImageGenerationNode(props: NodeProps<ImageGenerationFlowNode>) {
         <NodeCardTitle>Image Generation</NodeCardTitle>
       </NodeCardHeader>
       <NodeCardPanel>
-        <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
+        <div className="h-96 rounded-xl border border-white/10 bg-black/20 p-3">
           <div className="flex flex-wrap gap-2">
             <Badge variant={evaluation?.summary.status === "blocked" ? "error" : "success"}>
               {evaluation?.summary.status ?? "pending"}
@@ -83,6 +84,11 @@ export function ImageGenerationNode(props: NodeProps<ImageGenerationFlowNode>) {
           )}
         </div>
       </NodeCardPanel>
+      <NodeCardFooter>
+        <Button size="xl" className="w-full">
+          Run
+        </Button>
+      </NodeCardFooter>
     </NodeCard>
   );
 }

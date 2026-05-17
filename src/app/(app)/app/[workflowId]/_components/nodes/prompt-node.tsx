@@ -23,12 +23,13 @@ export function PromptNode(props: NodeProps<PromptFlowNode>) {
       <NodeCardPanel>
         <Textarea
           aria-label="Prompt text"
-          className="nodrag"
+          className="nodrag max-h-146 min-h-96 [&_textarea]:resize-none"
           onBlur={() =>
             updateNode(props.id, (candidate: WorkflowNode) =>
               candidate.type === "prompt" ? { ...candidate, data: { text: draft } } : candidate,
             )
           }
+          size="lg"
           onChange={(event) => setDraft(event.currentTarget.value)}
           value={draft}
         />
