@@ -1,15 +1,19 @@
 import { Effect } from "effect";
 import { WorkflowValidationError } from "~/features/workflow/application/errors";
 import { WorkflowStore } from "~/features/workflow/application/store";
-import { type WorkflowGraphBlueprint, WorkflowGraphBlueprintSchema } from "~/features/workflow/domain/graph-blueprint";
+import {
+  createWorkflowGraph,
+  type WorkflowGraphDraft,
+  WorkflowGraphDraftSchema,
+} from "~/features/workflow/domain/graph";
 
 export const saveWorkflow = (input: {
-  readonly graph: WorkflowGraphBlueprint;
+  readonly graph: WorkflowGraphDraft;
   readonly userId: string;
   readonly workflowId: string;
 }) =>
   Effect.gen(function* () {
-    const parsed = WorkflowGraphBlueprintSchema.safeParse(input.graph);
+    const parsed = WorkflowGraphDraftSchema.safeParse(input.graph);
 
     if (!parsed.success) {
       return yield* Effect.fail(
@@ -21,9 +25,10 @@ export const saveWorkflow = (input: {
     }
 
     const store = yield* WorkflowStore;
+    const graph = createWorkflowGraph(parsed.data);
 
     return yield* store.saveWorkflow({
-      graph: parsed.data,
+      graph,
       userId: input.userId,
       workflowId: input.workflowId,
     });

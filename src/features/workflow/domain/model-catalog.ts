@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { WorkflowConfigSchema } from "~/features/workflow/domain/graph-blueprint";
+import { WorkflowConfigSchema } from "~/features/workflow/domain/graph";
 
 export const WorkflowDataTypeSchema = z.enum(["text", "image", "video"]);
 export const WorkflowGenerationKindSchema = z.enum(["image", "video"]);

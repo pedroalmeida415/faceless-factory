@@ -1,6 +1,6 @@
 import { relations } from "drizzle-orm";
 import { bigint, boolean, index, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
-import type { WorkflowGraphBlueprint } from "~/features/workflow/domain/graph-blueprint";
+import type { WorkflowGraph } from "~/features/workflow/domain/graph";
 
 type CreditLedgerEntryKind = "debit" | "refund" | "grant" | "purchase";
 
@@ -72,7 +72,7 @@ export const verification = pgTable("verification", {
 export const creditLedgerEntries = pgTable(
   "credit_ledger_entries",
   {
-    id: uuid("id").primaryKey(),
+    id: uuid("id").primaryKey().defaultRandom(),
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
@@ -120,12 +120,12 @@ export const subscription = pgTable(
 export const workflows = pgTable(
   "workflows",
   {
-    id: uuid("id").primaryKey(),
+    id: uuid("id").primaryKey().defaultRandom(),
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    graph: jsonb("graph").$type<WorkflowGraphBlueprint>().notNull(),
+    graph: jsonb("graph").$type<WorkflowGraph>().notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()

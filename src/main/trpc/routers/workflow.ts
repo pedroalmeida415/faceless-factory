@@ -8,7 +8,7 @@ import { getWorkflow } from "~/features/workflow/application/use-cases/get-workf
 import { listWorkflows } from "~/features/workflow/application/use-cases/list-workflows";
 import { renameWorkflow } from "~/features/workflow/application/use-cases/rename-workflow";
 import { saveWorkflow } from "~/features/workflow/application/use-cases/save-workflow";
-import { WorkflowGraphBlueprintSchema } from "~/features/workflow/domain/graph-blueprint";
+import { WorkflowGraphDraftSchema } from "~/features/workflow/domain/graph";
 import { ServerRuntimeLive } from "~/main/effect";
 import { createTRPCRouter, protectedProcedure } from "~/main/trpc/root";
 
@@ -16,7 +16,7 @@ export const workflowRouter = createTRPCRouter({
   saveWorkflow: protectedProcedure
     .input(
       z.object({
-        graph: WorkflowGraphBlueprintSchema,
+        graph: WorkflowGraphDraftSchema,
         workflowId: z.string().min(1),
       }),
     )

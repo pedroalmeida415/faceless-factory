@@ -68,7 +68,7 @@ _Avoid_: Auto-selected output, generated output array
 The deterministic upfront credit cost for a **Generation Node** run.
 _Avoid_: Estimated cost, actual cost after execution
 
-**Graph Blueprint**:
+**Workflow Graph**:
 The persisted workflow definition containing nodes, edges, node positions, input values, and node config.
 _Avoid_: Execution state, runtime state
 
@@ -93,7 +93,7 @@ The rule that derives **Branch Count** by zipping equal-length arrays, broadcast
 _Avoid_: Parallelism logic, zip logic
 
 **Material Graph Change**:
-A change to authored workflow definition that should save the workflow's current **Graph Blueprint**.
+A change to authored workflow definition that should save the workflow's current **Workflow Graph**.
 _Avoid_: View state change, runtime update
 
 **Model**:
@@ -101,7 +101,7 @@ The user-visible generation capability selected on a **Generation Node**.
 _Avoid_: Provider, backend provider
 
 **Model ID**:
-The stable persisted identifier for a **Model** in the **Graph Blueprint**.
+The stable persisted identifier for a **Model** in the **Workflow Graph**.
 _Avoid_: Display name, provider name
 
 **Model Catalog**:
@@ -170,7 +170,7 @@ The frontend-readable execution state hydrated for a workflow graph, including r
 _Avoid_: Graph blueprint, local runtime
 
 **Workflow Graph Projection**:
-The frontend-readable graph definition hydrated from a workflow's **Graph Blueprint**.
+The frontend-readable graph definition hydrated from a workflow's **Workflow Graph**.
 _Avoid_: Execution projection, runtime state
 
 ## Relationships
@@ -195,7 +195,7 @@ _Avoid_: Execution projection, runtime state
 - Changing **Selected Batch Item** is a **Material Graph Change** because it changes downstream graph values.
 - A **Generated Output** preserves upstream **Branch** order and behaves like an ordered asset array after **Selected Batch Items** are chosen.
 - A **Workflow** belongs to exactly one user through `userId`.
-- A **Workflow** stores one current **Graph Blueprint** as `graph`; persisted workflow history is intentionally not modeled.
+- A **Workflow** stores one current **Workflow Graph** as `graph`; persisted workflow history is intentionally not modeled.
 - Undo and redo history for graph editing is client-local and ephemeral unless persistent history becomes a product feature.
 - **Branch Readiness** flows independently through the workflow: when an upstream **Branch** receives a **Selected Batch Item**, matching downstream **Branches** can become ready without waiting for other upstream **Branches**.
 - The config drawer behaves as a **Generation Node** inspector and switches content when another **Generation Node** is focused.
@@ -215,16 +215,16 @@ _Avoid_: Execution projection, runtime state
 - Discrete **Node Config** controls such as selects and segmented controls commit immediately and trigger autosave debounce.
 - Changing a **Generation Node** model resets that model's config to its defaults.
 - **Model** is user-facing; provider identity is internal wiring and is not shown in workflow UI.
-- The **Graph Blueprint** stores **Model ID** values, while the UI renders **Model** display names.
+- The **Workflow Graph** stores **Model ID** values, while the UI renders **Model** display names.
 - The MVP uses a schema-driven in-memory **Model Catalog** fixture to render **Generation Node** sockets and config.
 - **Generation Cost** is known before execution from **Branch Count**, **Branch Batch Size**, and **Model** pricing, and is presented as a deterministic cost.
 - Failed **Batch Items** refund their debited **Generation Cost**; retrying follows the normal debit flow for a new generation attempt.
 - The MVP workflow builder shows **Generation Cost** only and does not show credit balance or insufficient-funds checks in the graph UI.
 - **Generation Nodes** show **Branch Count**, user-facing batch size, total output count, and **Generation Cost**.
 - If a model change lowers **Input Capacity**, excess **Edges** on affected **Repeatable Sockets** are disconnected automatically without a warning.
-- Ephemeral view changes such as focus, hover, drawer visibility, carousel page, fullscreen output view, and **Output Display Mode** do not save the **Graph Blueprint**.
+- Ephemeral view changes such as focus, hover, drawer visibility, carousel page, fullscreen output view, and **Output Display Mode** do not save the **Workflow Graph**.
 - **Output Display Mode** can be Single, where carousel pages step through **Branches** and show each Branch's batch, or All, showing every output in one masonry grid.
-- **Output Display Mode** is ephemeral client state and is not part of the **Graph Blueprint**.
+- **Output Display Mode** is ephemeral client state and is not part of the **Workflow Graph**.
 - A **Generation Node** output view can expand to a full-screen dialog for detailed viewing.
 - An **Input Node** can affect **Branch Count** by providing single or array-shaped values, but it does not run, spend credits, or produce generated media.
 - **Input Nodes** are edited inline on the canvas and do not open the config drawer.

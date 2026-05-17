@@ -1,11 +1,12 @@
 import type { Decorator, Preview } from "@storybook/nextjs-vite";
 import { initialize, mswLoader } from "msw-storybook-addon";
 import { sb } from "storybook/test";
-import { TRPCReactProvider } from "~/main/trpc/react";
 
 import "../src/styles/globals.css";
 
 sb.mock(import("../src/main/trpc/react.tsx"));
+
+import { TRPCReactProvider } from "~/main/trpc/react";
 
 /*
  * Initializes MSW
@@ -14,7 +15,7 @@ sb.mock(import("../src/main/trpc/react.tsx"));
  */
 initialize();
 
-const withAppShell: Decorator = (Story) => (
+const MockTRPCDecorator: Decorator = (Story) => (
   <TRPCReactProvider>
     <Story />
   </TRPCReactProvider>
@@ -41,7 +42,7 @@ const preview: Preview = {
       test: "todo",
     },
   },
-  decorators: [withAppShell],
+  decorators: [MockTRPCDecorator],
   loaders: [mswLoader],
 };
 

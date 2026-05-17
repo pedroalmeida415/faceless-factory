@@ -65,9 +65,9 @@ export default function AppPage() {
     createWorkflowMutation.mutate(
       { name: "Untitled workflow" },
       {
-        onSuccess: (projection) => {
+        onSuccess: (workflow) => {
           void utils.workflow.listWorkflows.invalidate();
-          router.push(`/app/${projection.workflowId}`);
+          router.push(`/app/${workflow.id}`);
         },
       },
     );

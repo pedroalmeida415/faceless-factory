@@ -2,13 +2,13 @@
 
 This document captures contracts shared by backend runtime, transport, and frontend projection work. These contracts should be implemented before independently building the server runtime and graph UI.
 
-## First Vertical Contract: Graph Blueprint And Input Alignment
+## First Vertical Contract: Workflow Graph And Input Alignment
 
-The first shared contract is the persisted Graph Blueprint schema plus a deterministic Input Alignment evaluator.
+The first shared contract is the persisted Workflow Graph schema plus a deterministic Input Alignment evaluator.
 
-The Graph Blueprint contract defines authored workflow state: nodes, edges, node positions, input values, generation node model IDs, model config, selected batch items for generated outputs, and graph revision metadata.
+The Workflow Graph contract defines authored workflow state: nodes, edges, node positions, input values, generation node model IDs, model config, selected batch items for generated outputs, and graph revision metadata.
 
-The Input Alignment evaluator consumes a Graph Blueprint, Model Catalog, and execution/result references when needed, then returns the frontend/runtime-safe facts for each Generation Node: required input validation, optional input participation, repeatable socket capacity use, Branch Count, Branch-level resolved values, total output count, deterministic Generation Cost inputs, stale fingerprint material, and blocking errors.
+The Input Alignment evaluator consumes a Workflow Graph, Model Catalog, and execution/result references when needed, then returns the frontend/runtime-safe facts for each Generation Node: required input validation, optional input participation, repeatable socket capacity use, Branch Count, Branch-level resolved values, total output count, deterministic Generation Cost inputs, stale fingerprint material, and blocking errors.
 
 The evaluator must be deterministic, side-effect free, and independent of provider/runtime execution. It should live as a shared pure TypeScript domain module used by both server and client, while the server remains authoritative for persisted Graph Revisions, runtime Task creation, and execution projections. Backend runtime uses it to create branch-level Tasks and dependencies; frontend uses it for responsive previews and to render projected validation, branch counts, costs, stale badges, and socket state.
 
@@ -23,13 +23,13 @@ Branch input references should be discriminated by `kind` so consumers can safel
 
 Contract indexes are zero-based, including `branchIndex`; UI labels are one-based, such as `Branch 1 of 3`.
 
-Graph Blueprint node IDs and edge IDs are client-generated stable opaque IDs. The server validates and persists them but does not assign new IDs on save.
+Workflow Graph node IDs and edge IDs are client-generated stable opaque IDs. The server validates and persists them but does not assign new IDs on save.
 
-The Graph Blueprint stores React Flow-compatible node and edge fields directly instead of mapping them into a separate domain graph shape. Runtime code should still consume validated business fields from the blueprint rather than depending on React Flow rendering behavior.
+The Workflow Graph stores React Flow-compatible node and edge fields directly instead of mapping them into a separate domain graph shape. Runtime code should still consume validated business fields from the graph rather than depending on React Flow rendering behavior.
 
-Graph Blueprint includes an explicit numeric `schemaVersion` for validation and future migrations. The initial schema version is `1`.
+Workflow Graph includes an explicit numeric `schemaVersion` for validation and future migrations. The initial schema version is `1`.
 
-The executable contract lives in `src/features/workflow/domain/workflow.ts` with focused coverage in `src/features/workflow/domain/workflow.test.ts`.
+The executable contract lives in `src/features/workflow/domain/graph.ts` and `src/features/workflow/domain/graph-evaluation.ts` with focused coverage in `src/features/workflow/domain/workflow.test.ts`.
 
 ## Out Of Scope For This Contract
 

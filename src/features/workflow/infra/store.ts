@@ -1,13 +1,10 @@
-import { randomUUID } from "node:crypto";
-
 import type { SqlError } from "@effect/sql/SqlError";
 import { and, desc, eq } from "drizzle-orm";
 import { Effect, Layer } from "effect";
 import { DatabaseService } from "~/core/application/database-service";
 import { WorkflowDatabaseError, WorkflowNotFoundError } from "~/features/workflow/application/errors";
-import { toWorkflowGraphProjection } from "~/features/workflow/application/models";
 import { WorkflowStore } from "~/features/workflow/application/store";
-import { EMPTY_WORKFLOW_GRAPH_BLUEPRINT } from "~/features/workflow/domain/graph-blueprint";
+import { EMPTY_WORKFLOW_GRAPH } from "~/features/workflow/domain/graph";
 import { workflows } from "~/main/database/schema";
 
 export const WorkflowStoreLive = Layer.effect(
@@ -15,84 +12,88 @@ export const WorkflowStoreLive = Layer.effect(
   Effect.gen(function* () {
     const database = yield* DatabaseService;
 
-    const loadWorkflow = (input: { readonly userId: string; readonly workflowId: string }) =>
-      Effect.gen(function* () {
-        const [workflow] = yield* database
-          .select({
-            graph: workflows.graph,
-            id: workflows.id,
-            name: workflows.name,
-          })
-          .from(workflows)
-          .where(and(eq(workflows.id, input.workflowId), eq(workflows.userId, input.userId)))
-          .limit(1);
-
-        if (!workflow) {
-          return yield* Effect.fail(
-            new WorkflowNotFoundError({
-              message: `Workflow ${input.workflowId} was not found.`,
-            }),
-          );
-        }
-
-        return workflow;
-      });
-
     return WorkflowStore.of({
       saveWorkflow: (input) =>
         Effect.gen(function* () {
-          const workflow = yield* loadWorkflow(input);
-          const now = new Date();
-
-          yield* database
+          const [workflow] = yield* database
             .update(workflows)
-            .set({ graph: input.graph, updatedAt: now })
-            .where(and(eq(workflows.id, input.workflowId), eq(workflows.userId, input.userId)));
+            .set({ graph: input.graph })
+            .where(and(eq(workflows.id, input.workflowId), eq(workflows.userId, input.userId)))
+            .returning({ id: workflows.id });
 
-          return toWorkflowGraphProjection({
-            graph: input.graph,
-            name: workflow.name,
-            workflowId: input.workflowId,
-          });
+          if (!workflow) {
+            return yield* Effect.fail(
+              new WorkflowNotFoundError({
+                message: `Workflow ${input.workflowId} was not found.`,
+              }),
+            );
+          }
         }).pipe(catchSqlError("Failed to save workflow graph.")),
+
       createWorkflow: (input) =>
         Effect.gen(function* () {
-          const workflowId = randomUUID();
-          const now = new Date();
+          const [workflow] = yield* database
+            .insert(workflows)
+            .values({
+              graph: EMPTY_WORKFLOW_GRAPH,
+              name: input.name,
+              userId: input.userId,
+            })
+            .returning();
 
-          yield* database.insert(workflows).values({
-            createdAt: now,
-            graph: EMPTY_WORKFLOW_GRAPH_BLUEPRINT,
-            id: workflowId,
-            name: input.name,
-            updatedAt: now,
-            userId: input.userId,
-          });
+          if (!workflow) {
+            return yield* Effect.fail(
+              new WorkflowDatabaseError({
+                message: `Database did not return newly created workflow.`,
+              }),
+            );
+          }
 
-          return toWorkflowGraphProjection({
-            graph: EMPTY_WORKFLOW_GRAPH_BLUEPRINT,
+          return {
+            id: workflow.id,
             name: input.name,
-            workflowId,
-          });
+          };
         }).pipe(catchSqlError("Failed to create workflows.")),
+
       deleteWorkflow: (input) =>
         Effect.gen(function* () {
-          yield* loadWorkflow(input);
-
-          yield* database
+          const [workflow] = yield* database
             .delete(workflows)
-            .where(and(eq(workflows.id, input.workflowId), eq(workflows.userId, input.userId)));
+            .where(and(eq(workflows.id, input.workflowId), eq(workflows.userId, input.userId)))
+            .returning({ id: workflows.id });
+
+          if (!workflow) {
+            return yield* Effect.fail(
+              new WorkflowNotFoundError({
+                message: `Workflow ${input.workflowId} was not found.`,
+              }),
+            );
+          }
         }).pipe(catchSqlError("Failed to delete workflow.")),
+
       getWorkflow: (input) =>
         Effect.gen(function* () {
-          const workflow = yield* loadWorkflow(input);
+          const [workflow] = yield* database
+            .select({
+              graph: workflows.graph,
+              id: workflows.id,
+              name: workflows.name,
+            })
+            .from(workflows)
+            .where(and(eq(workflows.id, input.workflowId), eq(workflows.userId, input.userId)))
+            .limit(1);
 
-          return toWorkflowGraphProjection({
-            graph: workflow.graph,
-            name: workflow.name,
-            workflowId: workflow.id,
-          });
+          if (!workflow) {
+            return yield* Effect.fail(
+              new WorkflowNotFoundError({
+                message: `Workflow ${input.workflowId} was not found.`,
+              }),
+            );
+          }
+
+          return workflow;
         }).pipe(catchSqlError("Failed to load workflows.")),
+
       listWorkflows: (userId) =>
         Effect.map(
           database
@@ -106,21 +107,22 @@ export const WorkflowStoreLive = Layer.effect(
             .orderBy(desc(workflows.updatedAt)),
           (records) => records,
         ).pipe(catchSqlError("Failed to list workflows.")),
+
       renameWorkflow: (input) =>
         Effect.gen(function* () {
-          yield* loadWorkflow(input);
-          const now = new Date();
-
-          yield* database
+          const [workflow] = yield* database
             .update(workflows)
-            .set({ name: input.name, updatedAt: now })
-            .where(and(eq(workflows.id, input.workflowId), eq(workflows.userId, input.userId)));
+            .set({ name: input.name })
+            .where(and(eq(workflows.id, input.workflowId), eq(workflows.userId, input.userId)))
+            .returning({ id: workflows.id });
 
-          return {
-            name: input.name,
-            updatedAt: now,
-            workflowId: input.workflowId,
-          };
+          if (!workflow) {
+            return yield* Effect.fail(
+              new WorkflowNotFoundError({
+                message: `Workflow ${input.workflowId} was not found.`,
+              }),
+            );
+          }
         }).pipe(catchSqlError("Failed to rename workflow.")),
     });
   }),

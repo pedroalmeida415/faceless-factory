@@ -96,7 +96,7 @@ Feature `domain` contains business rules, domain errors, value objects, domain s
 
 Feature application modules use stable top-level contracts such as `errors.ts`, `models.ts`, and capability ports like `store.ts`, plus procedure-aligned use cases under `application/use-cases/<procedure-name>.ts`. Do not create use-case service tags or `*Live` layers for stable use cases; export the Effect program directly. Name feature application ports by capability, not `ports.ts`, and mirror that capability in infra adapter filenames such as `infra/store.ts`; reserve `Live` for concrete Layer values.
 
-Feature domain modules should be split by domain concept or invariant owner, for example `graph-blueprint.ts`, `graph-evaluation.ts`, and `model-catalog.ts`. Avoid permanent catch-all files such as `domain/<feature>.ts`, `types.ts`, `utils.ts`, or `schemas.ts`. Keep deterministic in-memory domain rules as pure TypeScript functions; call them from Effect use cases/adapters when I/O or orchestration is needed.
+Feature domain modules should be split by domain concept or invariant owner, for example `graph.ts`, `graph-evaluation.ts`, and `model-catalog.ts`. Avoid permanent catch-all files such as `domain/<feature>.ts`, `types.ts`, `utils.ts`, or `schemas.ts`. Keep deterministic in-memory domain rules as pure TypeScript functions; call them from Effect use cases/adapters when I/O or orchestration is needed.
 
 Feature infra adapters translate infrastructure failures at the adapter method boundary into feature-level application errors. Prefer catching specific tagged infrastructure errors, such as `Effect.catchTag("SqlError", ...)`, over broad `mapError` helpers that catch every error and then special-case feature errors. Intentional feature errors emitted by adapter logic should pass through unchanged.
 
@@ -176,6 +176,14 @@ BullMQ workers and generative provider calls must be idempotent. Use request IDs
 All generative calls must support timeout/cancellation via `AbortSignal` or equivalent Effect interruption.
 
 ## 10. Commands
+
+For formatting or safe lint fixes reported by `check`, run the repository fixer instead of manually editing formatting-only diffs:
+
+```bash
+rtk bun run check:write
+```
+
+Afterward, rerun `rtk bun run check` to verify the formatter/linter is clean.
 
 Inspect local Postgres:
 

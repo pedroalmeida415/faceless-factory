@@ -1,4 +1,5 @@
-import type { WorkflowEdge, WorkflowGraphBlueprint, WorkflowNode } from "~/features/workflow/domain/graph-blueprint";
+import type { WorkflowEdge, WorkflowGraphDraft, WorkflowNode } from "~/features/workflow/domain/graph";
+import { parseWorkflowTargetHandle } from "~/features/workflow/domain/graph-editing";
 import {
   WORKFLOW_MODEL_CATALOG,
   type WorkflowDataType,
@@ -111,11 +112,6 @@ type WorkflowSourceValue =
       readonly refs: readonly WorkflowBranchInputReference[];
     };
 
-type ParsedTargetHandle = {
-  readonly slotIndex: number | null;
-  readonly socketId: string;
-};
-
 type UsableInput = {
   readonly edge: WorkflowEdge;
   readonly refs: readonly WorkflowBranchInputReference[];
@@ -123,7 +119,7 @@ type UsableInput = {
 };
 
 export function evaluateWorkflowGraph(
-  blueprint: WorkflowGraphBlueprint,
+  blueprint: WorkflowGraphDraft,
   modelCatalog: readonly WorkflowModelDefinition[] = WORKFLOW_MODEL_CATALOG,
 ) {
   return blueprint.nodes
@@ -132,7 +128,7 @@ export function evaluateWorkflowGraph(
 }
 
 export function evaluateGenerationNode(input: {
-  readonly blueprint: WorkflowGraphBlueprint;
+  readonly blueprint: WorkflowGraphDraft;
   readonly modelCatalog?: readonly WorkflowModelDefinition[];
   readonly nodeId: string;
 }): WorkflowGenerationNodeEvaluation {
@@ -156,7 +152,9 @@ export function evaluateGenerationNode(input: {
   const errors: WorkflowAlignmentError[] = [];
   const usableInputs: UsableInput[] = [];
   const inputStates = model.inputSockets.map((socket) => {
-    const socketEdges = incomingEdges.filter((edge) => parseTargetHandle(edge.targetHandle).socketId === socket.id);
+    const socketEdges = incomingEdges.filter(
+      (edge) => parseWorkflowTargetHandle(edge.targetHandle).socketId === socket.id,
+    );
     const edgeStates: WorkflowInputEdgeState[] = [];
 
     if (socketEdges.length > socket.capacity) {
@@ -311,26 +309,6 @@ function blockedEvaluation(
       totalOutputCount: 0,
     },
   };
-}
-
-function parseTargetHandle(targetHandle: string | undefined): ParsedTargetHandle {
-  if (!targetHandle) {
-    return { slotIndex: null, socketId: "" };
-  }
-
-  const [socketId, slotIndexText] = targetHandle.split(":");
-
-  if (!socketId) {
-    return { slotIndex: null, socketId: "" };
-  }
-
-  if (slotIndexText === undefined) {
-    return { slotIndex: null, socketId };
-  }
-
-  const slotIndex = Number(slotIndexText);
-
-  return Number.isInteger(slotIndex) && slotIndex >= 0 ? { slotIndex, socketId } : { slotIndex: null, socketId };
 }
 
 function getSourceValue(node: WorkflowNode): WorkflowSourceValue {

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { WorkflowEdge, WorkflowGraphBlueprint, WorkflowNode } from "~/features/workflow/domain/graph-blueprint";
+import {
+  createWorkflowGraph,
+  type WorkflowEdge,
+  type WorkflowGraph,
+  type WorkflowNode,
+} from "~/features/workflow/domain/graph";
+import { createWorkflowNode, isWorkflowConnectionAllowed } from "~/features/workflow/domain/graph-editing";
 import { evaluateGenerationNode } from "~/features/workflow/domain/graph-evaluation";
 
 describe("workflow input alignment", () => {
@@ -206,10 +212,69 @@ describe("workflow input alignment", () => {
   });
 });
 
+describe("workflow graph editing", () => {
+  test("creates default node data in the workflow domain", () => {
+    const listNode = createWorkflowNode({ id: "list-1", position: { x: 10, y: 20 }, type: "list" });
+
+    expect(listNode).toMatchObject({
+      data: { items: [{ text: "" }] },
+      id: "list-1",
+      position: { x: 10, y: 20 },
+      type: "list",
+    });
+    expect(listNode.type === "list" ? listNode.data.items[0]?.id : "").toMatch(/^item-/);
+
+    expect(createWorkflowNode({ id: "gen-1", position: { x: 0, y: 0 }, type: "imageGeneration" }).data).toEqual({
+      branchBatchSize: 1,
+      config: { resolution: "1080p" },
+      modelId: "nano-banana-pro",
+      selectedBatchItems: [],
+    });
+  });
+
+  test("allows only connections matching target socket data type and capacity", () => {
+    const nodes = [promptNode("prompt-1", "prompt"), assetNode("asset-1", ["asset-1"]), imageGenerationNode("gen-1")];
+    const imageEdges = [edge("asset-a", "gen-1", "image:0"), edge("asset-b", "gen-1", "image:1")];
+
+    expect(
+      isWorkflowConnectionAllowed({
+        connection: { source: "prompt-1", target: "gen-1", targetHandle: "prompt" },
+        edges: [],
+        nodes,
+      }),
+    ).toBe(true);
+    expect(
+      isWorkflowConnectionAllowed({
+        connection: { source: "prompt-1", target: "gen-1", targetHandle: "image:0" },
+        edges: [],
+        nodes,
+      }),
+    ).toBe(false);
+    expect(
+      isWorkflowConnectionAllowed({
+        connection: { source: "asset-1", target: "gen-1", targetHandle: "image:2" },
+        edges: imageEdges,
+        nodes,
+      }),
+    ).toBe(true);
+    expect(
+      isWorkflowConnectionAllowed({
+        connection: { source: "asset-1", target: "gen-1", targetHandle: "image:3" },
+        edges: [...imageEdges, edge("asset-c", "gen-1", "image:2")],
+        nodes,
+      }),
+    ).toBe(false);
+  });
+
+  test("stamps graph schema version when building a persisted graph", () => {
+    expect(createWorkflowGraph({ edges: [], nodes: [] })).toEqual({ edges: [], nodes: [], schemaVersion: 1 });
+  });
+});
+
 function graph(input: {
   readonly edges?: readonly WorkflowEdge[];
   readonly nodes: readonly WorkflowNode[];
-}): WorkflowGraphBlueprint {
+}): WorkflowGraph {
   return {
     edges: [...(input.edges ?? [])],
     nodes: [...input.nodes],

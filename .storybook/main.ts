@@ -18,10 +18,11 @@ const config: StorybookConfig = {
     config.optimizeDeps.include = [
       ...(config.optimizeDeps.include || []),
       "@trpc/client",
-      "@trpc/server/observable",
       "superjson",
       "@tanstack/react-query",
       "storybook/test",
+      "zustand",
+      "zustand/vanilla",
     ];
 
     return config;
