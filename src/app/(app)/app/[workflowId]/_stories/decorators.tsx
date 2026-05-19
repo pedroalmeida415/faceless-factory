@@ -20,12 +20,12 @@ export const WORKFLOW_STORY_PARAMETERS = {
 export function createWorkflowStoreInitialState({
   edges = [],
   nodes = [],
-  selectedGenerationNodeId,
+  selectedNodeId,
 }: Partial<Pick<WorkflowGraph, "edges" | "nodes">> &
-  Pick<WorkflowStoreInitialState, "selectedGenerationNodeId">): WorkflowStoreInitialState {
+  Pick<WorkflowStoreInitialState, "selectedNodeId">): WorkflowStoreInitialState {
   return {
     graph: createWorkflowGraph({ edges, nodes }),
-    selectedGenerationNodeId,
+    selectedNodeId,
   };
 }
 

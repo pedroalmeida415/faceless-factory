@@ -1,8 +1,9 @@
 "use client";
 
+import { useStoreApi } from "@xyflow/react";
 import { ImageIcon, ListIcon, SparklesIcon, TypeIcon } from "lucide-react";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import type { WorkflowNode } from "~/features/workflow/domain/graph";
+import type { WorkflowEdge, WorkflowNode } from "~/features/workflow/domain/graph";
 import { cn } from "~/lib/utils";
 import { useWorkflowStore } from "../_hooks/use-workflow-store";
 
@@ -20,6 +21,24 @@ const NODE_TOOLS: {
 
 export function NodePalette() {
   const addNodeToGraph = useWorkflowStore((store) => store.addNodeToGraph);
+  const reactFlowStore = useStoreApi<WorkflowNode, WorkflowEdge>();
+
+  const addNodeAtViewportCenter = (type: WorkflowNode["type"]) => {
+    const { height, transform, width } = reactFlowStore.getState();
+    const [translateX, translateY, zoom] = transform;
+
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+
+    addNodeToGraph({
+      position: {
+        x: (width / 2 - translateX) / zoom,
+        y: (height / 2 - translateY) / zoom,
+      },
+      type,
+    });
+  };
 
   return (
     <div className="absolute top-3 left-3 z-10 flex flex-col gap-0.5 rounded-xl border border-white/10 bg-black/60 p-1 shadow-lg backdrop-blur">
@@ -34,7 +53,7 @@ export function NodePalette() {
                 "grid size-9 place-items-center rounded-md text-white/70 transition-colors",
                 "hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70",
               )}
-              onClick={() => addNodeToGraph(tool.id)}
+              onClick={() => addNodeAtViewportCenter(tool.id)}
             >
               <Icon className="size-4" />
             </TooltipTrigger>

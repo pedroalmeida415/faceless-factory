@@ -3,16 +3,17 @@
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 import { PlusIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { NodeCard, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
+import { NodeCard, NodeCardFooter, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
-import type { WorkflowListNode, WorkflowNode } from "~/features/workflow/domain/graph";
+import type { WorkflowListNode } from "~/features/workflow/domain/graph";
 import { useWorkflowStore } from "../../_hooks/use-workflow-store";
+import type { WorkflowStore } from "../../_store/workflow-store";
 
-type ListFlowNode = Node<WorkflowListNode["data"], "list">;
+type ListFlowNode = Node<WorkflowListNode["data"], WorkflowListNode["type"]>;
 
 export function ListNode(props: NodeProps<ListFlowNode>) {
-  const updateNode = useWorkflowStore((store) => store.updateNode);
+  const updateNodeData = useWorkflowStore((store) => store.updateNodeData);
 
   return (
     <NodeCard>
@@ -22,8 +23,17 @@ export function ListNode(props: NodeProps<ListFlowNode>) {
       </NodeCardHeader>
       <NodeCardPanel className="nodrag">
         {props.data.items.map((item, index) => (
-          <ListItemRow key={item.id} index={index} item={item} nodeId={props.id} updateNode={updateNode} />
+          <ListItemRow
+            key={item.id}
+            index={index}
+            item={item}
+            items={props.data.items}
+            nodeId={props.id}
+            updateNodeData={updateNodeData}
+          />
         ))}
+      </NodeCardPanel>
+      <NodeCardFooter>
         <Button
           size="sm"
           variant="outline"
@@ -34,21 +44,14 @@ export function ListNode(props: NodeProps<ListFlowNode>) {
               return;
             }
 
-            updateNode(props.id, (candidate: WorkflowNode) =>
-              candidate.type === "list"
-                ? {
-                    ...candidate,
-                    data: {
-                      items: [...candidate.data.items, { id: `item-${crypto.randomUUID()}`, text: "" }],
-                    },
-                  }
-                : candidate,
-            );
+            const nextData = structuredClone(props.data);
+            nextData.items.push({ id: `item-${crypto.randomUUID()}`, text: "" });
+            updateNodeData<WorkflowListNode>(props.id, nextData);
           }}
         >
           <PlusIcon /> Add row
         </Button>
-      </NodeCardPanel>
+      </NodeCardFooter>
     </NodeCard>
   );
 }
@@ -56,13 +59,15 @@ export function ListNode(props: NodeProps<ListFlowNode>) {
 function ListItemRow({
   index,
   item,
+  items,
   nodeId,
-  updateNode,
+  updateNodeData,
 }: {
   readonly index: number;
   readonly item: WorkflowListNode["data"]["items"][number];
+  readonly items: WorkflowListNode["data"]["items"];
   readonly nodeId: string;
-  readonly updateNode: (nodeId: string, updater: (node: WorkflowNode) => WorkflowNode) => void;
+  readonly updateNodeData: WorkflowStore["updateNodeData"];
 }) {
   const [draft, setDraft] = useState(item.text);
 
@@ -74,20 +79,17 @@ function ListItemRow({
       <Input
         id={`list-item-${item.id}`}
         aria-label={`List item ${index + 1}`}
-        onBlur={() =>
-          updateNode(nodeId, (node: WorkflowNode) =>
-            node.type === "list"
-              ? {
-                  ...node,
-                  data: {
-                    items: node.data.items.map((candidate) =>
-                      candidate.id === item.id ? { ...candidate, text: draft } : candidate,
-                    ),
-                  },
-                }
-              : node,
-          )
-        }
+        onBlur={() => {
+          const nextData = structuredClone({ items });
+          const itemToUpdate = nextData.items.find((candidate) => candidate.id === item.id);
+
+          if (!itemToUpdate) {
+            return;
+          }
+
+          itemToUpdate.text = draft;
+          updateNodeData<WorkflowListNode>(nodeId, nextData);
+        }}
         onChange={(event) => setDraft(event.currentTarget.value)}
         value={draft}
       />

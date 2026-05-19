@@ -23,13 +23,13 @@ export function NodeEditor() {
       nodes={nodes}
       onConnect={onConnect}
       onEdgesChange={onEdgesChange}
-      onNodeClick={(_, node) => selectNode(node.id, node.type)}
+      onNodeClick={(_, node) => selectNode(node.id)}
       onNodesChange={onNodesChange}
       onPaneClick={closeNodeInspector}
       proOptions={{ hideAttribution: true }}
     >
       <Background />
-      <Controls />
+      {/* <Controls /> */}
     </ReactFlow>
   );
 }

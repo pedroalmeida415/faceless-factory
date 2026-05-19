@@ -1,13 +1,18 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import type { ComponentProps } from "react";
 import { ConnectedGraph } from "./_components/node-editor.stories";
-import { WORKFLOW_STORY_PARAMETERS, WorkflowStoreDecorator, type WorkflowStoreStoryArgs } from "./_stories/decorators";
+import {
+  ReactFlowDecorator,
+  WORKFLOW_STORY_PARAMETERS,
+  WorkflowStoreDecorator,
+  type WorkflowStoreStoryArgs,
+} from "./_stories/decorators";
 import WorkflowPage from "./page";
 
 type WorkflowPageStoryArgs = ComponentProps<typeof WorkflowPage> & WorkflowStoreStoryArgs;
 
 const meta = {
-  decorators: [WorkflowStoreDecorator],
+  decorators: [WorkflowStoreDecorator, ReactFlowDecorator],
   parameters: {
     ...WORKFLOW_STORY_PARAMETERS,
     layout: "fullscreen",

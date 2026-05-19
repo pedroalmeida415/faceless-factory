@@ -4,17 +4,26 @@ import { Drawer, DrawerDescription, DrawerHeader, DrawerPanel, DrawerPopup, Draw
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "~/components/ui/select";
-import type { WorkflowNode } from "~/features/workflow/domain/graph";
+import type { WorkflowImageGenerationNode, WorkflowNode } from "~/features/workflow/domain/graph";
 import { NANO_BANANA_PRO_MODEL } from "~/features/workflow/domain/model-catalog";
-import { useGenerationNodeEvaluation } from "../_hooks/use-generation-node-evaluation";
-import { useSelectedGenerationNode } from "../_hooks/use-selected-generation-node";
+import { useGraphEvaluation } from "../_hooks/use-graph-evaluation";
 import { useWorkflowStore } from "../_hooks/use-workflow-store";
+
+function isSelectedGenerationNode(
+  node: WorkflowNode,
+  selectedNodeId: string | null,
+): node is WorkflowImageGenerationNode {
+  return node.id === selectedNodeId && node.type === "imageGeneration";
+}
 
 export function NodeInspector() {
   const onClose = useWorkflowStore((store) => store.closeNodeInspector);
-  const onUpdateNode = useWorkflowStore((store) => store.updateNode);
-  const node = useSelectedGenerationNode();
-  const evaluation = useGenerationNodeEvaluation(node?.id ?? null);
+  const updateNodeData = useWorkflowStore((store) => store.updateNodeData);
+  const node = useWorkflowStore(
+    (store) => store.nodes.find((candidate) => isSelectedGenerationNode(candidate, store.selectedNodeId)) ?? null,
+  );
+  const graphEvaluation = useGraphEvaluation();
+  const evaluation = node ? (graphEvaluation.find((candidate) => candidate.nodeId === node.id) ?? null) : null;
   const open = Boolean(node);
 
   return (
@@ -41,19 +50,15 @@ export function NodeInspector() {
                 <Label htmlFor="workflow-resolution">Resolution</Label>
                 <Select
                   id="workflow-resolution"
-                  onValueChange={(value) =>
-                    onUpdateNode(node.id, (candidate: WorkflowNode) =>
-                      candidate.type === "imageGeneration" && value !== null
-                        ? {
-                            ...candidate,
-                            data: {
-                              ...candidate.data,
-                              config: { ...candidate.data.config, resolution: value },
-                            },
-                          }
-                        : candidate,
-                    )
-                  }
+                  onValueChange={(value) => {
+                    if (value === null) {
+                      return;
+                    }
+
+                    const nextData = structuredClone(node.data);
+                    nextData.config.resolution = value;
+                    updateNodeData<WorkflowImageGenerationNode>(node.id, nextData);
+                  }}
                   value={String(node.data.config.resolution ?? NANO_BANANA_PRO_MODEL.defaultConfig.resolution)}
                 >
                   <SelectTrigger>
@@ -72,16 +77,11 @@ export function NodeInspector() {
                 <Label htmlFor="workflow-batch-size">Batch size</Label>
                 <Select
                   id="workflow-batch-size"
-                  onValueChange={(value) =>
-                    onUpdateNode(node.id, (candidate: WorkflowNode) =>
-                      candidate.type === "imageGeneration"
-                        ? {
-                            ...candidate,
-                            data: { ...candidate.data, branchBatchSize: Number(value) },
-                          }
-                        : candidate,
-                    )
-                  }
+                  onValueChange={(value) => {
+                    const nextData = structuredClone(node.data);
+                    nextData.branchBatchSize = Number(value);
+                    updateNodeData<WorkflowImageGenerationNode>(node.id, nextData);
+                  }}
                   value={String(node.data.branchBatchSize)}
                 >
                   <SelectTrigger>

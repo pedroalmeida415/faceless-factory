@@ -2,15 +2,15 @@
 
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 import { PlusIcon } from "lucide-react";
-import { NodeCard, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
+import { NodeCard, NodeCardFooter, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
 import { Button } from "~/components/ui/button";
-import type { WorkflowAssetNode, WorkflowNode } from "~/features/workflow/domain/graph";
+import type { WorkflowAssetNode } from "~/features/workflow/domain/graph";
 import { useWorkflowStore } from "../../_hooks/use-workflow-store";
 
-type AssetFlowNode = Node<WorkflowAssetNode["data"], "asset">;
+type AssetFlowNode = Node<WorkflowAssetNode["data"], WorkflowAssetNode["type"]>;
 
 export function AssetNode(props: NodeProps<AssetFlowNode>) {
-  const updateNode = useWorkflowStore((store) => store.updateNode);
+  const updateNodeData = useWorkflowStore((store) => store.updateNodeData);
 
   return (
     <NodeCard>
@@ -25,31 +25,23 @@ export function AssetNode(props: NodeProps<AssetFlowNode>) {
             <span className="text-white/45">{index + 1}.</span> {asset.name ?? asset.assetId}
           </div>
         ))}
+      </NodeCardPanel>
+      <NodeCardFooter>
         <Button
           size="sm"
           variant="outline"
-          onClick={() =>
-            updateNode(props.id, (candidate: WorkflowNode) =>
-              candidate.type === "asset"
-                ? {
-                    ...candidate,
-                    data: {
-                      assets: [
-                        ...candidate.data.assets,
-                        {
-                          assetId: `asset-${crypto.randomUUID()}`,
-                          name: `Reference ${candidate.data.assets.length + 1}`,
-                        },
-                      ],
-                    },
-                  }
-                : candidate,
-            )
-          }
+          onClick={() => {
+            const nextData = structuredClone(props.data);
+            nextData.assets.push({
+              assetId: `asset-${crypto.randomUUID()}`,
+              name: `Reference ${nextData.assets.length + 1}`,
+            });
+            updateNodeData<WorkflowAssetNode>(props.id, nextData);
+          }}
         >
-          <PlusIcon /> Add mock asset
+          <PlusIcon /> Add asset
         </Button>
-      </NodeCardPanel>
+      </NodeCardFooter>
     </NodeCard>
   );
 }

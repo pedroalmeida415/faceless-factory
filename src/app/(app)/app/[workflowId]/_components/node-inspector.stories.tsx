@@ -39,7 +39,7 @@ const imageGenerationNode = {
 
 const selectedInspectorState = {
   graph: createWorkflowStoreInitialState({ nodes: [imageGenerationNode] }).graph,
-  selectedGenerationNodeId: imageGenerationNode.id,
+  selectedNodeId: imageGenerationNode.id,
 } satisfies WorkflowStoreInitialState;
 
 export const ImageGenerationSelected = {
@@ -52,7 +52,7 @@ export const NoSelection = {
   args: {
     initialState: {
       graph: createWorkflowStoreInitialState({ nodes: [imageGenerationNode] }).graph,
-      selectedGenerationNodeId: null,
+      selectedNodeId: null,
     },
   },
 } satisfies Story;

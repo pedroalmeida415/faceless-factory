@@ -1,13 +1,12 @@
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 import { NodeCard, NodeCardFooter, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
-import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import type { WorkflowImageGenerationNode } from "~/features/workflow/domain/graph";
 import { WORKFLOW_MODEL_CATALOG } from "~/features/workflow/domain/model-catalog";
-import { useGenerationNodeEvaluation } from "../../_hooks/use-generation-node-evaluation";
+import { useGraphEvaluation } from "../../_hooks/use-graph-evaluation";
 import { SocketRow } from "../socket-row";
 
-type ImageGenerationFlowNode = Node<WorkflowImageGenerationNode["data"], "imageGeneration">;
+type ImageGenerationFlowNode = Node<WorkflowImageGenerationNode["data"], WorkflowImageGenerationNode["type"]>;
 type InputSocketRow = {
   readonly id: string;
   readonly label: string;
@@ -15,7 +14,8 @@ type InputSocketRow = {
 };
 
 export function ImageGenerationNode(props: NodeProps<ImageGenerationFlowNode>) {
-  const evaluation = useGenerationNodeEvaluation(props.id);
+  const graphEvaluation = useGraphEvaluation();
+  const evaluation = graphEvaluation.find((candidate) => candidate.nodeId === props.id) ?? null;
   const model = WORKFLOW_MODEL_CATALOG.find((candidate) => candidate.modelId === props.data.modelId);
 
   const inputSocketRows: InputSocketRow[] = [];
@@ -43,11 +43,6 @@ export function ImageGenerationNode(props: NodeProps<ImageGenerationFlowNode>) {
     }
   }
 
-  const outputPlaceholders = Array.from(
-    { length: Math.max(evaluation?.summary.totalOutputCount ?? 1, 1) },
-    (_, index) => `output-placeholder-${index + 1}`,
-  );
-
   return (
     <NodeCard className="group">
       <Handle id="output" position={Position.Right} type="source" />
@@ -65,7 +60,7 @@ export function ImageGenerationNode(props: NodeProps<ImageGenerationFlowNode>) {
       </NodeCardHeader>
       <NodeCardPanel>
         <div className="h-96 rounded-xl border border-white/10 bg-black/20 p-3">
-          <div className="flex flex-wrap gap-2">
+          {/* <div className="flex flex-wrap gap-2">
             <Badge variant={evaluation?.summary.status === "blocked" ? "error" : "success"}>
               {evaluation?.summary.status ?? "pending"}
             </Badge>
@@ -81,7 +76,7 @@ export function ImageGenerationNode(props: NodeProps<ImageGenerationFlowNode>) {
                 <div key={placeholderId} className="aspect-square rounded-lg border border-white/10 bg-cyan-300/10" />
               ))}
             </div>
-          )}
+          )} */}
         </div>
       </NodeCardPanel>
       <NodeCardFooter>

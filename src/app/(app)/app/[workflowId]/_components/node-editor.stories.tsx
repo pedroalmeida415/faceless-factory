@@ -51,7 +51,9 @@ type Story = StoryObj<typeof meta>;
 
 // Story fixtures
 const promptNode = {
-  data: { text: "A cinematic product shot of a translucent perfume bottle on wet black stone." },
+  data: {
+    text: "A cinematic product shot of a translucent perfume bottle on wet black stone.",
+  },
   id: "prompt-1",
   position: { x: 80, y: 120 },
   type: "prompt",
