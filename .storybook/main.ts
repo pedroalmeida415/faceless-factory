@@ -12,20 +12,5 @@ const config: StorybookConfig = {
   ],
   framework: "@storybook/nextjs-vite",
   staticDirs: ["../public"],
-  viteFinal: async (config) => {
-    // Pre-optimize dependencies to avoid test flakiness
-    config.optimizeDeps = config.optimizeDeps || {};
-    config.optimizeDeps.include = [
-      ...(config.optimizeDeps.include || []),
-      "@trpc/client",
-      "superjson",
-      "@tanstack/react-query",
-      "storybook/test",
-      "zustand",
-      "zustand/vanilla",
-    ];
-
-    return config;
-  },
 };
 export default config;
