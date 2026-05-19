@@ -1,11 +1,8 @@
 "use client";
 
-import { useParams } from "next/navigation";
-import { createContext, type ReactNode, useEffect, useRef } from "react";
-import type { StoreApi } from "zustand/vanilla";
-import { createWorkflowStore, type WorkflowStore, type WorkflowStoreInitialState } from "./workflow-store";
-
-type WorkflowStoreApi = StoreApi<WorkflowStore>;
+import { createContext, type ReactNode, useRef } from "react";
+import { WorkflowAutosave } from "./workflow-autosave";
+import { createWorkflowStore, type WorkflowStoreApi, type WorkflowStoreInitialState } from "./workflow-store";
 
 export const WorkflowStoreContext = createContext<WorkflowStoreApi | null>(null);
 
@@ -18,17 +15,14 @@ export function WorkflowStoreProvider({
 }) {
   const storeRef = useRef<WorkflowStoreApi | null>(null);
 
-  const { workflowId } = useParams<{ workflowId: string }>();
-
   if (!storeRef.current) {
-    storeRef.current = createWorkflowStore(initialState, workflowId);
+    storeRef.current = createWorkflowStore(initialState);
   }
 
-  useEffect(() => {
-    const store = storeRef.current;
-
-    return () => store?.getState().dispose();
-  }, []);
-
-  return <WorkflowStoreContext.Provider value={storeRef.current}>{children}</WorkflowStoreContext.Provider>;
+  return (
+    <WorkflowStoreContext.Provider value={storeRef.current}>
+      {children}
+      <WorkflowAutosave />
+    </WorkflowStoreContext.Provider>
+  );
 }

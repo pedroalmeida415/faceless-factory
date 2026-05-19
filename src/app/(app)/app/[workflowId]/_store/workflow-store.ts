@@ -1,158 +1,163 @@
-import { addEdge, type Connection, type EdgeChange, type NodeChange } from "@xyflow/react";
-import { createStore } from "zustand/vanilla";
+import {
+  addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
+  type Connection,
+  type EdgeChange,
+  type NodeChange,
+  type NodeOrigin,
+} from "@xyflow/react";
+import { setAutoFreeze } from "immer";
+import { subscribeWithSelector } from "zustand/middleware";
+import { immer } from "zustand/middleware/immer";
+import { createStore, type Mutate, type StoreApi } from "zustand/vanilla";
 import {
   EMPTY_WORKFLOW_GRAPH,
   type WorkflowEdge,
   type WorkflowGraph,
-  type WorkflowGraphDraft,
   type WorkflowNode,
 } from "~/features/workflow/domain/graph";
 import { createWorkflowNode, isWorkflowConnectionAllowed } from "~/features/workflow/domain/graph-editing";
-import { getAppTrpcQueryUtils, getTrpcClient } from "~/main/trpc/react";
 
 type WorkflowSaveState = "idle" | "saving" | "saved" | "error";
+type WorkflowNodePosition = WorkflowNode["position"];
+type CenteringWorkflowNode = WorkflowNode & { readonly origin?: NodeOrigin };
+const CENTERED_NODE_ORIGIN = [0.5, 0.5] satisfies NodeOrigin;
+
+setAutoFreeze(false);
 
 type WorkflowState = {
   readonly edges: WorkflowEdge[];
   readonly nodes: WorkflowNode[];
   readonly saveState: WorkflowSaveState;
-  readonly selectedGenerationNodeId: string | null;
+  readonly selectedNodeId: string | null;
 };
 
 type WorkflowActions = {
-  readonly addNodeToGraph: (type: WorkflowNode["type"]) => void;
+  readonly addNodeToGraph: (input: {
+    readonly position: WorkflowNodePosition;
+    readonly type: WorkflowNode["type"];
+  }) => string;
   readonly closeNodeInspector: () => void;
   readonly onConnect: (connection: Connection) => void;
   readonly onEdgesChange: (changes: EdgeChange<WorkflowEdge>[]) => void;
-  readonly onNodesChange: (changes: NodeChange[]) => void;
-  readonly selectNode: (nodeId: string, nodeType: WorkflowNode["type"]) => void;
-  readonly dispose: () => void;
-  readonly updateNode: (nodeId: string, updater: (node: WorkflowNode) => WorkflowNode) => void;
+  readonly onNodesChange: (changes: NodeChange<WorkflowNode>[]) => void;
+  readonly selectNode: (nodeId: string) => void;
+  readonly setSaveState: (saveState: WorkflowSaveState) => void;
+  readonly updateNodeData: <TNode extends WorkflowNode>(nodeId: string, data: TNode["data"]) => void;
 };
 
 export type WorkflowStore = WorkflowState & WorkflowActions;
+export type WorkflowStoreApi = Mutate<
+  StoreApi<WorkflowStore>,
+  [["zustand/subscribeWithSelector", never], ["zustand/immer", never]]
+>;
 
 export type WorkflowStoreInitialState = {
   readonly graph?: WorkflowGraph;
-  readonly selectedGenerationNodeId?: string | null;
+  readonly selectedNodeId?: string | null;
 };
 
-export function createWorkflowStore(initialState: WorkflowStoreInitialState = {}, workflowId: string) {
-  const utils = getAppTrpcQueryUtils();
-  const trpcClient = getTrpcClient();
+export function createWorkflowStore(initialState: WorkflowStoreInitialState = {}) {
   const initialGraph = initialState.graph ?? EMPTY_WORKFLOW_GRAPH;
 
-  return createStore<WorkflowStore>((set, get) => {
-    let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+  return createStore<WorkflowStore>()(
+    subscribeWithSelector(
+      immer((set, get) => ({
+        edges: initialGraph.edges,
+        nodes: initialGraph.nodes,
+        saveState: "idle",
+        selectedNodeId: initialState.selectedNodeId ?? null,
+        addNodeToGraph: ({ position, type }) => {
+          const node = createWorkflowNode({ position, type });
+          const centeredNode = { ...node, origin: CENTERED_NODE_ORIGIN };
 
-    const scheduleSave = (nextGraph: WorkflowGraphDraft) => {
-      if (saveTimeout) {
-        clearTimeout(saveTimeout);
-      }
+          set((state) => {
+            state.nodes.push(centeredNode);
+          });
 
-      set({ saveState: "saving" });
-      saveTimeout = setTimeout(() => {
-        void trpcClient.workflow.saveWorkflow
-          .mutate({ graph: nextGraph, workflowId })
-          .then(() => {
-            set({ saveState: "saved" });
-            void utils.workflow.getWorkflow.invalidate({ workflowId });
-          })
-          .catch(() => set({ saveState: "error" }));
-      }, 700);
-    };
+          return node.id;
+        },
+        closeNodeInspector: () =>
+          set((state) => {
+            state.selectedNodeId = null;
+          }),
+        onConnect: (connection) => {
+          const { edges, nodes } = get();
 
-    const commitGraph = (nextNodes: WorkflowNode[], nextEdges: WorkflowEdge[]) => {
-      const nextGraph = { edges: nextEdges, nodes: nextNodes };
-      set({ edges: nextEdges, nodes: nextNodes });
-      scheduleSave(nextGraph);
-    };
+          if (!connection.source || !connection.target || !connection.targetHandle) {
+            return;
+          }
 
-    return {
-      edges: initialGraph.edges,
-      nodes: initialGraph.nodes,
-      saveState: "idle",
-      selectedGenerationNodeId: initialState.selectedGenerationNodeId ?? null,
-      addNodeToGraph: (type) => {
-        const { edges, nodes } = get();
-        const index = nodes.length;
-        const id = `${type}-${crypto.randomUUID()}`;
-        const position = { x: 0 + index * 48, y: 0 + index * 36 };
-        commitGraph([...nodes, createWorkflowNode({ id, position, type })], edges);
-      },
-      closeNodeInspector: () => set({ selectedGenerationNodeId: null }),
-      onConnect: (connection) => {
-        const { edges, nodes } = get();
+          if (!isWorkflowConnectionAllowed({ connection, edges, nodes })) {
+            return;
+          }
 
-        if (!connection.source || !connection.target || !connection.targetHandle) {
-          return;
-        }
+          set((state) => {
+            state.edges = addEdge({ ...connection, id: `edge-${crypto.randomUUID()}` }, edges);
+          });
+        },
+        onEdgesChange: (changes) => {
+          set((state) => {
+            state.edges = applyEdgeChanges<WorkflowEdge>(changes, state.edges);
+          });
+        },
+        onNodesChange: (changes) => {
+          const selectedNodeId = get().selectedNodeId;
+          const selectedNodeLostFocus = changes.some(
+            (change) => change.type === "select" && change.id === selectedNodeId && !change.selected,
+          );
+          const measuredDimensionsByNodeId = new Map(
+            changes.flatMap((change) =>
+              change.type === "dimensions" && change.dimensions ? [[change.id, change.dimensions] as const] : [],
+            ),
+          );
 
-        if (!isWorkflowConnectionAllowed({ connection, edges, nodes })) {
-          return;
-        }
+          set((state) => {
+            state.nodes = applyNodeChanges<WorkflowNode>(changes, state.nodes).map((node) => {
+              const dimensions = measuredDimensionsByNodeId.get(node.id);
+              const centerOriginNode = node as CenteringWorkflowNode;
 
-        commitGraph(nodes, addEdge({ ...connection, id: `edge-${crypto.randomUUID()}` }, edges));
-      },
-      onEdgesChange: (changes) => {
-        const { edges, nodes } = get();
-        const removedEdgeIds = new Set(changes.filter((change) => change.type === "remove").map((change) => change.id));
+              if (!dimensions || centerOriginNode.origin?.[0] !== 0.5 || centerOriginNode.origin[1] !== 0.5) {
+                return node;
+              }
 
-        if (removedEdgeIds.size === 0) {
-          return;
-        }
+              const { origin: _origin, ...workflowNode } = centerOriginNode;
 
-        commitGraph(
-          nodes,
-          edges.filter((edge) => !removedEdgeIds.has(edge.id)),
-        );
-      },
-      onNodesChange: (changes) => {
-        const { edges, nodes } = get();
-        const positionChanges = changes.flatMap((change) =>
-          change.type === "position" && change.position ? [{ id: change.id, position: change.position }] : [],
-        );
-        const removedNodeIds = new Set(changes.flatMap((change) => (change.type === "remove" ? [change.id] : [])));
-        const selectedGenerationNodeId = get().selectedGenerationNodeId;
-        const selectedNodeLostFocus = changes.some(
-          (change) => change.type === "select" && change.id === selectedGenerationNodeId && !change.selected,
-        );
+              return {
+                ...workflowNode,
+                position: {
+                  x: node.position.x - dimensions.width / 2,
+                  y: node.position.y - dimensions.height / 2,
+                },
+              };
+            });
+            state.selectedNodeId = selectedNodeLostFocus ? null : selectedNodeId;
+          });
+        },
+        selectNode: (nodeId) => {
+          set((state) => {
+            state.selectedNodeId = nodeId;
+          });
+        },
+        setSaveState: (saveState) => {
+          set((state) => {
+            state.saveState = saveState;
+          });
+        },
+        updateNodeData: (nodeId, data) => {
+          set((state) => {
+            const nodeIndex = state.nodes.findIndex((node) => node.id === nodeId);
+            const node = state.nodes[nodeIndex];
 
-        if (selectedNodeLostFocus) {
-          set({ selectedGenerationNodeId: null });
-        }
+            if (!node) {
+              return;
+            }
 
-        if (positionChanges.length === 0 && removedNodeIds.size === 0) {
-          return;
-        }
-
-        commitGraph(
-          nodes
-            .filter((node) => !removedNodeIds.has(node.id))
-            .map((node) => {
-              const positionChange = positionChanges.find((change) => change.id === node.id);
-
-              return positionChange ? { ...node, position: positionChange.position } : node;
-            }),
-          edges.filter((edge) => !removedNodeIds.has(edge.source) && !removedNodeIds.has(edge.target)),
-        );
-      },
-      selectNode: (nodeId, nodeType) => {
-        set({ selectedGenerationNodeId: nodeType === "imageGeneration" ? nodeId : null });
-      },
-      dispose: () => {
-        if (saveTimeout) {
-          clearTimeout(saveTimeout);
-          saveTimeout = null;
-        }
-      },
-      updateNode: (nodeId, updater) => {
-        const { edges, nodes } = get();
-        commitGraph(
-          nodes.map((node) => (node.id === nodeId ? updater(node) : node)),
-          edges,
-        );
-      },
-    };
-  });
+            node.data = data;
+          });
+        },
+      })),
+    ),
+  );
 }
