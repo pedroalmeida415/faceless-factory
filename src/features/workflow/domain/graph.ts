@@ -108,3 +108,17 @@ export const EMPTY_WORKFLOW_GRAPH = {
 export function createWorkflowGraph(draft: WorkflowGraphDraft): WorkflowGraph {
   return { ...draft, schemaVersion: WORKFLOW_GRAPH_SCHEMA_VERSION };
 }
+
+export function toPersistedWorkflowGraph(input: {
+  readonly edges: readonly WorkflowEdge[];
+  readonly nodes: readonly WorkflowNode[];
+}): WorkflowGraphDraft {
+  const nodeIds = new Set(input.nodes.map((node) => node.id));
+
+  return {
+    edges: input.edges
+      .filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
+      .map((edge) => WorkflowEdgeSchema.parse(edge)),
+    nodes: input.nodes.map((node) => WorkflowNodeSchema.parse(node)),
+  };
+}

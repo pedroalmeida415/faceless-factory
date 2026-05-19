@@ -214,17 +214,17 @@ describe("workflow input alignment", () => {
 
 describe("workflow graph editing", () => {
   test("creates default node data in the workflow domain", () => {
-    const listNode = createWorkflowNode({ id: "list-1", position: { x: 10, y: 20 }, type: "list" });
+    const listNode = createWorkflowNode({ position: { x: 10, y: 20 }, type: "list" });
 
     expect(listNode).toMatchObject({
       data: { items: [{ text: "" }] },
-      id: "list-1",
       position: { x: 10, y: 20 },
       type: "list",
     });
+    expect(listNode.id).toMatch(/^list-/);
     expect(listNode.type === "list" ? listNode.data.items[0]?.id : "").toMatch(/^item-/);
 
-    expect(createWorkflowNode({ id: "gen-1", position: { x: 0, y: 0 }, type: "imageGeneration" }).data).toEqual({
+    expect(createWorkflowNode({ position: { x: 0, y: 0 }, type: "imageGeneration" }).data).toEqual({
       branchBatchSize: 1,
       config: { resolution: "1080p" },
       modelId: "nano-banana-pro",

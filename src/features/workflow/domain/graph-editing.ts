@@ -12,27 +12,33 @@ export type WorkflowConnectionDraft = {
 };
 
 type CreateWorkflowNodeInput = {
-  readonly id: string;
   readonly position: WorkflowPosition;
   readonly type: WorkflowNode["type"];
 };
 
 export function createWorkflowNode(input: CreateWorkflowNodeInput): WorkflowNode {
+  const id = `${input.type}-${crypto.randomUUID()}`;
+
   if (input.type === "prompt") {
-    return { data: { text: "" }, id: input.id, position: input.position, type: input.type };
+    return {
+      data: { text: "" },
+      id,
+      position: input.position,
+      type: input.type,
+    };
   }
 
   if (input.type === "list") {
     return {
       data: { items: [{ id: `item-${crypto.randomUUID()}`, text: "" }] },
-      id: input.id,
+      id,
       position: input.position,
       type: input.type,
     };
   }
 
   if (input.type === "asset") {
-    return { data: { assets: [] }, id: input.id, position: input.position, type: input.type };
+    return { data: { assets: [] }, id, position: input.position, type: input.type };
   }
 
   return {
@@ -42,7 +48,7 @@ export function createWorkflowNode(input: CreateWorkflowNodeInput): WorkflowNode
       modelId: NANO_BANANA_PRO_MODEL.modelId,
       selectedBatchItems: [],
     },
-    id: input.id,
+    id,
     position: input.position,
     type: input.type,
   };
@@ -64,14 +70,19 @@ export function isWorkflowConnectionAllowed(input: {
   const source = nodes.find((node) => node.id === connection.source);
   const target = nodes.find((node) => node.id === connection.target);
 
-  if (!source || !target || target.type !== "imageGeneration") {
+  if (!source || !target) {
+    return false;
+  }
+
+  const sourceDataType = getWorkflowNodeOutputDataType(source, modelCatalog);
+
+  if (target.type !== "imageGeneration") {
     return false;
   }
 
   const targetModel = modelCatalog.find((model) => model.modelId === target.data.modelId);
   const targetSocketId = parseWorkflowTargetHandle(connection.targetHandle).socketId;
   const targetSocket = targetModel?.inputSockets.find((socket) => socket.id === targetSocketId);
-  const sourceDataType = getWorkflowNodeOutputDataType(source, modelCatalog);
 
   if (!targetSocket || !sourceDataType || sourceDataType !== targetSocket.dataType) {
     return false;
