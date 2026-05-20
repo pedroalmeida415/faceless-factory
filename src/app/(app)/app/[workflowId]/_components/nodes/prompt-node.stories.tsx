@@ -26,7 +26,9 @@ type Story = StoryObj<typeof meta>;
 
 // Story fixtures
 const promptNode = {
-  data: { text: "A cinematic product shot of a translucent perfume bottle on wet black stone." },
+  data: {
+    text: "A cinematic product shot of a translucent perfume bottle on wet black stone.",
+  },
   id: "prompt-1",
   position: { x: 80, y: 120 },
   type: "prompt",
@@ -56,7 +58,7 @@ export const CommitsOnBlur = {
     await NodeEditorStory.play(context);
     const { canvasElement } = context;
     const canvas = within(canvasElement);
-    const input = canvas.getByLabelText("Prompt text");
+    const input = canvas.getByRole("textbox");
     await expect(input).toHaveValue(promptNode.data.text);
     await userEvent.clear(input);
     await userEvent.type(input, "New product prompt");
