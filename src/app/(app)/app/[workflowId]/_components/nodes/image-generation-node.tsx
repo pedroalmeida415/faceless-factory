@@ -32,13 +32,11 @@ export function ImageGenerationNode(props: NodeProps<ImageGenerationFlowNode>) {
         continue;
       }
 
-      for (let index = 0; index < socket.capacity; index += 1) {
-        inputSocketRows.push({
-          id: `${socket.id}:${index}`,
-          label: `${socket.label} #${index + 1}`,
-          muted: !state?.edgeStates[index],
-        });
-      }
+      inputSocketRows.push({
+        id: socket.id,
+        label: `${socket.label} (${state?.connectedEdgeCount ?? 0}/${socket.capacity})`,
+        muted: !state?.connectedEdgeCount,
+      });
     }
   }
 

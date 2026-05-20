@@ -59,7 +59,7 @@ const readyGraph = {
       id: "edge-asset-image-generation",
       source: "asset-1",
       target: imageGenerationNode.id,
-      targetHandle: "image:0",
+      targetHandle: "image",
     },
   ],
   nodes: [...promptNodes, ...assetNodes, imageGenerationNode],
