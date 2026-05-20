@@ -1,98 +1,131 @@
 "use client";
 
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
-import { PlusIcon } from "lucide-react";
-import { useEffect, useState } from "react";
-import { NodeCard, NodeCardFooter, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
-import { Button } from "~/components/ui/button";
+import { CircleAlertIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { NodeCard, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
+import { CardFrame, CardFrameFooter } from "~/components/ui/card";
+import { Field, FieldLabel } from "~/components/ui/field";
 import { Input } from "~/components/ui/input";
+import { Kbd } from "~/components/ui/kbd";
 import type { WorkflowListNode } from "~/features/workflow/domain/graph";
 import { useWorkflowStore } from "../../_hooks/use-workflow-store";
-import type { WorkflowStore } from "../../_store/workflow-store";
 
 type ListFlowNode = Node<WorkflowListNode["data"], WorkflowListNode["type"]>;
+type ListItemData = WorkflowListNode["data"]["items"][number];
 
 export function ListNode(props: NodeProps<ListFlowNode>) {
   const updateNodeData = useWorkflowStore((store) => store.updateNodeData);
 
-  return (
-    <NodeCard>
-      <Handle position={Position.Right} type="source" />
-      <NodeCardHeader>
-        <NodeCardTitle>List</NodeCardTitle>
-      </NodeCardHeader>
-      <NodeCardPanel className="nodrag">
-        {props.data.items.map((item, index) => (
-          <ListItemRow
-            key={item.id}
-            index={index}
-            item={item}
-            items={props.data.items}
-            nodeId={props.id}
-            updateNodeData={updateNodeData}
-          />
-        ))}
-      </NodeCardPanel>
-      <NodeCardFooter>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => {
-            const blankItem = props.data.items.find((item) => item.text.trim() === "");
-            if (blankItem) {
-              document.getElementById(`list-item-${blankItem.id}`)?.focus();
-              return;
-            }
+  const inputRefs = useRef<Record<string, HTMLInputElement>>({});
 
-            const nextData = structuredClone(props.data);
-            nextData.items.push({ id: `item-${crypto.randomUUID()}`, text: "" });
-            updateNodeData<WorkflowListNode>(props.id, nextData);
-          }}
-        >
-          <PlusIcon /> Add row
-        </Button>
-      </NodeCardFooter>
-    </NodeCard>
+  const createItem = () => {
+    const nextData = structuredClone(props.data);
+
+    const newItemId = `item-${crypto.randomUUID()}`;
+    nextData.items.push({ id: newItemId, text: "" });
+
+    updateNodeData<WorkflowListNode>(props.id, nextData);
+
+    queueMicrotask(() => {
+      inputRefs.current[newItemId]?.focus();
+    });
+  };
+
+  const handleItemBlur = (itemId: string, text: string) => {
+    const nextData = structuredClone(props.data);
+    const itemToUpdate = nextData.items.find((item) => item.id === itemId);
+
+    if (!itemToUpdate) {
+      return;
+    }
+
+    itemToUpdate.text = text;
+    updateNodeData<WorkflowListNode>(props.id, nextData);
+  };
+
+  const handleItemKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing || !event.currentTarget.value || !inputRefs.current) {
+      return;
+    }
+    event.preventDefault();
+
+    const blankItem = Object.values(inputRefs.current).find((item) => item.value.trim() === "");
+
+    if (blankItem) {
+      inputRefs.current[blankItem.id]?.focus();
+      return;
+    }
+
+    createItem();
+  };
+
+  return (
+    <CardFrame>
+      <NodeCard>
+        <NodeCardHeader>
+          <NodeCardTitle>List</NodeCardTitle>
+        </NodeCardHeader>
+        <NodeCardPanel>
+          <div className="nodrag flex flex-col gap-2">
+            {props.data.items.map((item, index) => (
+              <ListItem
+                key={item.id}
+                ref={(el: HTMLInputElement) => (inputRefs.current[item.id] = el as HTMLInputElement)}
+                index={index}
+                item={item}
+                onBlur={handleItemBlur}
+                onKeyDown={handleItemKeyDown}
+              />
+            ))}
+          </div>
+        </NodeCardPanel>
+      </NodeCard>
+      <CardFrameFooter>
+        <div className="flex items-center gap-1 text-muted-foreground text-xs">
+          <CircleAlertIcon className="size-3 h-lh shrink-0" />
+          Type and press <Kbd>Enter</Kbd> to add a new item.
+        </div>
+      </CardFrameFooter>
+      <Handle position={Position.Right} type="source" />
+    </CardFrame>
   );
 }
 
-function ListItemRow({
+function ListItem({
   index,
   item,
-  items,
-  nodeId,
-  updateNodeData,
+  onBlur,
+  onKeyDown,
+  ref,
 }: {
   readonly index: number;
-  readonly item: WorkflowListNode["data"]["items"][number];
-  readonly items: WorkflowListNode["data"]["items"];
-  readonly nodeId: string;
-  readonly updateNodeData: WorkflowStore["updateNodeData"];
+  readonly item: ListItemData;
+  readonly onBlur: (itemId: string, text: string) => void;
+  readonly onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
+  readonly ref: (el: HTMLInputElement) => void;
 }) {
   const [draft, setDraft] = useState(item.text);
 
   useEffect(() => setDraft(item.text), [item.text]);
 
   return (
-    <div className="flex items-center gap-2">
-      <span className="w-5 text-center text-white/45 text-xs">{index + 1}</span>
-      <Input
-        id={`list-item-${item.id}`}
+    <Field className="flex-row items-center gap-2" name={item.id}>
+      <FieldLabel
         aria-label={`List item ${index + 1}`}
-        onBlur={() => {
-          const nextData = structuredClone({ items });
-          const itemToUpdate = nextData.items.find((candidate) => candidate.id === item.id);
-
-          if (!itemToUpdate) {
-            return;
-          }
-
-          itemToUpdate.text = draft;
-          updateNodeData<WorkflowListNode>(nodeId, nextData);
-        }}
+        className="w-4.5 shrink-0 justify-start text-white/45 text-xs tabular-nums"
+      >
+        {index + 1}
+      </FieldLabel>
+      <Input
+        id={item.id}
+        type="text"
+        onBlur={() => onBlur(item.id, draft)}
         onChange={(event) => setDraft(event.currentTarget.value)}
+        onKeyDown={onKeyDown}
         value={draft}
+        ref={ref}
       />
-    </div>
+    </Field>
   );
 }
