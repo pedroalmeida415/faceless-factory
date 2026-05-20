@@ -3,7 +3,7 @@ import { NodeCard, NodeCardFooter, NodeCardHeader, NodeCardPanel, NodeCardTitle 
 import { Button } from "~/components/ui/button";
 import type { WorkflowImageGenerationNode } from "~/features/workflow/domain/graph";
 import { WORKFLOW_MODEL_CATALOG } from "~/features/workflow/domain/model-catalog";
-import { useGraphEvaluation } from "../../_hooks/use-graph-evaluation";
+import { useGenerationNodeEvaluation } from "../../_hooks/use-graph-evaluation";
 import { SocketRow } from "../socket-row";
 
 type ImageGenerationFlowNode = Node<WorkflowImageGenerationNode["data"], WorkflowImageGenerationNode["type"]>;
@@ -14,8 +14,7 @@ type InputSocketRow = {
 };
 
 export function ImageGenerationNode(props: NodeProps<ImageGenerationFlowNode>) {
-  const graphEvaluation = useGraphEvaluation();
-  const evaluation = graphEvaluation.find((candidate) => candidate.nodeId === props.id) ?? null;
+  const evaluation = useGenerationNodeEvaluation(props.id);
   const model = WORKFLOW_MODEL_CATALOG.find((candidate) => candidate.modelId === props.data.modelId);
 
   const inputSocketRows: InputSocketRow[] = [];

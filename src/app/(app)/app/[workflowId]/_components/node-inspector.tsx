@@ -6,7 +6,7 @@ import { Label } from "~/components/ui/label";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "~/components/ui/select";
 import type { WorkflowImageGenerationNode, WorkflowNode } from "~/features/workflow/domain/graph";
 import { NANO_BANANA_PRO_MODEL } from "~/features/workflow/domain/model-catalog";
-import { useGraphEvaluation } from "../_hooks/use-graph-evaluation";
+import { useGenerationNodeEvaluation } from "../_hooks/use-graph-evaluation";
 import { useWorkflowStore } from "../_hooks/use-workflow-store";
 
 function isSelectedGenerationNode(
@@ -22,8 +22,7 @@ export function NodeInspector() {
   const node = useWorkflowStore(
     (store) => store.nodes.find((candidate) => isSelectedGenerationNode(candidate, store.selectedNodeId)) ?? null,
   );
-  const graphEvaluation = useGraphEvaluation();
-  const evaluation = node ? (graphEvaluation.find((candidate) => candidate.nodeId === node.id) ?? null) : null;
+  const evaluation = useGenerationNodeEvaluation(node?.id ?? null);
   const open = Boolean(node);
 
   return (
