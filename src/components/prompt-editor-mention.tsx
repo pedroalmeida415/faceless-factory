@@ -1,23 +1,73 @@
 "use client";
 
-import { computePosition, flip, shift } from "@floating-ui/dom";
-import type { MentionNodeAttrs } from "@tiptap/extension-mention";
+import { autoUpdate, computePosition, flip, shift } from "@floating-ui/dom";
+import { type Editor, Extension } from "@tiptap/core";
+import type { MentionNodeAttrs, MentionOptions } from "@tiptap/extension-mention";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { posToDOMRect, ReactRenderer, type useEditor } from "@tiptap/react";
-import type { SuggestionKeyDownProps, SuggestionOptions, SuggestionProps } from "@tiptap/suggestion";
+import type { SuggestionKeyDownProps, SuggestionProps } from "@tiptap/suggestion";
 
 import { forwardRef, useImperativeHandle, useState } from "react";
+import type { WorkflowPromptVariable } from "~/features/workflow/domain/nodes/prompt";
 import { cn } from "~/lib/utils";
+import { Button } from "./ui/button";
+import { Empty, EmptyContent } from "./ui/empty";
+import { Frame, FramePanel } from "./ui/frame";
 
-type PromptEditorMentionItem = MentionNodeAttrs & {
-  type: "variable" | "add";
-  value?: string | null;
+export type PromptEditorVariable = WorkflowPromptVariable;
+
+type PromptEditorVariablesStorage = {
+  variables: readonly PromptEditorVariable[];
 };
+
+declare module "@tiptap/core" {
+  interface Storage {
+    promptEditorVariables: PromptEditorVariablesStorage;
+  }
+}
+
+type PromptEditorMentionItem = PromptEditorVariable & MentionNodeAttrs;
 
 type PromptEditorMentionHandle = {
   onKeyDown: (props: SuggestionKeyDownProps) => boolean;
 };
 
 type PromptEditorMentionProps = SuggestionProps<PromptEditorMentionItem, MentionNodeAttrs>;
+
+export const promptEditorMentionPluginKey = new PluginKey("prompt-editor-mention");
+const promptEditorVariablesPluginKey = new PluginKey("prompt-editor-variables");
+
+export const PromptEditorVariables = Extension.create<Record<string, never>, PromptEditorVariablesStorage>({
+  name: "promptEditorVariables",
+  addStorage() {
+    return {
+      variables: [],
+    };
+  },
+  addProseMirrorPlugins() {
+    const editor = this.editor;
+
+    return [
+      new Plugin({
+        key: promptEditorVariablesPluginKey,
+        view: (view) => {
+          const updateMentionDisplays = () =>
+            updateRenderedMentionDisplays(view.dom, editor.storage.promptEditorVariables.variables);
+          updateMentionDisplays();
+
+          return {
+            update: updateMentionDisplays,
+          };
+        },
+      }),
+    ];
+  },
+});
+
+export function setPromptEditorVariables(editor: Editor, variables: readonly PromptEditorVariable[]) {
+  editor.storage.promptEditorVariables.variables = variables;
+  editor.view.dispatch(editor.state.tr.setMeta(promptEditorVariablesPluginKey, true));
+}
 
 export const PromptEditorMention = forwardRef<PromptEditorMentionHandle, PromptEditorMentionProps>((props, ref) => {
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -35,11 +85,19 @@ export const PromptEditorMention = forwardRef<PromptEditorMentionHandle, PromptE
   useImperativeHandle(ref, () => ({
     onKeyDown: ({ event }) => {
       if (event.key === "ArrowUp") {
+        if (props.items.length === 0) {
+          return false;
+        }
+
         setSelectedIndex((current) => (current + props.items.length - 1) % props.items.length);
         return true;
       }
 
       if (event.key === "ArrowDown") {
+        if (props.items.length === 0) {
+          return false;
+        }
+
         setSelectedIndex((current) => (current + 1) % props.items.length);
         return true;
       }
@@ -54,109 +112,153 @@ export const PromptEditorMention = forwardRef<PromptEditorMentionHandle, PromptE
   }));
 
   return (
-    <div className="z-50 w-64 overflow-hidden rounded-lg border border-border/70 bg-background/95 p-1 shadow-xl">
-      <div className="max-h-56 overflow-y-auto">
-        {props.items.map((item, index) => {
-          const selected = selectedItemIndex === index;
+    <Frame>
+      <FramePanel className="overflow-hidden p-0">
+        <div className="max-h-75 overflow-y-auto p-1">
+          {props.items.length === 0 && (
+            <Empty className="md:py-6">
+              <EmptyContent>Connect nodes to reference them here.</EmptyContent>
+            </Empty>
+          )}
+          {props.items.map((item, index) => {
+            const highlighted = selectedItemIndex === index;
 
-          if (item.type === "add") {
             return (
-              <div className={cn(index > 0 ? "mt-1 border-t pt-1" : "")} key={item.id}>
-                <button
-                  className={cn(
-                    "flex w-full rounded-md px-2 py-2 text-left text-sm transition-colors",
-                    selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
-                  )}
-                  onClick={() => selectItem(index)}
-                  onMouseDown={(event) => event.preventDefault()}
-                  type="button"
-                >
-                  + Add variable
-                </button>
-              </div>
+              <Button
+                variant="ghost"
+                className={cn(
+                  "block h-auto! w-64 py-3 text-left text-sm transition-colors *:leading-none",
+                  highlighted ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+                )}
+                key={item.id}
+                onClick={() => selectItem(index)}
+                onMouseDown={(event) => event.preventDefault()}
+              >
+                <span className="mb-1 block font-medium">{item.label}</span>
+                <span className="block truncate text-xs">{item.value?.trim() || "Empty"}</span>
+              </Button>
             );
-          }
-
-          return (
-            <button
-              className={cn(
-                "flex w-full flex-col rounded-md px-2 py-2 text-left text-sm transition-colors",
-                selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
-              )}
-              key={item.id}
-              onClick={() => selectItem(index)}
-              onMouseDown={(event) => event.preventDefault()}
-              type="button"
-            >
-              <span className="font-medium">{item.label}</span>
-              <span className="truncate text-muted-foreground text-xs">
-                {item.value?.trim() || "No input connected"}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
+          })}
+        </div>
+      </FramePanel>
+    </Frame>
   );
 });
 
 PromptEditorMention.displayName = "PromptEditorMention";
 
-export const suggestion = {
-  char: "@",
-  items: ({ query }) => [],
-  render: () => {
-    let component: ReactRenderer<PromptEditorMentionHandle, PromptEditorMentionProps> | null = null;
-
-    return {
-      onExit: () => {
-        component?.element.remove();
-        component?.destroy();
-        component = null;
+export function createMentionConfig() {
+  return {
+    HTMLAttributes: {
+      class:
+        "prompt-editor-mention align-baseline rounded-md border border-cyan-300/30 bg-cyan-300/10 px-1.5 py-0.5 font-medium text-cyan-100 whitespace-pre-wrap!",
+    },
+    renderHTML: ({ node, options }) => [
+      "span",
+      {
+        ...options.HTMLAttributes,
+        "data-prompt-mention": "true",
+        "data-variable-id": node.attrs.id,
       },
-      onKeyDown: (props) => {
-        if (props.event.key === "Escape") {
+      node.attrs.label ?? node.attrs.id,
+    ],
+    renderText: ({ node }) => `@${node.attrs.label ?? node.attrs.id}`,
+    suggestion: {
+      char: "@",
+      pluginKey: promptEditorMentionPluginKey,
+      items: ({ editor, query }) => {
+        const normalizedQuery = query.trim().toLowerCase();
+        const variables = editor.storage.promptEditorVariables.variables.filter(
+          (variable) =>
+            variable.label.toLowerCase().includes(normalizedQuery) ||
+            variable.value?.toLowerCase().includes(normalizedQuery),
+        );
+
+        return variables;
+      },
+      render: () => {
+        let component: ReactRenderer<PromptEditorMentionHandle, PromptEditorMentionProps> | null = null;
+        let cleanupPositionUpdate: (() => void) | null = null;
+
+        const destroy = () => {
+          cleanupPositionUpdate?.();
+          cleanupPositionUpdate = null;
           component?.element.remove();
           component?.destroy();
           component = null;
-          return true;
-        }
+        };
 
-        return component?.ref?.onKeyDown(props) ?? false;
-      },
-      onStart: (props) => {
-        component = new ReactRenderer(PromptEditorMention, {
-          editor: props.editor,
-          props,
-        });
+        return {
+          onExit: destroy,
+          onKeyDown: (props) => {
+            if (props.event.key === "Escape") {
+              destroy();
+              return true;
+            }
 
-        component.element.style.position = "fixed";
-        document.body.appendChild(component.element);
-        updateMentionListPosition(props.editor, component.element);
-      },
-      onUpdate: (props) => {
-        component?.updateProps(props);
-        if (component) {
-          updateMentionListPosition(props.editor, component.element);
-        }
-      },
-    };
-  },
-} satisfies Omit<SuggestionOptions<any, MentionNodeAttrs>, "editor">;
+            return component?.ref?.onKeyDown(props) ?? false;
+          },
+          onStart: (props) => {
+            if (!props.editor.isFocused) {
+              return;
+            }
 
-function updateMentionListPosition(editor: NonNullable<ReturnType<typeof useEditor>>, element: HTMLElement) {
+            component = new ReactRenderer(PromptEditorMention, {
+              editor: props.editor,
+              props,
+            });
+
+            document.body.appendChild(component.element);
+            cleanupPositionUpdate = watchMentionListPosition(props.editor, component.element);
+          },
+          onUpdate: (props) => {
+            if (!props.editor.isFocused) {
+              destroy();
+              return;
+            }
+
+            component?.updateProps(props);
+          },
+        };
+      },
+    },
+  } satisfies Partial<MentionOptions<PromptEditorMentionItem, MentionNodeAttrs>>;
+}
+
+function updateRenderedMentionDisplays(root: HTMLElement, variables: readonly PromptEditorVariable[]) {
+  const displayTextByVariableId = new Map(variables.map((variable) => [variable.id, variable.displayText]));
+
+  for (const element of root.querySelectorAll<HTMLElement>("[data-prompt-mention='true']")) {
+    const variableId = element.dataset.variableId;
+    const displayText = variableId ? displayTextByVariableId.get(variableId) : null;
+
+    if (displayText) {
+      element.textContent = displayText;
+      element.title = displayText;
+    }
+  }
+}
+
+function watchMentionListPosition(editor: NonNullable<ReturnType<typeof useEditor>>, element: HTMLElement) {
   const virtualElement = {
+    contextElement: editor.view.dom,
     getBoundingClientRect: () => posToDOMRect(editor.view, editor.state.selection.from, editor.state.selection.to),
   };
 
-  void computePosition(virtualElement, element, {
-    middleware: [shift(), flip()],
-    placement: "bottom-start",
-    strategy: "fixed",
-  }).then(({ x, y, strategy }) => {
-    element.style.left = `${x}px`;
-    element.style.position = strategy;
-    element.style.top = `${y}px`;
-    element.style.width = "max-content";
+  function updatePosition() {
+    void computePosition(virtualElement, element, {
+      middleware: [shift(), flip()],
+      placement: "bottom-start",
+      strategy: "fixed",
+    }).then(({ x, y, strategy }) => {
+      element.style.left = `${x}px`;
+      element.style.position = strategy;
+      element.style.top = `${y}px`;
+      element.style.width = "max-content";
+    });
+  }
+
+  return autoUpdate(virtualElement, element, () => updatePosition(), {
+    animationFrame: true,
   });
 }

@@ -2,22 +2,37 @@
 
 import { EditorContent } from "@tiptap/react";
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
-import { useState } from "react";
-import { NodeCard, NodeCardFooter, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
-import { Button } from "~/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
+import { NodeCard, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
 import type { WorkflowPromptNode } from "~/features/workflow/domain/graph";
+import {
+  PROMPT_VARIABLE_INPUT_CAPACITY,
+  PROMPT_VARIABLES_TARGET_HANDLE,
+} from "~/features/workflow/domain/nodes/prompt";
 import { usePromptEditor } from "../../_hooks/use-prompt-editor";
+import { usePromptVariables } from "../../_hooks/use-prompt-variables";
+import { SocketRow } from "../socket-row";
 
 type PromptFlowNode = Node<WorkflowPromptNode["data"], WorkflowPromptNode["type"]>;
 
 export function PromptNode(props: NodeProps<PromptFlowNode>) {
-  const [displayMode, setDisplayMode] = useState<"source-value" | "source" | "value">("source-value");
+  const variables = usePromptVariables(props.id);
 
-  const editor = usePromptEditor()
+  const editor = usePromptEditor({
+    nodeId: props.id,
+    data: props.data,
+    variables,
+  });
 
   return (
     <NodeCard className="group">
+      <SocketRow
+        handleTop={64}
+        id={PROMPT_VARIABLES_TARGET_HANDLE}
+        label={`Variables (${variables.length}/${PROMPT_VARIABLE_INPUT_CAPACITY})`}
+        muted={variables.length === 0}
+      />
+      <Handle id="output" position={Position.Right} type="source" />
+
       <NodeCardHeader>
         <NodeCardTitle>Prompt</NodeCardTitle>
       </NodeCardHeader>
@@ -28,32 +43,6 @@ export function PromptNode(props: NodeProps<PromptFlowNode>) {
           </div>
         </div>
       </NodeCardPanel>
-      <NodeCardFooter className="flex justify-between gap-2">
-        <Button size="sm" type="button" variant="outline" className="nodrag nopan">
-          + Add variable
-        </Button>
-
-        <div className="flex items-center gap-2">
-          <span className="text-muted-foreground text-xs uppercase tracking-[0.24em]">Display</span>
-          <Select
-            value={displayMode}
-            onValueChange={(value) => setDisplayMode(value as "source-value" | "source" | "value")}
-          >
-            <SelectTrigger className="nodrag nopan h-8 w-40 text-xs">
-              <SelectValue>
-                {displayMode === "source-value" ? "Source + Value" : displayMode === "value" ? "Value" : "Source"}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="source-value">Source + Value</SelectItem>
-              <SelectItem value="value">Value</SelectItem>
-              <SelectItem value="source">Source</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </NodeCardFooter>
-
-      <Handle id="output" position={Position.Right} type="source" />
     </NodeCard>
   );
 }

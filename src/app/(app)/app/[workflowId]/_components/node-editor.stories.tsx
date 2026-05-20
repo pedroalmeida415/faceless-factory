@@ -3,6 +3,7 @@ import type { ComponentProps } from "react";
 import { expect, waitFor } from "storybook/test";
 import type { WorkflowImageGenerationNode, WorkflowPromptNode } from "~/features/workflow/domain/graph";
 import { NANO_BANANA_PRO_MODEL } from "~/features/workflow/domain/model-catalog";
+import { createPromptDocumentFromText } from "~/features/workflow/domain/nodes/prompt";
 import {
   createWorkflowStoreInitialState,
   WORKFLOW_STORY_PARAMETERS,
@@ -52,7 +53,9 @@ type Story = StoryObj<typeof meta>;
 // Story fixtures
 const promptNode = {
   data: {
-    text: "A cinematic product shot of a translucent perfume bottle on wet black stone.",
+    document: createPromptDocumentFromText(
+      "A cinematic product shot of a translucent perfume bottle on wet black stone.",
+    ),
   },
   id: "prompt-1",
   position: { x: 80, y: 120 },
