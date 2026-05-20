@@ -1,6 +1,6 @@
 "use client";
 
-import { Background, Controls, ReactFlow } from "@xyflow/react";
+import { Background, ReactFlow } from "@xyflow/react";
 import type { WorkflowEdge, WorkflowNode } from "~/features/workflow/domain/graph";
 import { useWorkflowStore } from "../_hooks/use-workflow-store";
 import { workflowNodeTypes } from "./nodes";
