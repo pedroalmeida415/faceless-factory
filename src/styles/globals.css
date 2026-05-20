@@ -89,17 +89,6 @@ textarea {
   background: rgba(56, 189, 248, 0.28);
 }
 
-.react-flow__edge.selected .react-flow__edge-path,
-.react-flow__edge.selected path {
-  stroke: #67e8f9;
-  stroke-width: 3;
-  filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.75));
-}
-
-.react-flow__edge.selected .react-flow__edge-interaction {
-  stroke-width: 24;
-}
-
 @theme inline {
   --font-heading: var(--font-heading);
   --font-sans: var(--font-sans);
@@ -298,4 +287,8 @@ textarea {
   pre {
     font-family: var(--font-mono);
   }
+}
+
+.nodrag {
+  cursor: default;
 }
