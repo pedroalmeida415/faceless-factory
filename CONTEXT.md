@@ -243,9 +243,9 @@ _Avoid_: Execution projection, runtime state
 - **Input Capacity** is defined by the selected model and counts connected **Edges**, not resolved array values.
 - A single **Edge** from an array-shaped value to a repeatable **Node Input** consumes one **Input Capacity** slot and can still produce multiple **Branches**.
 - An **Edge** that resolves to **No Value** still consumes **Input Capacity** until disconnected.
-- A **Repeatable Socket** shows connected **Sockets** plus exactly one empty next **Socket** until **Input Capacity** is reached.
-- **Input Capacity** text on a **Repeatable Socket** appears only on hover or focus and uses socket index, such as `Image #2 (2/3)`.
-- Connected count for a **Repeatable Socket** is shown separately from the socket label when needed.
+- A **Repeatable Socket** renders as one **Socket** whose connected **Edge** count may grow up to **Input Capacity**.
+- **Input Capacity** text on a **Repeatable Socket** uses connected count and capacity, such as `Variables (0/50)`.
+- Distinct same-type inputs, such as future first-frame and last-frame image inputs, remain separate **Sockets** rather than one repeatable **Socket**.
 - Only **Node Inputs** participate in **Branch Count** derivation; **Node Config** applies to every **Branch** without changing the **Branch Count**.
 - All connected **Node Inputs**, including repeatable **Sockets**, use **Input Alignment** to derive **Branch Count**.
 - **Input Alignment** zips array-shaped values by position, so **Asset Order** is meaningful and predictable.

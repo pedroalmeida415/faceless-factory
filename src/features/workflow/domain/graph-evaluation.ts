@@ -6,6 +6,14 @@ import {
   type WorkflowModelDefinition,
   type WorkflowModelInputSocket,
 } from "~/features/workflow/domain/model-catalog";
+import { getWorkflowAssetIds } from "~/features/workflow/domain/nodes/asset";
+import { getSortedWorkflowSelectedBatchItems } from "~/features/workflow/domain/nodes/image-generation";
+import { getWorkflowListTextValues } from "~/features/workflow/domain/nodes/list";
+import {
+  getPromptDocumentMentionedVariableIds,
+  PROMPT_VARIABLES_TARGET_HANDLE,
+  renderPromptDocumentText,
+} from "~/features/workflow/domain/nodes/prompt";
 
 export const MAX_BRANCH_COUNT = 50;
 
@@ -169,7 +177,9 @@ export function evaluateGenerationNode(input: {
 
     for (const edge of socketEdges) {
       const source = nodesById.get(edge.source);
-      const sourceValue: WorkflowSourceValue = source ? getSourceValue(source) : { kind: "no-value" };
+      const sourceValue: WorkflowSourceValue = source
+        ? getSourceValue({ edges: input.blueprint.edges, node: source, nodesById, visitedNodeIds: new Set([node.id]) })
+        : { kind: "no-value" };
 
       if (sourceValue.kind === "no-value") {
         edgeStates.push({
@@ -311,40 +321,111 @@ function blockedEvaluation(
   };
 }
 
-function getSourceValue(node: WorkflowNode): WorkflowSourceValue {
+function getSourceValue(input: {
+  readonly edges: readonly WorkflowEdge[];
+  readonly node: WorkflowNode;
+  readonly nodesById: ReadonlyMap<string, WorkflowNode>;
+  readonly visitedNodeIds: ReadonlySet<string>;
+}): WorkflowSourceValue {
+  const { edges, node, nodesById, visitedNodeIds } = input;
+
+  if (visitedNodeIds.has(node.id)) {
+    return { kind: "no-value" };
+  }
+
   if (node.type === "prompt") {
-    const text = node.data.text.trim();
-    return text ? { dataType: "text", kind: "value", refs: [{ kind: "text", value: text }] } : { kind: "no-value" };
+    return getPromptSourceValue({ edges, node, nodesById, visitedNodeIds });
   }
 
   if (node.type === "list") {
-    const refs = node.data.items.flatMap((item) => {
-      const text = item.text.trim();
-      return text ? [{ kind: "text", value: text } satisfies WorkflowBranchInputReference] : [];
-    });
+    const refs = getWorkflowListTextValues(node).map(
+      (text) => ({ kind: "text", value: text }) satisfies WorkflowBranchInputReference,
+    );
 
     return refs.length > 0 ? { dataType: "text", kind: "value", refs } : { kind: "no-value" };
   }
 
   if (node.type === "asset") {
-    const refs = node.data.assets.map(
-      (asset) => ({ kind: "asset", assetId: asset.assetId }) satisfies WorkflowBranchInputReference,
+    const refs = getWorkflowAssetIds(node).map(
+      (assetId) => ({ kind: "asset", assetId }) satisfies WorkflowBranchInputReference,
     );
     return refs.length > 0 ? { dataType: "image", kind: "value", refs } : { kind: "no-value" };
   }
 
-  const refs = [...node.data.selectedBatchItems]
-    .sort((left, right) => left.branchIndex - right.branchIndex)
-    .map(
-      (selectedBatchItem) =>
-        ({
-          branchIndex: selectedBatchItem.branchIndex,
-          kind: "generated-output",
-          nodeId: node.id,
-        }) satisfies WorkflowBranchInputReference,
-    );
+  const refs = getSortedWorkflowSelectedBatchItems(node).map(
+    (selectedBatchItem) =>
+      ({
+        branchIndex: selectedBatchItem.branchIndex,
+        kind: "generated-output",
+        nodeId: node.id,
+      }) satisfies WorkflowBranchInputReference,
+  );
 
   return refs.length > 0 ? { dataType: "image", kind: "value", refs } : { kind: "no-value" };
+}
+
+function getPromptSourceValue(input: {
+  readonly edges: readonly WorkflowEdge[];
+  readonly node: Extract<WorkflowNode, { readonly type: "prompt" }>;
+  readonly nodesById: ReadonlyMap<string, WorkflowNode>;
+  readonly visitedNodeIds: ReadonlySet<string>;
+}): WorkflowSourceValue {
+  const mentionedVariableIds = getPromptDocumentMentionedVariableIds(input.node.data.document);
+  const variableInputs = Array.from(mentionedVariableIds).map((variableId) => {
+    const edge = input.edges.find(
+      (candidate) =>
+        candidate.target === input.node.id &&
+        candidate.targetHandle === PROMPT_VARIABLES_TARGET_HANDLE &&
+        candidate.source === variableId,
+    );
+
+    if (!edge) {
+      return { id: variableId, refs: [] as readonly WorkflowBranchInputReference[] };
+    }
+
+    const source = input.nodesById.get(edge.source);
+    const sourceValue = source
+      ? getSourceValue({
+          edges: input.edges,
+          node: source,
+          nodesById: input.nodesById,
+          visitedNodeIds: new Set([...input.visitedNodeIds, input.node.id]),
+        })
+      : { kind: "no-value" as const };
+
+    if (sourceValue.kind === "no-value" || sourceValue.dataType !== "text") {
+      return { id: variableId, refs: [] as readonly WorkflowBranchInputReference[] };
+    }
+
+    return { id: variableId, refs: sourceValue.refs };
+  });
+
+  const usableVariableInputs = variableInputs.filter((variableInput) => variableInput.refs.length > 0);
+  const branchCount = usableVariableInputs.reduce(
+    (currentBranchCount, variableInput) => Math.max(currentBranchCount, variableInput.refs.length),
+    1,
+  );
+
+  if (
+    usableVariableInputs.some(
+      (variableInput) => variableInput.refs.length !== 1 && variableInput.refs.length !== branchCount,
+    )
+  ) {
+    return { kind: "no-value" };
+  }
+
+  const refs = Array.from({ length: branchCount }, (_, branchIndex) => {
+    const text = renderPromptDocumentText(input.node.data.document, (variableId) => {
+      const variableInput = variableInputs.find((candidate) => candidate.id === variableId);
+      const ref = variableInput?.refs.length === 1 ? variableInput.refs[0] : variableInput?.refs[branchIndex];
+
+      return ref?.kind === "text" ? ref.value : "";
+    }).trim();
+
+    return text ? ({ kind: "text", value: text } satisfies WorkflowBranchInputReference) : null;
+  }).filter((ref) => ref !== null);
+
+  return refs.length > 0 ? { dataType: "text", kind: "value", refs } : { kind: "no-value" };
 }
 
 function getInitialSocketStatus(input: {

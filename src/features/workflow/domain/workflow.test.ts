@@ -7,6 +7,13 @@ import {
 } from "~/features/workflow/domain/graph";
 import { createWorkflowNode, isWorkflowConnectionAllowed } from "~/features/workflow/domain/graph-editing";
 import { evaluateGenerationNode } from "~/features/workflow/domain/graph-evaluation";
+import {
+  createPromptDocumentFromText,
+  getWorkflowPromptVariables,
+  PROMPT_VARIABLES_TARGET_HANDLE,
+} from "~/features/workflow/domain/nodes/prompt";
+
+type PromptMention = { readonly id: string; readonly label: string };
 
 describe("workflow input alignment", () => {
   test("evaluates Prompt to Image Generation as one Branch with one image", () => {
@@ -52,10 +59,67 @@ describe("workflow input alignment", () => {
     ]);
   });
 
+  test("splices Prompt variables from connected text inputs", () => {
+    const evaluation = evaluateGenerationNode({
+      blueprint: graph({
+        edges: [edge("list-1", "prompt-1", PROMPT_VARIABLES_TARGET_HANDLE), edge("prompt-1", "gen-1", "prompt")],
+        nodes: [
+          promptNode("prompt-1", "A @List product shot", [{ id: "list-1", label: "List" }]),
+          listNode("list-1", ["noir", "chrome"]),
+          imageGenerationNode("gen-1"),
+        ],
+      }),
+      nodeId: "gen-1",
+    });
+
+    expect(evaluation.summary.branchCount).toBe(2);
+    expect(evaluation.branches.map((branch) => branch.inputs[0]?.ref)).toEqual([
+      { kind: "text", value: "A noir product shot" },
+      { kind: "text", value: "A chrome product shot" },
+    ]);
+  });
+
+  test("keeps unconnected Prompt variables from affecting output", () => {
+    const evaluation = evaluateGenerationNode({
+      blueprint: graph({
+        edges: [edge("list-1", "prompt-1", PROMPT_VARIABLES_TARGET_HANDLE), edge("prompt-1", "gen-1", "prompt")],
+        nodes: [
+          promptNode("prompt-1", "Static @Missing prompt", [{ id: "missing-source", label: "Missing" }]),
+          listNode("list-1", ["first", "second"]),
+          imageGenerationNode("gen-1"),
+        ],
+      }),
+      nodeId: "gen-1",
+    });
+
+    expect(evaluation.summary.branchCount).toBe(1);
+    expect(evaluation.branches[0]?.inputs[0]?.ref).toEqual({ kind: "text", value: "Static  prompt" });
+  });
+
+  test("projects connected Prompt variable options from graph inputs", () => {
+    const variables = getWorkflowPromptVariables({
+      edges: [
+        edge("list-1", "prompt-1", PROMPT_VARIABLES_TARGET_HANDLE),
+        edge("prompt-2", "prompt-1", PROMPT_VARIABLES_TARGET_HANDLE),
+      ],
+      nodes: [
+        promptNode("prompt-1", "A @List product shot"),
+        listNode("list-1", ["noir", "chrome"]),
+        promptNode("prompt-2", "seed prompt"),
+      ],
+      promptNodeId: "prompt-1",
+    });
+
+    expect(variables).toEqual([
+      { displayText: "2 branches", id: "list-1", label: "List", source: "List", value: "2 branches" },
+      { displayText: "seed prompt", id: "prompt-2", label: "Prompt", source: "Prompt", value: "seed prompt" },
+    ]);
+  });
+
   test("broadcasts a single Asset across List Branches", () => {
     const evaluation = evaluateGenerationNode({
       blueprint: graph({
-        edges: [edge("list-1", "gen-1", "prompt"), edge("asset-1", "gen-1", "image:0")],
+        edges: [edge("list-1", "gen-1", "prompt"), edge("asset-1", "gen-1", "image")],
         nodes: [
           listNode("list-1", ["first", "second", "third"]),
           assetNode("asset-1", ["asset-a"]),
@@ -81,7 +145,7 @@ describe("workflow input alignment", () => {
   test("zips List and Asset arrays by order", () => {
     const evaluation = evaluateGenerationNode({
       blueprint: graph({
-        edges: [edge("list-1", "gen-1", "prompt"), edge("asset-1", "gen-1", "image:0")],
+        edges: [edge("list-1", "gen-1", "prompt"), edge("asset-1", "gen-1", "image")],
         nodes: [
           listNode("list-1", ["first", "second", "third"]),
           assetNode("asset-1", ["asset-a", "asset-b", "asset-c"]),
@@ -104,7 +168,7 @@ describe("workflow input alignment", () => {
   test("blocks mismatched non-single arrays", () => {
     const evaluation = evaluateGenerationNode({
       blueprint: graph({
-        edges: [edge("list-1", "gen-1", "prompt"), edge("asset-1", "gen-1", "image:0")],
+        edges: [edge("list-1", "gen-1", "prompt"), edge("asset-1", "gen-1", "image")],
         nodes: [
           listNode("list-1", ["first", "second"]),
           assetNode("asset-1", ["asset-a", "asset-b", "asset-c"]),
@@ -121,7 +185,7 @@ describe("workflow input alignment", () => {
   test("ignores optional No Value inputs for alignment while keeping capacity usage", () => {
     const evaluation = evaluateGenerationNode({
       blueprint: graph({
-        edges: [edge("list-1", "gen-1", "prompt"), edge("asset-1", "gen-1", "image:0")],
+        edges: [edge("list-1", "gen-1", "prompt"), edge("asset-1", "gen-1", "image")],
         nodes: [
           listNode("list-1", ["first", "second", "third"]),
           assetNode("asset-1", []),
@@ -188,7 +252,7 @@ describe("workflow input alignment", () => {
   test("blocks incompatible edge data types", () => {
     const evaluation = evaluateGenerationNode({
       blueprint: graph({
-        edges: [edge("prompt-1", "gen-1", "image:0")],
+        edges: [edge("prompt-1", "gen-1", "image")],
         nodes: [promptNode("prompt-1", "not an image"), imageGenerationNode("gen-1")],
       }),
       nodeId: "gen-1",
@@ -223,6 +287,9 @@ describe("workflow graph editing", () => {
     });
     expect(listNode.id).toMatch(/^list-/);
     expect(listNode.type === "list" ? listNode.data.items[0]?.id : "").toMatch(/^item-/);
+    expect(createWorkflowNode({ position: { x: 0, y: 0 }, type: "prompt" }).data).toEqual({
+      document: createPromptDocumentFromText(""),
+    });
 
     expect(createWorkflowNode({ position: { x: 0, y: 0 }, type: "imageGeneration" }).data).toEqual({
       branchBatchSize: 1,
@@ -234,7 +301,7 @@ describe("workflow graph editing", () => {
 
   test("allows only connections matching target socket data type and capacity", () => {
     const nodes = [promptNode("prompt-1", "prompt"), assetNode("asset-1", ["asset-1"]), imageGenerationNode("gen-1")];
-    const imageEdges = [edge("asset-a", "gen-1", "image:0"), edge("asset-b", "gen-1", "image:1")];
+    const imageEdges = [edge("asset-a", "gen-1", "image"), edge("asset-b", "gen-1", "image")];
 
     expect(
       isWorkflowConnectionAllowed({
@@ -245,22 +312,51 @@ describe("workflow graph editing", () => {
     ).toBe(true);
     expect(
       isWorkflowConnectionAllowed({
-        connection: { source: "prompt-1", target: "gen-1", targetHandle: "image:0" },
+        connection: { source: "prompt-1", target: "gen-1", targetHandle: "image" },
         edges: [],
         nodes,
       }),
     ).toBe(false);
     expect(
       isWorkflowConnectionAllowed({
-        connection: { source: "asset-1", target: "gen-1", targetHandle: "image:2" },
+        connection: { source: "asset-1", target: "gen-1", targetHandle: "image" },
         edges: imageEdges,
         nodes,
       }),
     ).toBe(true);
     expect(
       isWorkflowConnectionAllowed({
-        connection: { source: "asset-1", target: "gen-1", targetHandle: "image:3" },
-        edges: [...imageEdges, edge("asset-c", "gen-1", "image:2")],
+        connection: { source: "asset-1", target: "gen-1", targetHandle: "image" },
+        edges: [...imageEdges, edge("asset-c", "gen-1", "image")],
+        nodes,
+      }),
+    ).toBe(false);
+  });
+
+  test("allows primitive text connections into the Prompt variables socket up to capacity", () => {
+    const prompt = promptNode("prompt-1", "A @List prompt", [{ id: "list-1", label: "List" }]);
+    const nodes = [prompt, listNode("list-1", ["noir"]), assetNode("asset-1", ["asset-1"])];
+
+    expect(
+      isWorkflowConnectionAllowed({
+        connection: { source: "list-1", target: "prompt-1", targetHandle: PROMPT_VARIABLES_TARGET_HANDLE },
+        edges: [],
+        nodes,
+      }),
+    ).toBe(true);
+    expect(
+      isWorkflowConnectionAllowed({
+        connection: { source: "asset-1", target: "prompt-1", targetHandle: PROMPT_VARIABLES_TARGET_HANDLE },
+        edges: [],
+        nodes,
+      }),
+    ).toBe(false);
+    expect(
+      isWorkflowConnectionAllowed({
+        connection: { source: "list-1", target: "prompt-1", targetHandle: PROMPT_VARIABLES_TARGET_HANDLE },
+        edges: Array.from({ length: 50 }, (_, index) =>
+          edge(`list-${index}`, "prompt-1", PROMPT_VARIABLES_TARGET_HANDLE),
+        ),
         nodes,
       }),
     ).toBe(false);
@@ -282,13 +378,45 @@ function graph(input: {
   };
 }
 
-function promptNode(id: string, text: string): WorkflowNode {
+function promptNode(id: string, text: string, mentions: readonly PromptMention[]): WorkflowNode;
+function promptNode(id: string, text: string): WorkflowNode;
+function promptNode(id: string, text: string, mentions: readonly PromptMention[] = []): WorkflowNode {
+  const content = createPromptContent(text, mentions);
+
   return {
-    data: { text },
+    data: {
+      document: { content: [{ content, type: "paragraph" }], type: "doc" },
+    },
     id,
     position: { x: 0, y: 0 },
     type: "prompt",
   };
+}
+
+function createPromptContent(text: string, mentions: readonly PromptMention[]) {
+  const content: NonNullable<ReturnType<typeof createPromptDocumentFromText>["content"]>[number]["content"] = [];
+  let remaining = text;
+
+  while (remaining) {
+    const nextMention = mentions
+      .map((mention) => ({ index: remaining.indexOf(`@${mention.label}`), mention }))
+      .filter((candidate) => candidate.index >= 0)
+      .sort((left, right) => left.index - right.index)[0];
+
+    if (!nextMention) {
+      content.push({ text: remaining, type: "text" });
+      break;
+    }
+
+    if (nextMention.index > 0) {
+      content.push({ text: remaining.slice(0, nextMention.index), type: "text" });
+    }
+
+    content.push({ attrs: { id: nextMention.mention.id, label: nextMention.mention.label }, type: "mention" });
+    remaining = remaining.slice(nextMention.index + nextMention.mention.label.length + 1);
+  }
+
+  return content;
 }
 
 function listNode(id: string, items: readonly string[]): WorkflowNode {

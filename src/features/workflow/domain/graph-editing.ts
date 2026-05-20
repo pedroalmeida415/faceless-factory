@@ -1,6 +1,19 @@
 import type { WorkflowDataType, WorkflowModelDefinition } from "~/features/workflow/domain/model-catalog";
-import { NANO_BANANA_PRO_MODEL, WORKFLOW_MODEL_CATALOG } from "~/features/workflow/domain/model-catalog";
+import { WORKFLOW_MODEL_CATALOG } from "~/features/workflow/domain/model-catalog";
+import { createDefaultWorkflowAssetNodeData } from "~/features/workflow/domain/nodes/asset";
+import { createDefaultWorkflowImageGenerationNodeData } from "~/features/workflow/domain/nodes/image-generation";
+import { createDefaultWorkflowListNodeData } from "~/features/workflow/domain/nodes/list";
+import {
+  createDefaultWorkflowPromptNodeData,
+  PROMPT_VARIABLE_INPUT_CAPACITY,
+  PROMPT_VARIABLES_TARGET_HANDLE,
+} from "~/features/workflow/domain/nodes/prompt";
 import type { WorkflowEdge, WorkflowNode } from "./graph";
+
+export {
+  PROMPT_VARIABLE_INPUT_CAPACITY,
+  PROMPT_VARIABLES_TARGET_HANDLE,
+} from "~/features/workflow/domain/nodes/prompt";
 
 type WorkflowPosition = WorkflowNode["position"];
 
@@ -21,7 +34,7 @@ export function createWorkflowNode(input: CreateWorkflowNodeInput): WorkflowNode
 
   if (input.type === "prompt") {
     return {
-      data: { text: "" },
+      data: createDefaultWorkflowPromptNodeData(),
       id,
       position: input.position,
       type: input.type,
@@ -30,7 +43,7 @@ export function createWorkflowNode(input: CreateWorkflowNodeInput): WorkflowNode
 
   if (input.type === "list") {
     return {
-      data: { items: [{ id: `item-${crypto.randomUUID()}`, text: "" }] },
+      data: createDefaultWorkflowListNodeData(),
       id,
       position: input.position,
       type: input.type,
@@ -38,16 +51,11 @@ export function createWorkflowNode(input: CreateWorkflowNodeInput): WorkflowNode
   }
 
   if (input.type === "asset") {
-    return { data: { assets: [] }, id, position: input.position, type: input.type };
+    return { data: createDefaultWorkflowAssetNodeData(), id, position: input.position, type: input.type };
   }
 
   return {
-    data: {
-      branchBatchSize: 1,
-      config: NANO_BANANA_PRO_MODEL.defaultConfig,
-      modelId: NANO_BANANA_PRO_MODEL.modelId,
-      selectedBatchItems: [],
-    },
+    data: createDefaultWorkflowImageGenerationNodeData(),
     id,
     position: input.position,
     type: input.type,
@@ -76,20 +84,14 @@ export function isWorkflowConnectionAllowed(input: {
 
   const sourceDataType = getWorkflowNodeOutputDataType(source, modelCatalog);
 
-  if (target.type !== "imageGeneration") {
-    return false;
-  }
-
-  const targetModel = modelCatalog.find((model) => model.modelId === target.data.modelId);
-  const targetSocketId = parseWorkflowTargetHandle(connection.targetHandle).socketId;
-  const targetSocket = targetModel?.inputSockets.find((socket) => socket.id === targetSocketId);
+  const targetSocket = getWorkflowTargetSocket(target, connection.targetHandle, modelCatalog);
 
   if (!targetSocket || !sourceDataType || sourceDataType !== targetSocket.dataType) {
     return false;
   }
 
   const connectedEdgeCount = edges.filter(
-    (edge) => edge.target === target.id && parseWorkflowTargetHandle(edge.targetHandle).socketId === targetSocket.id,
+    (edge) => edge.target === target.id && getWorkflowTargetSocketId(edge.targetHandle, target) === targetSocket.id,
   ).length;
 
   return connectedEdgeCount < targetSocket.capacity;
@@ -128,4 +130,40 @@ function getWorkflowNodeOutputDataType(
   }
 
   return modelCatalog.find((model) => model.modelId === node.data.modelId)?.generationKind ?? null;
+}
+
+function getWorkflowTargetSocket(
+  node: WorkflowNode,
+  targetHandle: string,
+  modelCatalog: readonly WorkflowModelDefinition[],
+) {
+  if (node.type === "imageGeneration") {
+    const targetModel = modelCatalog.find((model) => model.modelId === node.data.modelId);
+    const targetSocketId = parseWorkflowTargetHandle(targetHandle).socketId;
+
+    return targetModel?.inputSockets.find((socket) => socket.id === targetSocketId) ?? null;
+  }
+
+  if (node.type === "prompt") {
+    return targetHandle === PROMPT_VARIABLES_TARGET_HANDLE
+      ? {
+          capacity: PROMPT_VARIABLE_INPUT_CAPACITY,
+          dataType: "text",
+          id: PROMPT_VARIABLES_TARGET_HANDLE,
+          label: "Variables",
+          repeatable: true,
+          required: false,
+        }
+      : null;
+  }
+
+  return null;
+}
+
+function getWorkflowTargetSocketId(targetHandle: string | null | undefined, target: WorkflowNode) {
+  if (target.type === "prompt") {
+    return targetHandle ?? "";
+  }
+
+  return parseWorkflowTargetHandle(targetHandle).socketId;
 }

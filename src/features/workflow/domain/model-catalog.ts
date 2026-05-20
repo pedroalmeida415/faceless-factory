@@ -1,5 +1,7 @@
 import { z } from "zod";
-import { WorkflowConfigSchema } from "~/features/workflow/domain/graph";
+
+export const WorkflowConfigValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+export const WorkflowConfigSchema = z.record(z.string(), WorkflowConfigValueSchema);
 
 export const WorkflowDataTypeSchema = z.enum(["text", "image", "video"]);
 export const WorkflowGenerationKindSchema = z.enum(["image", "video"]);
