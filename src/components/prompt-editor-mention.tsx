@@ -114,8 +114,8 @@ export const PromptEditorMention = forwardRef<PromptEditorMentionHandle, PromptE
 
   return (
     <Frame>
-      <FramePanel className="overflow-hidden p-0">
-        <ScrollArea className="max-h-75" fitContent scrollbarGutter scrollFade>
+      <FramePanel className="p-0">
+        <ScrollArea className="max-h-75" scrollbarGutter scrollFade>
           <div className="p-1">
             {props.items.length === 0 && (
               <Empty className="md:py-6">

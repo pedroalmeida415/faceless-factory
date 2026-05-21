@@ -40,12 +40,10 @@ export function PromptNode(props: NodeProps<PromptFlowNode>) {
       <NodeCardPanel>
         <ScrollArea
           className="nodrag nopan nowheel max-h-96 cursor-text rounded-lg border bg-muted"
-          fitContent
+
           scrollFade
         >
-          <div className="px-3 py-2">
-            <EditorContent editor={editor} />
-          </div>
+          <EditorContent className="px-3 py-2" editor={editor} />
         </ScrollArea>
       </NodeCardPanel>
     </NodeCard>

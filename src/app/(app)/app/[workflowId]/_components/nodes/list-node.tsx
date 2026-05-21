@@ -127,25 +127,23 @@ export function ListNode(props: NodeProps<ListFlowNode>) {
           <NodeCardTitle>List</NodeCardTitle>
         </NodeCardHeader>
         <NodeCardPanel className="p-0">
-          <div className="nodrag nopan nowheel overflow-hidden">
-            <ScrollArea className="max-h-110" fitContent scrollFade>
-              <div className="p-6">
-                {props.data.items.map((item, index) => (
-                  <ListItem
-                    key={item.id}
-                    ref={registerInput(item.id)}
-                    index={index}
-                    item={item}
-                    instanceId={instanceId}
-                    onBlur={handleItemBlur}
-                    onKeyDown={handleItemKeyDown}
-                    onRemove={removeItem}
-                    onReorder={reorderItem}
-                  />
-                ))}
-              </div>
-            </ScrollArea>
-          </div>
+          <ScrollArea className="nodrag nopan nowheel max-h-110" scrollFade>
+            <div className="p-6">
+              {props.data.items.map((item, index) => (
+                <ListItem
+                  key={item.id}
+                  ref={registerInput(item.id)}
+                  index={index}
+                  item={item}
+                  instanceId={instanceId}
+                  onBlur={handleItemBlur}
+                  onKeyDown={handleItemKeyDown}
+                  onRemove={removeItem}
+                  onReorder={reorderItem}
+                />
+              ))}
+            </div>
+          </ScrollArea>
         </NodeCardPanel>
       </NodeCard>
       <CardFrameFooter>

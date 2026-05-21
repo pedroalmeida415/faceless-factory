@@ -7,12 +7,10 @@ import { cn } from "~/lib/utils";
 export function ScrollArea({
   className,
   children,
-  fitContent = false,
   scrollFade = false,
   scrollbarGutter = false,
   ...props
 }: ScrollAreaPrimitive.Root.Props & {
-  fitContent?: boolean;
   scrollFade?: boolean;
   scrollbarGutter?: boolean;
 }): React.ReactElement {
@@ -23,8 +21,7 @@ export function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         className={cn(
-          "h-full rounded-[inherit] outline-none transition-shadows focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background data-has-overflow-y:overscroll-y-contain data-has-overflow-x:overscroll-x-contain",
-          fitContent && "h-auto max-h-[inherit]",
+          "h-full rounded-[inherit] outline-none max-h-[inherit] transition-shadows focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background data-has-overflow-y:overscroll-y-contain data-has-overflow-x:overscroll-x-contain",
           scrollFade &&
           "mask-t-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-y-start)))] mask-b-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-y-end)))] mask-l-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-x-start)))] mask-r-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-x-end)))] [--fade-size:1.5rem]",
           scrollbarGutter &&
@@ -32,7 +29,9 @@ export function ScrollArea({
         )}
         data-slot="scroll-area-viewport"
       >
-        {children}
+        <ScrollAreaPrimitive.Content data-slot="scroll-area-content">
+          {children}
+        </ScrollAreaPrimitive.Content>
       </ScrollAreaPrimitive.Viewport>
       <ScrollBar orientation="vertical" />
       <ScrollBar orientation="horizontal" />
