@@ -287,8 +287,8 @@ textarea {
   pre {
     font-family: var(--font-mono);
   }
-}
 
-.nodrag {
-  cursor: default;
+  .nodrag {
+    cursor: default;
+  }
 }
