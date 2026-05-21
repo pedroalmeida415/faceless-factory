@@ -2,7 +2,7 @@
 
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 import { CircleAlertIcon, GripVerticalIcon, Trash2Icon } from "lucide-react";
-import { type KeyboardEvent, type RefCallback, useCallback, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type RefCallback, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NodeCard, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
 import { Button } from "~/components/ui/button";
 import { CardFrame, CardFrameFooter } from "~/components/ui/card";
@@ -21,7 +21,9 @@ export function ListNode(props: NodeProps<ListFlowNode>) {
   const updateNodeData = useWorkflowStore((store) => store.updateNodeData);
 
   const inputRefs = useRef<Record<string, HTMLInputElement>>({});
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [instanceId] = useState(() => Symbol("list-node"));
+  const [hasVerticalOverflow, setHasVerticalOverflow] = useState(false);
 
   const createItem = () => {
     const nextData = structuredClone(props.data);
@@ -119,6 +121,26 @@ export function ListNode(props: NodeProps<ListFlowNode>) {
     };
   };
 
+  useLayoutEffect(() => {
+    const element = scrollContainerRef.current;
+
+    if (!element || props.data.items.length === 0) {
+      setHasVerticalOverflow(false);
+      return;
+    }
+
+    const updateOverflow = () => {
+      setHasVerticalOverflow(element.scrollHeight > element.clientHeight);
+    };
+
+    updateOverflow();
+
+    const resizeObserver = new ResizeObserver(updateOverflow);
+    resizeObserver.observe(element);
+
+    return () => resizeObserver.disconnect();
+  }, [props.data.items.length]);
+
   return (
     <CardFrame>
       <NodeCard>
@@ -126,20 +148,25 @@ export function ListNode(props: NodeProps<ListFlowNode>) {
           <NodeCardTitle>List</NodeCardTitle>
         </NodeCardHeader>
         <NodeCardPanel>
-          <div className="nodrag flex flex-col">
-            {props.data.items.map((item, index) => (
-              <ListItem
-                key={item.id}
-                ref={registerInput(item.id)}
-                index={index}
-                item={item}
-                instanceId={instanceId}
-                onBlur={handleItemBlur}
-                onKeyDown={handleItemKeyDown}
-                onRemove={removeItem}
-                onReorder={reorderItem}
-              />
-            ))}
+          <div className="nodrag nopan nowheel overflow-hidden">
+            <div
+              ref={scrollContainerRef}
+              className={cn("max-h-102 overflow-y-auto py-2", hasVerticalOverflow && "pr-2.75")}
+            >
+              {props.data.items.map((item, index) => (
+                <ListItem
+                  key={item.id}
+                  ref={registerInput(item.id)}
+                  index={index}
+                  item={item}
+                  instanceId={instanceId}
+                  onBlur={handleItemBlur}
+                  onKeyDown={handleItemKeyDown}
+                  onRemove={removeItem}
+                  onReorder={reorderItem}
+                />
+              ))}
+            </div>
           </div>
         </NodeCardPanel>
       </NodeCard>
@@ -186,10 +213,7 @@ function ListItem({
 
   return (
     <div ref={itemRef} className="relative py-1 first:pt-0 last:pb-0">
-      {closestEdge === "top" && (
-        <div className="pointer-events-none absolute top-0 left-1/2 z-10 h-0.5 w-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-ring" />
-      )}
-      <div className={cn("group/list-item flex items-center gap-2 transition-opacity", isDragging && "opacity-40")}>
+      <div className={cn("group/list-item flex items-center gap-3 transition-opacity", isDragging && "opacity-40")}>
         <div aria-hidden="true" className="w-4.5 shrink-0 select-none text-muted-foreground text-xs/0 tabular-nums">
           {index + 1}
         </div>
