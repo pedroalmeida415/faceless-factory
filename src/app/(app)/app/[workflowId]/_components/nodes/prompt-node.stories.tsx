@@ -53,6 +53,22 @@ export const Empty = {
   args: {
     initialState: createWorkflowStoreInitialState({ nodes: [emptyPromptNode] }),
   },
+  play: async (context) => {
+    await NodeEditorStory.play(context);
+    const { canvasElement } = context;
+    const canvas = within(canvasElement);
+    const input = canvas.getByRole("textbox");
+    const placeholderNode = input.querySelector(".is-editor-empty[data-placeholder]");
+
+    await expect(placeholderNode).toHaveAttribute("data-placeholder", "Write a prompt. Type @ to reference variables.");
+    await expect(placeholderNode).toBeInstanceOf(Element);
+    if (!(placeholderNode instanceof Element)) {
+      return;
+    }
+    await expect(window.getComputedStyle(placeholderNode, "::before").content).toBe(
+      '"Write a prompt. Type @ to reference variables."',
+    );
+  },
 } satisfies Story;
 
 export const CommitsOnBlur = {

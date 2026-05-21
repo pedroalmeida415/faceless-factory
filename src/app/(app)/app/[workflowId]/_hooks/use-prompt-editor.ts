@@ -42,7 +42,10 @@ export function usePromptEditor(input: {
   const editorProps = useMemo(
     () => ({
       attributes: {
-        class: "min-h-40 outline-none",
+        "aria-label": "Prompt text",
+        class:
+          "min-h-40 outline-none [&_.is-editor-empty:first-child::before]:pointer-events-none [&_.is-editor-empty:first-child::before]:float-left [&_.is-editor-empty:first-child::before]:h-0 [&_.is-editor-empty:first-child::before]:text-muted-foreground [&_.is-editor-empty:first-child::before]:content-[attr(data-placeholder)]",
+        role: "textbox",
       },
     }),
     [],
