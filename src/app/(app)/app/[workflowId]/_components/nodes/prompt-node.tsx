@@ -3,6 +3,7 @@
 import { EditorContent } from "@tiptap/react";
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 import { NodeCard, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
+import { ScrollArea } from "~/components/ui/scroll-area";
 import type { WorkflowPromptNode } from "~/features/workflow/domain/graph";
 import {
   PROMPT_VARIABLE_INPUT_CAPACITY,
@@ -37,11 +38,15 @@ export function PromptNode(props: NodeProps<PromptFlowNode>) {
         <NodeCardTitle>Prompt</NodeCardTitle>
       </NodeCardHeader>
       <NodeCardPanel>
-        <div className="nodrag nopan nowheel cursor-text overflow-hidden rounded-lg border bg-muted">
-          <div className="max-h-96 overflow-y-auto rounded-lg px-3 py-2">
+        <ScrollArea
+          className="nodrag nopan nowheel max-h-96 cursor-text rounded-lg border bg-muted"
+          fitContent
+          scrollFade
+        >
+          <div className="px-3 py-2">
             <EditorContent editor={editor} />
           </div>
-        </div>
+        </ScrollArea>
       </NodeCardPanel>
     </NodeCard>
   );

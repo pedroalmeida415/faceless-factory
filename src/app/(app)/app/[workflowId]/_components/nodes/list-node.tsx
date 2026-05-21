@@ -2,13 +2,14 @@
 
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 import { CircleAlertIcon, GripVerticalIcon, Trash2Icon } from "lucide-react";
-import { type KeyboardEvent, type RefCallback, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type RefCallback, useCallback, useEffect, useRef, useState } from "react";
 import { NodeCard, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
 import { Button } from "~/components/ui/button";
 import { CardFrame, CardFrameFooter } from "~/components/ui/card";
 import { Field } from "~/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
 import { Kbd } from "~/components/ui/kbd";
+import { ScrollArea } from "~/components/ui/scroll-area";
 import type { WorkflowListNode } from "~/features/workflow/domain/graph";
 import { cn } from "~/lib/utils";
 import { type OnListItemReorder, reorderListItems, useDraggableListItem } from "../../_hooks/use-draggable-list-item";
@@ -21,9 +22,7 @@ export function ListNode(props: NodeProps<ListFlowNode>) {
   const updateNodeData = useWorkflowStore((store) => store.updateNodeData);
 
   const inputRefs = useRef<Record<string, HTMLInputElement>>({});
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [instanceId] = useState(() => Symbol("list-node"));
-  const [hasVerticalOverflow, setHasVerticalOverflow] = useState(false);
 
   const createItem = () => {
     const nextData = structuredClone(props.data);
@@ -121,52 +120,31 @@ export function ListNode(props: NodeProps<ListFlowNode>) {
     };
   };
 
-  useLayoutEffect(() => {
-    const element = scrollContainerRef.current;
-
-    if (!element || props.data.items.length === 0) {
-      setHasVerticalOverflow(false);
-      return;
-    }
-
-    const updateOverflow = () => {
-      setHasVerticalOverflow(element.scrollHeight > element.clientHeight);
-    };
-
-    updateOverflow();
-
-    const resizeObserver = new ResizeObserver(updateOverflow);
-    resizeObserver.observe(element);
-
-    return () => resizeObserver.disconnect();
-  }, [props.data.items.length]);
-
   return (
     <CardFrame>
       <NodeCard>
         <NodeCardHeader>
           <NodeCardTitle>List</NodeCardTitle>
         </NodeCardHeader>
-        <NodeCardPanel>
+        <NodeCardPanel className="p-0">
           <div className="nodrag nopan nowheel overflow-hidden">
-            <div
-              ref={scrollContainerRef}
-              className={cn("max-h-102 overflow-y-auto py-2", hasVerticalOverflow && "pr-2.75")}
-            >
-              {props.data.items.map((item, index) => (
-                <ListItem
-                  key={item.id}
-                  ref={registerInput(item.id)}
-                  index={index}
-                  item={item}
-                  instanceId={instanceId}
-                  onBlur={handleItemBlur}
-                  onKeyDown={handleItemKeyDown}
-                  onRemove={removeItem}
-                  onReorder={reorderItem}
-                />
-              ))}
-            </div>
+            <ScrollArea className="max-h-110" fitContent scrollFade>
+              <div className="p-6">
+                {props.data.items.map((item, index) => (
+                  <ListItem
+                    key={item.id}
+                    ref={registerInput(item.id)}
+                    index={index}
+                    item={item}
+                    instanceId={instanceId}
+                    onBlur={handleItemBlur}
+                    onKeyDown={handleItemKeyDown}
+                    onRemove={removeItem}
+                    onReorder={reorderItem}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
           </div>
         </NodeCardPanel>
       </NodeCard>
@@ -213,7 +191,7 @@ function ListItem({
 
   return (
     <div ref={itemRef} className="relative py-1 first:pt-0 last:pb-0">
-      <div className={cn("group/list-item flex items-center gap-3 transition-opacity", isDragging && "opacity-40")}>
+      <div className={cn("group/list-item flex items-center gap-4 transition-opacity", isDragging && "opacity-40")}>
         <div aria-hidden="true" className="w-4.5 shrink-0 select-none text-muted-foreground text-xs/0 tabular-nums">
           {index + 1}
         </div>

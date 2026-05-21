@@ -13,6 +13,7 @@ import { cn } from "~/lib/utils";
 import { Button } from "./ui/button";
 import { Empty, EmptyContent } from "./ui/empty";
 import { Frame, FramePanel } from "./ui/frame";
+import { ScrollArea } from "./ui/scroll-area";
 
 export type PromptEditorVariable = WorkflowPromptVariable;
 
@@ -114,32 +115,34 @@ export const PromptEditorMention = forwardRef<PromptEditorMentionHandle, PromptE
   return (
     <Frame>
       <FramePanel className="overflow-hidden p-0">
-        <div className="max-h-75 overflow-y-auto p-1">
-          {props.items.length === 0 && (
-            <Empty className="md:py-6">
-              <EmptyContent>Connect nodes to reference them here.</EmptyContent>
-            </Empty>
-          )}
-          {props.items.map((item, index) => {
-            const highlighted = selectedItemIndex === index;
+        <ScrollArea className="max-h-75" fitContent scrollbarGutter scrollFade>
+          <div className="p-1">
+            {props.items.length === 0 && (
+              <Empty className="md:py-6">
+                <EmptyContent>Connect nodes to reference them here.</EmptyContent>
+              </Empty>
+            )}
+            {props.items.map((item, index) => {
+              const highlighted = selectedItemIndex === index;
 
-            return (
-              <Button
-                variant="ghost"
-                className={cn(
-                  "block h-auto! w-64 py-3 text-left text-sm transition-colors *:leading-none",
-                  highlighted ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
-                )}
-                key={item.id}
-                onClick={() => selectItem(index)}
-                onMouseDown={(event) => event.preventDefault()}
-              >
-                <span className="mb-1 block font-medium">{item.label}</span>
-                <span className="block truncate text-xs">{item.value?.trim() || "Empty"}</span>
-              </Button>
-            );
-          })}
-        </div>
+              return (
+                <Button
+                  variant="ghost"
+                  className={cn(
+                    "block h-auto! w-64 py-3 text-left text-sm transition-colors *:leading-none",
+                    highlighted ? "bg-accent text-accent-foreground" : "hover:bg-accent/60",
+                  )}
+                  key={item.id}
+                  onClick={() => selectItem(index)}
+                  onMouseDown={(event) => event.preventDefault()}
+                >
+                  <span className="mb-1 block font-medium">{item.label}</span>
+                  <span className="block truncate text-xs">{item.value?.trim() || "Empty"}</span>
+                </Button>
+              );
+            })}
+          </div>
+        </ScrollArea>
       </FramePanel>
     </Frame>
   );
