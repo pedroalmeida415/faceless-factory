@@ -44,15 +44,7 @@ function getClosestEdge(element: HTMLElement, input: { readonly clientY: number 
   return input.clientY < rect.top + rect.height / 2 ? "top" : "bottom";
 }
 
-function renderListItemDragPreview({
-  container,
-  _index,
-  text,
-}: {
-  readonly container: HTMLElement;
-  readonly _index: number;
-  readonly text: string;
-}) {
+function renderListItemDragPreview({ container, text }: { readonly container: HTMLElement; readonly text: string }) {
   const preview = document.createElement("div");
   preview.className =
     "block max-w-72 truncate rounded-md border border-border bg-popover px-2 py-1 text-base text-popover-foreground shadow-md";
@@ -173,7 +165,7 @@ export function useDraggableListItem({
             nativeSetDragImage,
             getOffset: pointerOutsideOfPreview({ x: "12px", y: "8px" }),
             render({ container }) {
-              return renderListItemDragPreview({ container, index, text: previewText });
+              return renderListItemDragPreview({ container, text: previewText });
             },
           });
         },
