@@ -9,10 +9,13 @@ export function NodeCard({ className, render, ...props }: useRender.ComponentPro
   return <Card className={cn("w-115", className)} render={render} {...props} />;
 }
 
+export function NodeCardHeader({ className, render, ...props }: useRender.ComponentProps<"div">): React.ReactElement {
+  return <CardHeader className={cn("border-b", className)} render={render} {...props} />;
+}
+
 export {
   CardAction as NodeCardAction,
   CardFooter as NodeCardFooter,
-  CardHeader as NodeCardHeader,
   CardPanel as NodeCardPanel,
   CardTitle as NodeCardTitle,
 };
