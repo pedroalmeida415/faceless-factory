@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
+import { expect, within } from "storybook/test";
 import type { WorkflowImageGenerationNode } from "~/features/workflow/domain/graph";
 import { NANO_BANANA_PRO_MODEL } from "~/features/workflow/domain/model-catalog";
 import {
@@ -69,11 +70,42 @@ export const Ready = {
   args: {
     initialState: createWorkflowStoreInitialState(readyGraph),
   },
+  play: async (context) => {
+    await NodeEditorStory.play(context);
+    const canvas = within(context.canvasElement);
+
+    await expect(canvas.getByText("Nano Banana Pro / Batch size 2")).toBeVisible();
+    await expect(canvas.getByText("Ready")).toBeVisible();
+    await expect(canvas.getByText("2 Branches")).toBeVisible();
+    await expect(canvas.getByText("4 outputs")).toBeVisible();
+    await expect(canvas.getByText("4 credits")).toBeVisible();
+    await expect(canvas.getByRole("heading", { name: "Branch 1" })).toBeVisible();
+    await expect(canvas.getByRole("heading", { name: "Branch 2" })).toBeVisible();
+    await expect(canvas.getByLabelText("Branch 1 image 1")).toBeVisible();
+    await expect(canvas.getByLabelText("Branch 1 image 2")).toBeVisible();
+    await expect(canvas.getByLabelText("Branch 2 image 1")).toBeVisible();
+    await expect(canvas.getByLabelText("Branch 2 image 2")).toBeVisible();
+    const runButton = canvas.getByRole("button", { name: "Run" });
+    await expect(runButton).toBeVisible();
+    await expect(runButton.closest('[data-slot="card-footer"]')).toBeTruthy();
+    await expect(runButton.closest('[data-slot="card-frame-footer"]')).toBeNull();
+  },
 } satisfies Story;
 
 export const Blocked = {
   args: {
     initialState: createWorkflowStoreInitialState({ edges: [], nodes: [blockedImageGenerationNode] }),
+  },
+  play: async (context) => {
+    await NodeEditorStory.play(context);
+    const canvas = within(context.canvasElement);
+
+    await expect(canvas.getByText("Nano Banana Pro / Batch size 2")).toBeVisible();
+    await expect(canvas.getAllByText("Blocked")[0]).toBeVisible();
+    await expect(canvas.getByText("missing required input")).toBeVisible();
+    await expect(canvas.getByText("0 Branches")).toBeVisible();
+    await expect(canvas.getByText("0 outputs")).toBeVisible();
+    await expect(canvas.getByText("0 credits")).toBeVisible();
   },
 } satisfies Story;
 
