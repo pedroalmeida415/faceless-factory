@@ -153,6 +153,8 @@ For user-facing async UI, include appropriate loading, transition, error, and em
 
 Use Zustand for external state store when multiple components read or write the same client state. Use React Query/tRPC seams for server state, cache invalidation, optimistic updates, and typed API behavior.
 
+Use Tailwind theme variables as the design-token API. Prefer semantic utilities such as `bg-muted`, `text-muted-foreground`, `border-border`, `rounded-xl`, and named custom utilities generated from `@theme` variables in `src/styles/globals.css`. Do not introduce one-off color alpha utilities, arbitrary pixel/rem values, or dynamically concatenated Tailwind class names for reusable UI decisions. When a reusable size, color, radius, shadow, aspect ratio, or animation is missing, add an appropriate `@theme` token first and consume it through complete static utility classes. For runtime-calculated geometry, prefer static Tailwind classes plus CSS properties/variables that reference existing theme tokens over raw hard-coded measurements in JS.
+
 ## 9. Security, telemetry, and idempotency
 
 Sanitize user inputs with schemas or typed API seams. Never log secrets, credentials, raw PII, raw prompts, sensitive payloads, or unredacted media.

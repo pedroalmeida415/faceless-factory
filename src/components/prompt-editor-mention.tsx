@@ -154,7 +154,7 @@ export function createMentionConfig() {
   return {
     HTMLAttributes: {
       class:
-        "prompt-editor-mention align-baseline rounded-md border border-cyan-300/30 bg-cyan-300/10 px-1.5 py-0.5 font-medium text-cyan-100 whitespace-pre-wrap!",
+        "prompt-editor-mention align-baseline rounded-md border border-info/32 bg-info/8 px-1.5 py-0.5 font-medium text-info-foreground whitespace-pre-wrap!",
     },
     renderHTML: ({ node, options }) => [
       "span",

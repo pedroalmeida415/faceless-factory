@@ -72,7 +72,7 @@ export function ImageGenerationNode(props: NodeProps<ImageGenerationFlowNode>) {
                       <div
                         key={`branch-${branch.branchIndex + 1}-image-${batchItemNumber}`}
                         aria-label={`Branch ${branch.branchIndex + 1} image ${batchItemNumber}`}
-                        className="aspect-square rounded-lg border border-dashed bg-background/60 p-2"
+                        className="aspect-square rounded-lg border border-dashed bg-background p-2"
                         role="img"
                       >
                         <div className="flex h-full items-end rounded-md bg-muted p-2 text-muted-foreground text-xs">

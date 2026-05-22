@@ -2,6 +2,7 @@
 
 import { useStoreApi } from "@xyflow/react";
 import { ImageIcon, ListIcon, SparklesIcon, TypeIcon } from "lucide-react";
+import { Badge } from "~/components/ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import type { WorkflowEdge, WorkflowNode } from "~/features/workflow/domain/graph";
 import { cn } from "~/lib/utils";
@@ -41,7 +42,7 @@ export function NodePalette() {
   };
 
   return (
-    <div className="absolute top-3 left-3 z-10 flex flex-col gap-0.5 rounded-xl border border-white/10 bg-black/60 p-1 shadow-lg backdrop-blur">
+    <div className="absolute top-3 left-3 z-10 flex flex-col gap-0.5 rounded-xl border bg-popover p-1 text-popover-foreground shadow-lg/5 backdrop-blur">
       {NODE_TOOLS.map((tool) => {
         const Icon = tool.icon;
 
@@ -50,8 +51,8 @@ export function NodePalette() {
             <TooltipTrigger
               aria-label={`Add ${tool.label}`}
               className={cn(
-                "grid size-9 place-items-center rounded-md text-white/70 transition-colors",
-                "hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/70",
+                "grid size-9 place-items-center rounded-md text-muted-foreground transition-colors",
+                "hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               )}
               onClick={() => addNodeAtViewportCenter(tool.id)}
             >
@@ -60,9 +61,9 @@ export function NodePalette() {
             <TooltipPopup side="right">
               <span className="flex items-center gap-2">
                 Add {tool.label}
-                <span className="rounded border border-white/10 bg-white/10 px-1 font-mono text-[10px] text-white/60">
+                <Badge size="sm" variant="outline">
                   {tool.shortcut}
-                </span>
+                </Badge>
               </span>
             </TooltipPopup>
           </Tooltip>

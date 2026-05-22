@@ -240,7 +240,10 @@ function ListItem({
 const DropIndicator = ({ closestEdge }: { closestEdge: "top" | "bottom" }) => {
   return (
     <div
-      className={`${closestEdge === "top" ? "top-0 -translate-y-1/2" : "bottom-0 translate-y-1/2"} pointer-events-none absolute left-1/2 z-10 h-0.5 w-1/2 -translate-x-1/2 rounded-full bg-ring`}
+      className={cn(
+        "pointer-events-none absolute left-1/2 z-10 h-0.5 w-1/2 -translate-x-1/2 rounded-full bg-ring",
+        closestEdge === "top" ? "top-0 -translate-y-1/2" : "bottom-0 translate-y-1/2",
+      )}
     />
   );
 };

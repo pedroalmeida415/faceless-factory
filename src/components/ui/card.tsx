@@ -52,7 +52,7 @@ export function CardFrameHeader({
 }: useRender.ComponentProps<"div">): React.ReactElement {
   const defaultProps = {
     className: cn(
-      "relative flex grid auto-rows-min grid-rows-[auto_auto] flex-col items-start gap-x-4 px-6 py-4 has-data-[slot=card-frame-action]:grid-cols-[1fr_auto]",
+      "relative grid auto-rows-min grid-flow-row items-center gap-x-4 px-6 py-4 has-data-[slot=card-frame-action]:grid-cols-[1fr_auto]",
       className,
     ),
     "data-slot": "card-frame-header",
@@ -106,7 +106,7 @@ export function CardFrameAction({
 }: useRender.ComponentProps<"div">): React.ReactElement {
   const defaultProps = {
     className: cn(
-      "col-start-2 nth-3:row-span-2 nth-3:row-start-1 inline-flex self-center justify-self-end",
+      "col-start-2 row-start-1 inline-flex self-center justify-self-end in-[[data-slot=card-frame-header]:has([data-slot=card-frame-description])]:row-span-2",
       className,
     ),
     "data-slot": "card-frame-action",
@@ -143,7 +143,7 @@ export function CardHeader({
 }: useRender.ComponentProps<"div">): React.ReactElement {
   const defaultProps = {
     className: cn(
-      "grid auto-rows-min grid-flow-row items-start gap-1.5 p-6 in-[[data-slot=card]:has(>[data-slot=card-panel])]:pb-4 has-data-[slot=card-action]:grid-cols-[1fr_auto]",
+      "grid auto-rows-min grid-flow-row items-center gap-1.5 p-6 in-[[data-slot=card]:has(>[data-slot=card-panel])]:pb-4 has-data-[slot=card-action]:grid-cols-[1fr_auto]",
       className,
     ),
     "data-slot": "card-header",
@@ -197,7 +197,7 @@ export function CardAction({
 }: useRender.ComponentProps<"div">): React.ReactElement {
   const defaultProps = {
     className: cn(
-      "col-start-2 row-span-2 row-start-1 inline-flex self-start justify-self-end",
+      "col-start-2 row-start-1 inline-flex self-center justify-self-end in-[[data-slot=card-header]:has([data-slot=card-description])]:row-span-2",
       className,
     ),
     "data-slot": "card-action",

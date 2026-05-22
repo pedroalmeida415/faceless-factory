@@ -1,4 +1,5 @@
 import { Handle, Position } from "@xyflow/react";
+import { cn } from "~/lib/utils";
 
 export function SocketRow({
   handleTop,
@@ -20,7 +21,10 @@ export function SocketRow({
       className="flex flex-row-reverse items-center"
     >
       <span
-        className={`pointer-events-none z-10 mr-4 text-xs/0 opacity-0 transition-opacity group-hover:opacity-100 ${muted ? "text-muted-foreground" : "text-white"} whitespace-nowrap`}
+        className={cn(
+          "pointer-events-none z-10 mr-4 whitespace-nowrap text-xs/0 opacity-0 transition-opacity group-hover:opacity-100",
+          muted ? "text-muted-foreground" : "text-foreground",
+        )}
       >
         {label}
       </span>
