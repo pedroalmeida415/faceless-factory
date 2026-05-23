@@ -5,7 +5,10 @@ import {
   getWorkflowAssetNodeDataType,
 } from "~/features/workflow/domain/nodes/asset";
 import { createDefaultWorkflowImageGenerationNodeData } from "~/features/workflow/domain/nodes/image-generation";
-import { createDefaultWorkflowListNodeData } from "~/features/workflow/domain/nodes/list";
+import {
+  createDefaultWorkflowListNodeData,
+  getWorkflowListOutputDataType,
+} from "~/features/workflow/domain/nodes/list";
 import {
   createDefaultWorkflowPromptNodeData,
   PROMPT_VARIABLE_INPUT_CAPACITY,
@@ -124,8 +127,12 @@ function getWorkflowNodeOutputDataType(
   node: WorkflowNode,
   modelCatalog: readonly WorkflowModelDefinition[],
 ): WorkflowDataType | null {
-  if (node.type === "prompt" || node.type === "list") {
+  if (node.type === "prompt") {
     return "text";
+  }
+
+  if (node.type === "list") {
+    return getWorkflowListOutputDataType(node);
   }
 
   if (node.type === "asset") {

@@ -301,12 +301,11 @@ describe("workflow graph editing", () => {
     const listNode = createWorkflowNode({ position: { x: 10, y: 20 }, type: "list" });
 
     expect(listNode).toMatchObject({
-      data: { items: [{ text: "" }] },
+      data: { items: [], mode: null },
       position: { x: 10, y: 20 },
       type: "list",
     });
     expect(listNode.id).toMatch(/^list-/);
-    expect(listNode.type === "list" ? listNode.data.items[0]?.id : "").toMatch(/^item-/);
     expect(createWorkflowNode({ position: { x: 0, y: 0 }, type: "prompt" }).data).toEqual({
       document: createPromptDocumentFromText(""),
     });
