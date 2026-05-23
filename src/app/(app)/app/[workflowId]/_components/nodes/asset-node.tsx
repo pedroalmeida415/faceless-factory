@@ -2,7 +2,7 @@
 
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 import { FileAudioIcon, ImageIcon, UploadIcon, VideoIcon } from "lucide-react";
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { UploadFilesModal } from "~/components/modals-upload-files";
 import { NodeCard, NodeCardAction, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
 import { Badge } from "~/components/ui/badge";
@@ -15,12 +15,8 @@ import { useWorkflowStore } from "../../_hooks/use-workflow-store";
 
 type AssetFlowNode = Node<WorkflowAssetNode["data"], WorkflowAssetNode["type"]>;
 type WorkflowAsset = WorkflowAssetNode["data"]["assets"][number];
-const MAX_ASPECT_RATIO = 21 / 9;
-const MIN_ASPECT_RATIO = 9 / 21;
-type AssetMediaFrame = {
-  readonly kind: "landscape" | "portrait" | "square";
-  readonly style?: CSSProperties;
-};
+const MAX_ASPECT_RATIO = 16 / 9;
+const MIN_ASPECT_RATIO = 9 / 16;
 
 export function AssetNode(props: NodeProps<AssetFlowNode>) {
   const updateNodeData = useWorkflowStore((store) => store.updateNodeData);
@@ -85,9 +81,7 @@ export function AssetNode(props: NodeProps<AssetFlowNode>) {
             </NodeCardAction>
           ) : null}
         </NodeCardHeader>
-        <NodeCardPanel className="rounded-[inherit] p-0">
-          {asset ? <AssetMedia asset={asset} /> : <EmptyAssetState onClick={() => setUploadOpen(true)} />}
-        </NodeCardPanel>
+        {asset ? <AssetMediaPanel asset={asset} /> : <EmptyAssetPanel onClick={() => setUploadOpen(true)} />}
         <Handle position={Position.Right} type="source" />
       </NodeCard>
       <UploadFilesModal
@@ -103,34 +97,33 @@ export function AssetNode(props: NodeProps<AssetFlowNode>) {
   );
 }
 
-function EmptyAssetState({ onClick }: { readonly onClick: () => void }) {
+function EmptyAssetPanel({ onClick }: { readonly onClick: () => void }) {
   return (
-    <Empty
-      className="h-96 w-116 cursor-pointer rounded-b-[inherit] transition-colors hover:bg-accent"
-      onClick={onClick}
-    >
-      <EmptyHeader>
-        <EmptyMedia className="size-16" variant="icon">
-          <UploadIcon className="size-8.5" />
-        </EmptyMedia>
-        <EmptyTitle>Add Media</EmptyTitle>
-      </EmptyHeader>
-    </Empty>
+    <NodeCardPanel className="rounded-[inherit] p-0">
+      <Empty
+        className="h-96 w-116 cursor-pointer rounded-b-[inherit] transition-colors hover:bg-accent"
+        onClick={onClick}
+      >
+        <EmptyHeader>
+          <EmptyMedia className="size-16" variant="icon">
+            <UploadIcon className="size-8.5" />
+          </EmptyMedia>
+          <EmptyTitle>Add Media</EmptyTitle>
+        </EmptyHeader>
+      </Empty>
+    </NodeCardPanel>
   );
 }
 
-function AssetMedia({ asset }: { readonly asset: WorkflowAsset }) {
-  const frame = getAssetMediaFrame(asset);
+function AssetMediaPanel({ asset }: { readonly asset: WorkflowAsset }) {
+  if (!asset.width || !asset.height) return null;
+
+  const aspectRatio = Math.min(Math.max(asset.width / asset.height, MIN_ASPECT_RATIO), MAX_ASPECT_RATIO);
 
   return (
-    <div
-      className={cn(
-        "relative overflow-hidden rounded-b-2xl bg-muted",
-        frame.kind === "square" && "size-96",
-        frame.kind === "landscape" && "aspect-video h-96",
-        frame.kind === "portrait" && "aspect-video w-96",
-      )}
-      style={frame.style}
+    <NodeCardPanel
+      className={cn("relative overflow-hidden rounded-b-[inherit] bg-muted p-0", aspectRatio >= 1 ? "h-96" : "w-96")}
+      style={{ aspectRatio }}
     >
       {renderMediaElement(asset)}
       <div className="absolute right-6 bottom-4 flex max-w-[70%] flex-wrap justify-end gap-1.5 opacity-0 transition-opacity duration-300 ease-in-out group-focus-within:opacity-100 group-hover:opacity-100">
@@ -140,7 +133,7 @@ function AssetMedia({ asset }: { readonly asset: WorkflowAsset }) {
           </Badge>
         ))}
       </div>
-    </div>
+    </NodeCardPanel>
   );
 }
 
@@ -203,28 +196,6 @@ function getMetadataBadges(asset: WorkflowAsset) {
   }
 
   return badges;
-}
-
-function getAssetMediaFrame(asset: WorkflowAsset): AssetMediaFrame {
-  if (!asset.width || !asset.height || asset.width <= 0 || asset.height <= 0) {
-    return {
-      kind: "square",
-    };
-  }
-
-  const aspectRatio = Math.min(Math.max(asset.width / asset.height, MIN_ASPECT_RATIO), MAX_ASPECT_RATIO);
-
-  if (aspectRatio >= 1) {
-    return {
-      kind: "landscape",
-      style: { aspectRatio },
-    };
-  }
-
-  return {
-    kind: "portrait",
-    style: { aspectRatio },
-  };
 }
 
 function positiveInteger(value: number | undefined) {
