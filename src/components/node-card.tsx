@@ -6,7 +6,7 @@ import { Card, CardAction, CardFooter, CardHeader, CardPanel, CardTitle } from "
 import { cn } from "~/lib/utils";
 
 export function NodeCard({ className, render, ...props }: useRender.ComponentProps<"div">): React.ReactElement {
-  return <Card className={cn("w-115", className)} render={render} {...props} />;
+  return <Card className={cn("w-116", className)} render={render} {...props} />;
 }
 
 export function NodeCardHeader({ className, render, ...props }: useRender.ComponentProps<"div">): React.ReactElement {
