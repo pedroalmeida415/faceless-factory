@@ -1,6 +1,9 @@
 import type { WorkflowDataType, WorkflowModelDefinition } from "~/features/workflow/domain/model-catalog";
 import { WORKFLOW_MODEL_CATALOG } from "~/features/workflow/domain/model-catalog";
-import { createDefaultWorkflowAssetNodeData } from "~/features/workflow/domain/nodes/asset";
+import {
+  createDefaultWorkflowAssetNodeData,
+  getWorkflowAssetNodeDataType,
+} from "~/features/workflow/domain/nodes/asset";
 import { createDefaultWorkflowImageGenerationNodeData } from "~/features/workflow/domain/nodes/image-generation";
 import { createDefaultWorkflowListNodeData } from "~/features/workflow/domain/nodes/list";
 import {
@@ -126,7 +129,7 @@ function getWorkflowNodeOutputDataType(
   }
 
   if (node.type === "asset") {
-    return "image";
+    return getWorkflowAssetNodeDataType(node);
   }
 
   return modelCatalog.find((model) => model.modelId === node.data.modelId)?.generationKind ?? null;

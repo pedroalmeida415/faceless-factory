@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { WorkflowDataType } from "~/features/workflow/domain/model-catalog";
 
 const WorkflowPositionSchema = z.object({
   x: z.number(),
@@ -7,7 +8,14 @@ const WorkflowPositionSchema = z.object({
 
 export const WorkflowAssetSchema = z.object({
   assetId: z.string().min(1),
+  durationSeconds: z.number().nonnegative().optional(),
+  height: z.number().int().positive().optional(),
+  mediaType: z.enum(["image", "video", "audio"]).optional(),
+  mimeType: z.string().min(1).optional(),
   name: z.string().min(1).optional(),
+  previewUrl: z.string().min(1).optional(),
+  sizeBytes: z.number().int().nonnegative().optional(),
+  width: z.number().int().positive().optional(),
 });
 
 export const WorkflowAssetNodeSchema = z.object({
@@ -27,4 +35,14 @@ export function createDefaultWorkflowAssetNodeData(): WorkflowAssetNode["data"] 
 
 export function getWorkflowAssetIds(node: WorkflowAssetNode) {
   return node.data.assets.map((asset) => asset.assetId);
+}
+
+export function getWorkflowAssetNodeDataType(node: WorkflowAssetNode): WorkflowDataType | null {
+  const asset = node.data.assets[0];
+
+  if (!asset) {
+    return null;
+  }
+
+  return asset.mediaType ?? "image";
 }

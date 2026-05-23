@@ -35,8 +35,16 @@ const emptyAssetNode = {
 const assetNode = {
   data: {
     assets: [
-      { assetId: "asset-1", name: "Bottle reference" },
-      { assetId: "asset-2", name: "Stone texture" },
+      {
+        assetId: "asset-1",
+        height: 720,
+        mediaType: "image",
+        mimeType: "image/png",
+        name: "Bottle reference",
+        previewUrl: "https://placehold.co/1280x720/png",
+        sizeBytes: 2_800_000,
+        width: 1280,
+      },
     ],
   },
   id: "asset-1",
@@ -56,14 +64,16 @@ export const WithAssets = {
   },
 } satisfies Story;
 
-export const AddsMockAsset = {
+export const OpensUploadDialog = {
   args: Empty.args,
   play: async (context) => {
     await NodeEditorStory.play(context);
     const { canvasElement } = context;
     const canvas = within(canvasElement);
-    await expect(canvas.getByText("No assets yet.")).toBeVisible();
-    await userEvent.click(canvas.getByRole("button", { name: /add mock asset/i }));
-    await expect(canvas.getByText("Reference 1")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /add media/i })).toBeVisible();
+    await userEvent.click(canvas.getByRole("button", { name: /add media/i }));
+    await expect(
+      within(canvasElement.ownerDocument.body).getByRole("dialog", { name: /add media/i }),
+    ).toBeInTheDocument();
   },
 } satisfies Story;

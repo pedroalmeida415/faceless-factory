@@ -6,7 +6,7 @@ import {
   type WorkflowModelDefinition,
   type WorkflowModelInputSocket,
 } from "~/features/workflow/domain/model-catalog";
-import { getWorkflowAssetIds } from "~/features/workflow/domain/nodes/asset";
+import { getWorkflowAssetIds, getWorkflowAssetNodeDataType } from "~/features/workflow/domain/nodes/asset";
 import { getSortedWorkflowSelectedBatchItems } from "~/features/workflow/domain/nodes/image-generation";
 import { getWorkflowListTextValues } from "~/features/workflow/domain/nodes/list";
 import {
@@ -349,7 +349,9 @@ function getSourceValue(input: {
     const refs = getWorkflowAssetIds(node).map(
       (assetId) => ({ kind: "asset", assetId }) satisfies WorkflowBranchInputReference,
     );
-    return refs.length > 0 ? { dataType: "image", kind: "value", refs } : { kind: "no-value" };
+    const dataType = getWorkflowAssetNodeDataType(node);
+
+    return refs.length > 0 && dataType ? { dataType, kind: "value", refs } : { kind: "no-value" };
   }
 
   const refs = getSortedWorkflowSelectedBatchItems(node).map(

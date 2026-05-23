@@ -262,6 +262,26 @@ describe("workflow input alignment", () => {
     expect(evaluation.errors.map((error) => error.kind)).toContain("type-mismatch");
   });
 
+  test("uses Asset media type as its output data type", () => {
+    const evaluation = evaluateGenerationNode({
+      blueprint: graph({
+        edges: [edge("asset-1", "gen-1", "image")],
+        nodes: [assetNode("asset-1", [{ assetId: "asset-video", mediaType: "video" }]), imageGenerationNode("gen-1")],
+      }),
+      nodeId: "gen-1",
+    });
+
+    expect(evaluation.summary.status).toBe("blocked");
+    expect(evaluation.errors).toContainEqual({
+      edgeId: "edge-asset-1-gen-1-image",
+      expectedDataType: "image",
+      kind: "type-mismatch",
+      nodeId: "gen-1",
+      receivedDataType: "video",
+      socketId: "image",
+    });
+  });
+
   test("computes total output count and Generation Cost from Branch Count and Batch size", () => {
     const evaluation = evaluateGenerationNode({
       blueprint: graph({
@@ -430,10 +450,13 @@ function listNode(id: string, items: readonly string[]): WorkflowNode {
   };
 }
 
-function assetNode(id: string, assets: readonly string[]): WorkflowNode {
+function assetNode(
+  id: string,
+  assets: readonly (string | { readonly assetId: string; readonly mediaType: "audio" | "image" | "video" })[],
+): WorkflowNode {
   return {
     data: {
-      assets: assets.map((assetId) => ({ assetId })),
+      assets: assets.map((asset) => (typeof asset === "string" ? { assetId: asset } : asset)),
     },
     id,
     position: { x: 0, y: 0 },
