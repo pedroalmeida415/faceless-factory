@@ -100,10 +100,7 @@ export function AssetNode(props: NodeProps<AssetFlowNode>) {
 function EmptyAssetPanel({ onClick }: { readonly onClick: () => void }) {
   return (
     <NodeCardPanel className="rounded-[inherit] p-0">
-      <Empty
-        className="h-96 w-116 cursor-pointer rounded-b-[inherit] transition-colors hover:bg-accent"
-        onClick={onClick}
-      >
+      <Empty className="w-116 cursor-pointer rounded-b-[inherit] transition-colors hover:bg-accent" onClick={onClick}>
         <EmptyHeader>
           <EmptyMedia className="size-16" variant="icon">
             <UploadIcon className="size-8.5" />
