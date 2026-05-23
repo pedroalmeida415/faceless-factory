@@ -7,6 +7,7 @@ import { UploadFilesModal } from "~/components/modals-upload-files";
 import { NodeCard, NodeCardAction, NodeCardHeader, NodeCardPanel, NodeCardTitle } from "~/components/node-card";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from "~/components/ui/empty";
 import type { WorkflowAssetNode } from "~/features/workflow/domain/graph";
 import { formatDuration, type UploadedFile } from "~/hooks/use-upload-files";
 import { cn } from "~/lib/utils";
@@ -84,7 +85,7 @@ export function AssetNode(props: NodeProps<AssetFlowNode>) {
             </NodeCardAction>
           ) : null}
         </NodeCardHeader>
-        <NodeCardPanel className="p-0">
+        <NodeCardPanel className="rounded-[inherit] p-0">
           {asset ? <AssetMedia asset={asset} /> : <EmptyAssetState onClick={() => setUploadOpen(true)} />}
         </NodeCardPanel>
         <Handle position={Position.Right} type="source" />
@@ -104,14 +105,17 @@ export function AssetNode(props: NodeProps<AssetFlowNode>) {
 
 function EmptyAssetState({ onClick }: { readonly onClick: () => void }) {
   return (
-    <button
-      type="button"
-      className="flex size-90 flex-col items-center justify-center gap-2 rounded-b-2xl border border-border border-dashed bg-muted text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    <Empty
+      className="h-96 w-116 cursor-pointer rounded-b-[inherit] transition-colors hover:bg-accent"
       onClick={onClick}
     >
-      <UploadIcon className="size-5" />
-      <span className="font-medium text-sm">Add Media</span>
-    </button>
+      <EmptyHeader>
+        <EmptyMedia className="size-16" variant="icon">
+          <UploadIcon className="size-8.5" />
+        </EmptyMedia>
+        <EmptyTitle>Add Media</EmptyTitle>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
@@ -122,9 +126,9 @@ function AssetMedia({ asset }: { readonly asset: WorkflowAsset }) {
     <div
       className={cn(
         "relative overflow-hidden rounded-b-2xl bg-muted",
-        frame.kind === "square" && "size-90",
-        frame.kind === "landscape" && "aspect-video h-90",
-        frame.kind === "portrait" && "aspect-video w-90",
+        frame.kind === "square" && "size-96",
+        frame.kind === "landscape" && "aspect-video h-96",
+        frame.kind === "portrait" && "aspect-video w-96",
       )}
       style={frame.style}
     >
