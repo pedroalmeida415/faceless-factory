@@ -5,7 +5,7 @@ services:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: lHOqxPGUlf02HNI8
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: faceless-factory
     ports:
       - "5432:5432"
@@ -23,8 +23,8 @@ services:
     image: minio/minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: faceless-factory
-      MINIO_ROOT_PASSWORD: faceless-factory-secret
+      MINIO_ROOT_USER: ${OBJECT_STORAGE_ACCESS_KEY_ID:?Set OBJECT_STORAGE_ACCESS_KEY_ID in .env}
+      MINIO_ROOT_PASSWORD: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:?Set OBJECT_STORAGE_SECRET_ACCESS_KEY in .env}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -35,9 +35,12 @@ services:
     image: minio/mc
     depends_on:
       - minio
+    environment:
+      OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:?Set OBJECT_STORAGE_ACCESS_KEY_ID in .env}
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:?Set OBJECT_STORAGE_SECRET_ACCESS_KEY in .env}
     entrypoint: >
       /bin/sh -c "
-      until mc alias set local http://minio:9000 faceless-factory faceless-factory-secret; do sleep 1; done &&
+      until mc alias set local http://minio:9000 \"$$OBJECT_STORAGE_ACCESS_KEY_ID\" \"$$OBJECT_STORAGE_SECRET_ACCESS_KEY\"; do sleep 1; done &&
       mc mb --ignore-existing local/faceless-factory
       "
 

@@ -33,10 +33,14 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# local env files
-# do not commit any .env files to git, except for the .env.example file. https://create.t3.gg/en/usage/env-variables#using-environment-variables
-.env
-.env*.local
+# local env and credential files
+# Keep the committed example as placeholders; all populated env files stay local.
+.env*
+!.env.example
+.secrets/
+*.key
+*.p12
+*.pfx
 
 # vercel
 .vercel
